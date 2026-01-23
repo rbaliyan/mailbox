@@ -1,0 +1,78 @@
+// Package mailbox provides an email-like messaging library for Go.
+//
+// It supports sending messages to recipients (identified by user IDs),
+// marking messages as read/unread, archiving, listing, and searching.
+// All functionality is exposed via interfaces, with pluggable storage
+// backends (MongoDB, PostgreSQL, in-memory).
+//
+// # Basic Usage
+//
+//	// Create in-memory store for testing
+//	store := memory.New()
+//
+//	// Create mailbox service
+//	svc, err := mailbox.NewService(
+//	    mailbox.WithStore(store),
+//	)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//
+//	// Connect initializes indexes/schema
+//	if err := svc.Connect(ctx); err != nil {
+//	    log.Fatal(err)
+//	}
+//	defer svc.Close(ctx)
+//
+//	// Get a mailbox client for a user
+//	mb := svc.Client("user123")
+//
+//	// Send a message
+//	draft, _ := mb.Compose()
+//	msg, err := draft.
+//	    SetSubject("Hello").
+//	    SetBody("World").
+//	    SetRecipients("user456").
+//	    Send(ctx)
+//
+// # Mailbox Operations
+//
+//   - Compose: Create and send messages
+//   - Get: Retrieve a message by ID
+//   - Inbox/Sent/Archived/Trash: List messages
+//   - Search: Full-text search
+//   - StreamInbox/StreamSent: Iterator-based streaming
+//
+// # Storage Backends
+//
+// The store package provides implementations for:
+//   - MongoDB (store/mongo) - accepts *mongo.Client
+//   - PostgreSQL (store/postgres) - accepts *sql.DB
+//   - In-memory (store/memory) - for testing
+//
+// # Events
+//
+// Mailbox provides typed event variables for message lifecycle events.
+// Events use the github.com/rbaliyan/event/v3 library which supports
+// multiple transports (Redis Streams, NATS, Kafka, in-memory channel).
+//
+// To enable events, create a bus and register the events:
+//
+//	// Create bus with your preferred transport
+//	bus, _ := event.NewBus("myapp", event.WithTransport(redis.New(client)))
+//	defer bus.Close(ctx)
+//
+//	// Register mailbox events
+//	mailbox.RegisterEvents(ctx, bus)
+//
+//	// Subscribe to events
+//	mailbox.EventMessageSent.Subscribe(ctx, func(ctx context.Context, e event.Event[mailbox.MessageSentEvent], ev mailbox.MessageSentEvent) error {
+//	    fmt.Printf("Message %s sent to %v\n", ev.MessageID, ev.RecipientIDs)
+//	    return nil
+//	})
+//
+// Available event variables:
+//   - EventMessageSent - when a message is sent
+//   - EventMessageRead - when a message is marked as read
+//   - EventMessageDeleted - when a message is permanently deleted
+package mailbox

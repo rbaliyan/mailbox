@@ -1,0 +1,930 @@
+// Package memory provides an in-memory Store implementation for testing.
+// This store is not suitable for production use - data is not persisted.
+package memory
+
+import (
+	"context"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/rbaliyan/mailbox/store"
+)
+
+// Store implements store.Store with in-memory storage.
+// Thread-safe for concurrent use. Not suitable for production.
+type Store struct {
+	messages       sync.Map // map[string]*message (both drafts and messages)
+	idempotencyIdx sync.Map // map[string]string (ownerID:idempotencyKey -> messageID)
+	connected      int32
+}
+
+// New creates a new in-memory store.
+func New() *Store {
+	return &Store{}
+}
+
+// Connect marks the store as connected.
+func (s *Store) Connect(_ context.Context) error {
+	if !atomic.CompareAndSwapInt32(&s.connected, 0, 1) {
+		return store.ErrAlreadyConnected
+	}
+	return nil
+}
+
+// Close marks the store as disconnected.
+func (s *Store) Close(_ context.Context) error {
+	atomic.StoreInt32(&s.connected, 0)
+	return nil
+}
+
+// =============================================================================
+// Draft Operations
+// =============================================================================
+
+// NewDraft creates a new empty draft for the given owner.
+func (s *Store) NewDraft(ownerID string) store.DraftMessage {
+	now := time.Now().UTC()
+	return &message{
+		ownerID:   ownerID,
+		senderID:  ownerID, // sender is always the owner for drafts
+		metadata:  make(map[string]any),
+		status:    store.MessageStatusDraft,
+		createdAt: now,
+		updatedAt: now,
+		isDraft:   true,
+	}
+}
+
+// GetDraft retrieves a draft by ID.
+func (s *Store) GetDraft(ctx context.Context, id string) (store.DraftMessage, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return nil, store.ErrNotConnected
+	}
+	if id == "" {
+		return nil, store.ErrInvalidID
+	}
+
+	v, ok := s.messages.Load(id)
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+
+	m := v.(*message)
+	if !m.isDraft {
+		return nil, store.ErrNotFound // not a draft
+	}
+
+	return m.clone(), nil
+}
+
+// SaveDraft persists a draft.
+func (s *Store) SaveDraft(ctx context.Context, draft store.DraftMessage) (store.DraftMessage, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return nil, store.ErrNotConnected
+	}
+
+	m, ok := draft.(*message)
+	if !ok {
+		return nil, store.ErrInvalidID // wrong store type
+	}
+
+	// Assign ID if new
+	if m.id == "" {
+		m.id = uuid.New().String()
+	}
+
+	m.updatedAt = time.Now().UTC()
+	m.isDraft = true
+
+	// Store a copy
+	s.messages.Store(m.id, m.clone())
+
+	return m.clone(), nil
+}
+
+// DeleteDraft permanently removes a draft.
+func (s *Store) DeleteDraft(ctx context.Context, id string) error {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return store.ErrNotConnected
+	}
+	if id == "" {
+		return store.ErrInvalidID
+	}
+
+	v, ok := s.messages.Load(id)
+	if !ok {
+		return store.ErrNotFound
+	}
+
+	m := v.(*message)
+	if !m.isDraft {
+		return store.ErrNotFound // not a draft
+	}
+
+	s.messages.Delete(id)
+	return nil
+}
+
+// ListDrafts returns all drafts for a user.
+func (s *Store) ListDrafts(ctx context.Context, ownerID string, opts store.ListOptions) (*store.DraftList, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return nil, store.ErrNotConnected
+	}
+
+	var drafts []*message
+	s.messages.Range(func(_, v any) bool {
+		m := v.(*message)
+		if m.isDraft && m.ownerID == ownerID {
+			drafts = append(drafts, m)
+		}
+		return true
+	})
+
+	// Sort by created_at descending (newest first)
+	sortMessages(drafts, "created_at", store.SortDesc)
+
+	// Apply pagination
+	total := int64(len(drafts))
+	start := opts.Offset
+	if start > len(drafts) {
+		start = len(drafts)
+	}
+	end := start + opts.Limit
+	if opts.Limit == 0 {
+		end = len(drafts)
+	}
+	if end > len(drafts) {
+		end = len(drafts)
+	}
+
+	result := drafts[start:end]
+	draftList := make([]store.DraftMessage, len(result))
+	for i, m := range result {
+		draftList[i] = m.clone()
+	}
+
+	return &store.DraftList{
+		Drafts:  draftList,
+		Total:   total,
+		HasMore: end < len(drafts),
+	}, nil
+}
+
+// =============================================================================
+// Message Operations
+// =============================================================================
+
+// Get retrieves a message by ID.
+func (s *Store) Get(ctx context.Context, id string) (store.Message, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return nil, store.ErrNotConnected
+	}
+	if id == "" {
+		return nil, store.ErrInvalidID
+	}
+
+	v, ok := s.messages.Load(id)
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+
+	m := v.(*message)
+	if m.isDraft {
+		return nil, store.ErrNotFound // drafts are not messages
+	}
+	if m.deleted {
+		return nil, store.ErrNotFound
+	}
+
+	return m.clone(), nil
+}
+
+// Find retrieves messages matching the filters.
+func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.ListOptions) (*store.MessageList, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return nil, store.ErrNotConnected
+	}
+
+	var all []*message
+	s.messages.Range(func(_, v any) bool {
+		m := v.(*message)
+		if !m.isDraft && !m.deleted && matchesFilters(m, filters) {
+			all = append(all, m)
+		}
+		return true
+	})
+
+	// Sort
+	sortBy := opts.SortBy
+	if sortBy == "" {
+		sortBy = "created_at"
+	}
+	sortMessages(all, sortBy, opts.SortOrder)
+
+	total := int64(len(all))
+
+	// Apply cursor-based pagination using StartAfter
+	// Find messages after the cursor using > comparison on sorted order
+	start := 0
+	if opts.StartAfter != "" {
+		for i, m := range all {
+			if m.id == opts.StartAfter {
+				start = i + 1 // Start after this message
+				break
+			}
+		}
+		// If cursor not found (deleted), use ID comparison
+		// This ensures pagination works even if cursor message was deleted
+		if start == 0 {
+			for i, m := range all {
+				// For descending sort, find first message with ID < cursor
+				// For ascending sort, find first message with ID > cursor
+				if opts.SortOrder == store.SortDesc {
+					if m.id < opts.StartAfter {
+						start = i
+						break
+					}
+				} else {
+					if m.id > opts.StartAfter {
+						start = i
+						break
+					}
+				}
+			}
+			if start == 0 && len(all) > 0 {
+				// Cursor is beyond all results
+				start = len(all)
+			}
+		}
+	}
+
+	end := start + opts.Limit
+	if opts.Limit == 0 {
+		end = len(all)
+	}
+	if end > len(all) {
+		end = len(all)
+	}
+
+	result := all[start:end]
+	messages := make([]store.Message, len(result))
+	for i, m := range result {
+		messages[i] = m.clone()
+	}
+
+	return &store.MessageList{
+		Messages: messages,
+		Total:    total,
+		HasMore:  end < len(all),
+	}, nil
+}
+
+// Count returns the count of messages matching the filters.
+func (s *Store) Count(ctx context.Context, filters []store.Filter) (int64, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return 0, store.ErrNotConnected
+	}
+
+	var count int64
+	s.messages.Range(func(_, v any) bool {
+		m := v.(*message)
+		if !m.isDraft && !m.deleted && matchesFilters(m, filters) {
+			count++
+		}
+		return true
+	})
+	return count, nil
+}
+
+// Search performs full-text search on messages.
+func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.MessageList, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return nil, store.ErrNotConnected
+	}
+
+	var all []*message
+	searchTerm := strings.ToLower(query.Query)
+
+	s.messages.Range(func(_, v any) bool {
+		m := v.(*message)
+		if m.isDraft || m.deleted {
+			return true
+		}
+		if query.OwnerID != "" && m.ownerID != query.OwnerID {
+			return true
+		}
+		if !matchesFilters(m, query.Filters) {
+			return true
+		}
+		if len(query.Tags) > 0 && !hasAllTags(m, query.Tags) {
+			return true
+		}
+		if searchTerm != "" {
+			if !strings.Contains(strings.ToLower(m.subject), searchTerm) &&
+				!strings.Contains(strings.ToLower(m.body), searchTerm) {
+				return true
+			}
+		}
+		all = append(all, m)
+		return true
+	})
+
+	// Sort and paginate
+	sortMessages(all, query.Options.SortBy, query.Options.SortOrder)
+
+	total := int64(len(all))
+
+	// Apply cursor-based pagination using StartAfter
+	start := 0
+	if query.Options.StartAfter != "" {
+		for i, m := range all {
+			if m.id == query.Options.StartAfter {
+				start = i + 1
+				break
+			}
+		}
+		// Fallback to ID comparison if cursor deleted
+		if start == 0 {
+			for i, m := range all {
+				if query.Options.SortOrder == store.SortDesc {
+					if m.id < query.Options.StartAfter {
+						start = i
+						break
+					}
+				} else {
+					if m.id > query.Options.StartAfter {
+						start = i
+						break
+					}
+				}
+			}
+			if start == 0 && len(all) > 0 {
+				start = len(all)
+			}
+		}
+	}
+
+	end := start + query.Options.Limit
+	if query.Options.Limit == 0 {
+		end = len(all)
+	}
+	if end > len(all) {
+		end = len(all)
+	}
+
+	result := all[start:end]
+	messages := make([]store.Message, len(result))
+	for i, m := range result {
+		messages[i] = m.clone()
+	}
+
+	return &store.MessageList{
+		Messages: messages,
+		Total:    total,
+		HasMore:  end < len(all),
+	}, nil
+}
+
+// MarkRead sets the read status of a message.
+// Uses copy-on-write to avoid races with concurrent readers.
+func (s *Store) MarkRead(ctx context.Context, id string, read bool) error {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return store.ErrNotConnected
+	}
+	if id == "" {
+		return store.ErrInvalidID
+	}
+
+	v, ok := s.messages.Load(id)
+	if !ok {
+		return store.ErrNotFound
+	}
+
+	orig := v.(*message)
+	if orig.isDraft || orig.deleted {
+		return store.ErrNotFound
+	}
+
+	// Copy-on-write: clone, modify, store
+	m := orig.clone()
+	m.isRead = read
+	m.updatedAt = time.Now().UTC()
+	if read {
+		now := time.Now().UTC()
+		m.readAt = &now
+	} else {
+		m.readAt = nil
+	}
+	s.messages.Store(id, m)
+
+	return nil
+}
+
+// MoveToFolder moves a message to a different folder.
+// Uses copy-on-write to avoid races with concurrent readers.
+func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) error {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return store.ErrNotConnected
+	}
+	if id == "" {
+		return store.ErrInvalidID
+	}
+
+	v, ok := s.messages.Load(id)
+	if !ok {
+		return store.ErrNotFound
+	}
+
+	orig := v.(*message)
+	if orig.isDraft || orig.deleted {
+		return store.ErrNotFound
+	}
+
+	// Copy-on-write: clone, modify, store
+	m := orig.clone()
+	m.folderID = folderID
+	m.updatedAt = time.Now().UTC()
+	s.messages.Store(id, m)
+	return nil
+}
+
+// AddTag adds a tag to a message.
+// Uses copy-on-write to avoid races with concurrent readers.
+func (s *Store) AddTag(ctx context.Context, id string, tagID string) error {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return store.ErrNotConnected
+	}
+	if id == "" {
+		return store.ErrInvalidID
+	}
+
+	v, ok := s.messages.Load(id)
+	if !ok {
+		return store.ErrNotFound
+	}
+
+	orig := v.(*message)
+	if orig.isDraft || orig.deleted {
+		return store.ErrNotFound
+	}
+
+	// Check if tag already exists
+	for _, t := range orig.tags {
+		if t == tagID {
+			return nil
+		}
+	}
+
+	// Copy-on-write: clone, modify, store
+	m := orig.clone()
+	m.tags = append(m.tags, tagID)
+	m.updatedAt = time.Now().UTC()
+	s.messages.Store(id, m)
+	return nil
+}
+
+// RemoveTag removes a tag from a message.
+// Uses copy-on-write to avoid races with concurrent readers.
+func (s *Store) RemoveTag(ctx context.Context, id string, tagID string) error {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return store.ErrNotConnected
+	}
+	if id == "" {
+		return store.ErrInvalidID
+	}
+
+	v, ok := s.messages.Load(id)
+	if !ok {
+		return store.ErrNotFound
+	}
+
+	orig := v.(*message)
+	if orig.isDraft || orig.deleted {
+		return store.ErrNotFound
+	}
+
+	// Find tag index
+	tagIndex := -1
+	for i, t := range orig.tags {
+		if t == tagID {
+			tagIndex = i
+			break
+		}
+	}
+	if tagIndex == -1 {
+		return nil // Tag not found, nothing to do
+	}
+
+	// Copy-on-write: clone, modify, store
+	m := orig.clone()
+	m.tags = append(m.tags[:tagIndex], m.tags[tagIndex+1:]...)
+	m.updatedAt = time.Now().UTC()
+	s.messages.Store(id, m)
+	return nil
+}
+
+// Delete soft-deletes a message.
+// Uses copy-on-write to avoid races with concurrent readers.
+func (s *Store) Delete(ctx context.Context, id string) error {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return store.ErrNotConnected
+	}
+	if id == "" {
+		return store.ErrInvalidID
+	}
+
+	v, ok := s.messages.Load(id)
+	if !ok {
+		return store.ErrNotFound
+	}
+
+	orig := v.(*message)
+	if orig.isDraft {
+		return store.ErrNotFound
+	}
+
+	// Copy-on-write: clone, modify, store
+	m := orig.clone()
+	m.deleted = true
+	m.folderID = store.FolderTrash
+	m.updatedAt = time.Now().UTC()
+	s.messages.Store(id, m)
+	return nil
+}
+
+// HardDelete permanently removes a message.
+func (s *Store) HardDelete(ctx context.Context, id string) error {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return store.ErrNotConnected
+	}
+	if id == "" {
+		return store.ErrInvalidID
+	}
+
+	v, ok := s.messages.Load(id)
+	if !ok {
+		return store.ErrNotFound
+	}
+
+	m := v.(*message)
+	if m.isDraft {
+		return store.ErrNotFound
+	}
+
+	s.messages.Delete(id)
+	return nil
+}
+
+// Restore restores a soft-deleted message from trash.
+// Uses copy-on-write to avoid races with concurrent readers.
+func (s *Store) Restore(ctx context.Context, id string) error {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return store.ErrNotConnected
+	}
+	if id == "" {
+		return store.ErrInvalidID
+	}
+
+	v, ok := s.messages.Load(id)
+	if !ok {
+		return store.ErrNotFound
+	}
+
+	orig := v.(*message)
+	if orig.isDraft || !orig.deleted {
+		return store.ErrNotFound
+	}
+
+	// Copy-on-write: clone, modify, store
+	m := orig.clone()
+	m.deleted = false
+	// Restore to appropriate folder based on sender
+	if store.IsSentByOwner(m.ownerID, m.senderID) {
+		m.folderID = store.FolderSent
+	} else {
+		m.folderID = store.FolderInbox
+	}
+	m.updatedAt = time.Now().UTC()
+	s.messages.Store(id, m)
+	return nil
+}
+
+// CreateMessage creates a new message from the given data.
+func (s *Store) CreateMessage(ctx context.Context, data store.MessageData) (store.Message, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return nil, store.ErrNotConnected
+	}
+
+	now := time.Now().UTC()
+	m := &message{
+		id:           uuid.New().String(),
+		ownerID:      data.OwnerID,
+		senderID:     data.SenderID,
+		recipientIDs: data.RecipientIDs,
+		subject:      data.Subject,
+		body:         data.Body,
+		status:       data.Status,
+		folderID:     data.FolderID,
+		createdAt:    now,
+		updatedAt:    now,
+		isDraft:      false,
+	}
+
+	if data.Metadata != nil {
+		m.metadata = make(map[string]any, len(data.Metadata))
+		for k, v := range data.Metadata {
+			m.metadata[k] = v
+		}
+	}
+	if data.Attachments != nil {
+		m.attachments = make([]store.Attachment, len(data.Attachments))
+		copy(m.attachments, data.Attachments)
+	}
+
+	s.messages.Store(m.id, m)
+	return m.clone(), nil
+}
+
+// CreateMessages creates multiple messages atomically.
+// For the memory store, this uses a simple loop since sync.Map operations
+// are already atomic per-key. In production stores, this should use
+// database transactions for true atomicity.
+func (s *Store) CreateMessages(ctx context.Context, data []store.MessageData) ([]store.Message, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return nil, store.ErrNotConnected
+	}
+
+	// Create all messages - memory store doesn't have true transactions,
+	// but each Store operation is atomic via sync.Map
+	messages := make([]store.Message, len(data))
+	for i, d := range data {
+		msg, err := s.CreateMessage(ctx, d)
+		if err != nil {
+			// In a real implementation, this would rollback.
+			// Memory store is for testing only.
+			return nil, err
+		}
+		messages[i] = msg
+	}
+	return messages, nil
+}
+
+// CreateMessageIdempotent atomically creates a message or returns existing.
+//
+// Uses sync.Map.LoadOrStore for atomic check-and-create. This provides the
+// same semantics as MongoDB's findOneAndUpdate with upsert or PostgreSQL's
+// INSERT ON CONFLICT, but in memory.
+//
+// The idempotency index maps "ownerID:idempotencyKey" to message ID.
+func (s *Store) CreateMessageIdempotent(ctx context.Context, data store.MessageData, idempotencyKey string) (store.Message, bool, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return nil, false, store.ErrNotConnected
+	}
+	if idempotencyKey == "" {
+		return nil, false, store.ErrInvalidIdempotencyKey
+	}
+
+	// Create the idempotency index key
+	idxKey := data.OwnerID + ":" + idempotencyKey
+
+	// Generate a new message ID optimistically
+	newMsgID := uuid.New().String()
+
+	// Atomically try to store the idempotency mapping
+	// If it already exists, LoadOrStore returns the existing value
+	existingID, loaded := s.idempotencyIdx.LoadOrStore(idxKey, newMsgID)
+
+	if loaded {
+		// Message already exists, return it
+		msgID := existingID.(string)
+		v, ok := s.messages.Load(msgID)
+		if !ok {
+			// Shouldn't happen - index exists but message doesn't
+			// Clean up the stale index and retry
+			s.idempotencyIdx.Delete(idxKey)
+			return s.CreateMessageIdempotent(ctx, data, idempotencyKey)
+		}
+		return v.(*message).clone(), false, nil
+	}
+
+	// We won the race - create the message with the ID we reserved
+	now := time.Now().UTC()
+	m := &message{
+		id:           newMsgID,
+		ownerID:      data.OwnerID,
+		senderID:     data.SenderID,
+		recipientIDs: data.RecipientIDs,
+		subject:      data.Subject,
+		body:         data.Body,
+		status:       data.Status,
+		folderID:     data.FolderID,
+		createdAt:    now,
+		updatedAt:    now,
+		isDraft:      false,
+	}
+
+	if data.Metadata != nil {
+		m.metadata = make(map[string]any, len(data.Metadata))
+		for k, v := range data.Metadata {
+			m.metadata[k] = v
+		}
+	}
+	if data.Attachments != nil {
+		m.attachments = make([]store.Attachment, len(data.Attachments))
+		copy(m.attachments, data.Attachments)
+	}
+
+	s.messages.Store(m.id, m)
+	return m.clone(), true, nil
+}
+
+// =============================================================================
+// Maintenance Operations
+// =============================================================================
+
+// DeleteExpiredTrash atomically deletes all messages in trash older than cutoff.
+//
+// Safe to call concurrently - each message is deleted exactly once.
+// Uses sync.Map.Range + Delete which is safe for concurrent access.
+func (s *Store) DeleteExpiredTrash(ctx context.Context, cutoff time.Time) (int64, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return 0, store.ErrNotConnected
+	}
+
+	var deleted int64
+	var toDelete []string
+
+	// First pass: collect IDs to delete
+	s.messages.Range(func(key, value any) bool {
+		m := value.(*message)
+		if !m.isDraft && m.deleted && m.folderID == store.FolderTrash {
+			if m.updatedAt.Before(cutoff) {
+				toDelete = append(toDelete, key.(string))
+			}
+		}
+		return true
+	})
+
+	// Second pass: delete collected messages
+	// Each Delete is atomic - concurrent calls will simply find nothing to delete
+	for _, id := range toDelete {
+		if _, loaded := s.messages.LoadAndDelete(id); loaded {
+			deleted++
+		}
+	}
+
+	return deleted, nil
+}
+
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
+func matchesFilters(m *message, filters []store.Filter) bool {
+	for _, f := range filters {
+		if !matchesFilter(m, f) {
+			return false
+		}
+	}
+	return true
+}
+
+func matchesFilter(m *message, f store.Filter) bool {
+	key := f.Key()
+	value := f.Value()
+	op := f.Operator()
+
+	var fieldValue any
+	switch key {
+	case "id", "_id":
+		fieldValue = m.id
+	case "owner_id":
+		fieldValue = m.ownerID
+	case "sender_id":
+		fieldValue = m.senderID
+	case "subject":
+		fieldValue = m.subject
+	case "folder_id":
+		fieldValue = m.folderID
+	case "is_read":
+		fieldValue = m.isRead
+	case "status":
+		fieldValue = m.status
+	case "__deleted":
+		fieldValue = m.deleted
+	default:
+		return true // Unknown field, skip filter
+	}
+
+	switch op {
+	case "eq", "=", "":
+		return fieldValue == value
+	case "ne", "!=":
+		return fieldValue != value
+	case "lt", "<":
+		return compareValues(fieldValue, value) < 0
+	case "lte", "<=":
+		return compareValues(fieldValue, value) <= 0
+	case "gt", ">":
+		return compareValues(fieldValue, value) > 0
+	case "gte", ">=":
+		return compareValues(fieldValue, value) >= 0
+	default:
+		return true
+	}
+}
+
+func compareValues(a, b any) int {
+	switch av := a.(type) {
+	case string:
+		if bv, ok := b.(string); ok {
+			return strings.Compare(av, bv)
+		}
+	case int:
+		if bv, ok := b.(int); ok {
+			if av < bv {
+				return -1
+			} else if av > bv {
+				return 1
+			}
+			return 0
+		}
+	case int64:
+		if bv, ok := b.(int64); ok {
+			if av < bv {
+				return -1
+			} else if av > bv {
+				return 1
+			}
+			return 0
+		}
+	case time.Time:
+		if bv, ok := b.(time.Time); ok {
+			if av.Before(bv) {
+				return -1
+			} else if av.After(bv) {
+				return 1
+			}
+			return 0
+		}
+	}
+	return 0
+}
+
+func hasAllTags(m *message, tags []string) bool {
+	tagSet := make(map[string]bool, len(m.tags))
+	for _, t := range m.tags {
+		tagSet[t] = true
+	}
+	for _, t := range tags {
+		if !tagSet[t] {
+			return false
+		}
+	}
+	return true
+}
+
+func sortMessages(msgs []*message, sortBy string, order store.SortOrder) {
+	if sortBy == "" {
+		sortBy = "created_at"
+	}
+	if order == 0 {
+		order = store.SortDesc
+	}
+
+	// Simple bubble sort for testing
+	for i := 0; i < len(msgs)-1; i++ {
+		for j := i + 1; j < len(msgs); j++ {
+			shouldSwap := false
+			switch sortBy {
+			case "created_at":
+				if order == store.SortAsc {
+					shouldSwap = msgs[i].createdAt.After(msgs[j].createdAt)
+				} else {
+					shouldSwap = msgs[i].createdAt.Before(msgs[j].createdAt)
+				}
+			case "updated_at":
+				if order == store.SortAsc {
+					shouldSwap = msgs[i].updatedAt.After(msgs[j].updatedAt)
+				} else {
+					shouldSwap = msgs[i].updatedAt.Before(msgs[j].updatedAt)
+				}
+			case "subject":
+				if order == store.SortAsc {
+					shouldSwap = msgs[i].subject > msgs[j].subject
+				} else {
+					shouldSwap = msgs[i].subject < msgs[j].subject
+				}
+			}
+			if shouldSwap {
+				msgs[i], msgs[j] = msgs[j], msgs[i]
+			}
+		}
+	}
+}
+
+// Compile-time check that Store implements store.Store.
+var _ store.Store = (*Store)(nil)
