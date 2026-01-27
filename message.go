@@ -34,6 +34,12 @@ type MessageMutator interface {
 
 // Message provides access to a message with mutation capabilities.
 //
+// This is the application-level message type returned by Mailbox operations.
+// It wraps store.Message (the storage-level type) and adds user-scoped mutations.
+// Read methods (GetID, GetSubject, etc.) come from store.Message;
+// mutation methods (Update, Move, Delete, etc.) come from MessageMutator
+// and are scoped to the owning user's mailbox.
+//
 // Composed of:
 //   - store.Message: Read-only access (GetID, GetSubject, GetBody, etc.)
 //   - MessageMutator: Mutations (Update, Move, Delete, AddTag, etc.)
@@ -145,7 +151,7 @@ type OperationResult struct {
 	Success bool
 	// Error contains the error if the operation failed (nil if successful).
 	Error error
-	// Message contains the sent message (only for SendAll, only if successful).
+	// Message contains the sent message (only for DraftList.Send, only if successful).
 	Message Message
 }
 
@@ -218,7 +224,7 @@ func (r *BulkResult) SuccessfulIDs() []string {
 	return ids
 }
 
-// SentMessages returns all successfully sent messages (for SendAll operations).
+// SentMessages returns all successfully sent messages (for DraftList.Send operations).
 func (r *BulkResult) SentMessages() []Message {
 	var msgs []Message
 	for _, res := range r.Results {

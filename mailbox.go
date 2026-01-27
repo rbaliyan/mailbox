@@ -111,19 +111,19 @@ type DraftListReader interface {
 
 // DraftListMutator provides bulk mutation operations on a list of drafts.
 type DraftListMutator interface {
-	// DeleteAll deletes all drafts in this list.
-	DeleteAll(ctx context.Context) (*BulkResult, error)
-	// SendAll sends all drafts in this list.
+	// Delete deletes all drafts in this list.
+	Delete(ctx context.Context) (*BulkResult, error)
+	// Send sends all drafts in this list.
 	// Returns results for each draft (success or failure).
-	// Use result.Sent to access the sent messages.
-	SendAll(ctx context.Context) (*BulkResult, error)
+	// Use result.SentMessages() to access the sent messages.
+	Send(ctx context.Context) (*BulkResult, error)
 }
 
 // DraftList provides access to a paginated list of drafts with bulk operations.
 //
 // Composed of:
 //   - DraftListReader: Read-only access (All, Total, HasMore, NextCursor, IDs)
-//   - DraftListMutator: Bulk mutations (DeleteAll, SendAll)
+//   - DraftListMutator: Bulk mutations (Delete, Send)
 type DraftList interface {
 	DraftListReader
 	DraftListMutator
@@ -1257,8 +1257,8 @@ func (l *draftList) IDs() []string {
 	return ids
 }
 
-// DeleteAll deletes all drafts in this list.
-func (l *draftList) DeleteAll(ctx context.Context) (*BulkResult, error) {
+// Delete deletes all drafts in this list.
+func (l *draftList) Delete(ctx context.Context) (*BulkResult, error) {
 	result := &BulkResult{Results: make([]OperationResult, 0, len(l.drafts))}
 
 	for _, draft := range l.drafts {
@@ -1277,8 +1277,8 @@ func (l *draftList) DeleteAll(ctx context.Context) (*BulkResult, error) {
 	return result, result.Err()
 }
 
-// SendAll sends all drafts in this list.
-func (l *draftList) SendAll(ctx context.Context) (*BulkResult, error) {
+// Send sends all drafts in this list.
+func (l *draftList) Send(ctx context.Context) (*BulkResult, error) {
 	result := &BulkResult{Results: make([]OperationResult, 0, len(l.drafts))}
 
 	for _, draft := range l.drafts {

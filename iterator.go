@@ -67,6 +67,9 @@ var ErrIteratorOutOfBounds = errors.New("mailbox: iterator out of bounds - call 
 // MessageIterator provides streaming access to messages.
 // Use Next() to advance, Message() to get current message.
 //
+// Ownership: MessageIterator holds no resources requiring cleanup.
+// There is no Close method — simply stop calling Next() when done.
+//
 // Thread Safety: MessageIterator is NOT safe for concurrent use. Each iterator
 // should be used by a single goroutine. If you need concurrent access, create
 // separate iterators for each goroutine.

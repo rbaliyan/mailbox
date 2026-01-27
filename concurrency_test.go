@@ -36,8 +36,8 @@ func TestConcurrency_MultipleSenders(t *testing.T) {
 			client := svc.Client(userID)
 
 			for j := 0; j < messagesPerSender; j++ {
-				draft := mustCompose(client).
-					SetRecipients("recipient1", "recipient2").
+				draft := mustCompose(client)
+				draft.SetRecipients("recipient1", "recipient2").
 					SetSubject("Concurrent test message").
 					SetBody("Test body")
 
@@ -79,11 +79,11 @@ func TestConcurrentReads(t *testing.T) {
 	// Create some messages first
 	sender := svc.Client("sender")
 	for i := 0; i < 10; i++ {
-		_, err := mustCompose(sender).
-			SetRecipients("reader").
+		draft := mustCompose(sender)
+		draft.SetRecipients("reader").
 			SetSubject("Test message").
-			SetBody("Body").
-			Send(ctx)
+			SetBody("Body")
+		_, err := draft.Send(ctx)
 		if err != nil {
 			t.Fatalf("failed to send message: %v", err)
 		}
@@ -146,11 +146,11 @@ func TestConcurrentMarkRead(t *testing.T) {
 
 	// Send a message
 	sender := svc.Client("sender")
-	_, err = mustCompose(sender).
-		SetRecipients("reader").
+	draft := mustCompose(sender)
+	draft.SetRecipients("reader").
 		SetSubject("Test").
-		SetBody("Body").
-		Send(ctx)
+		SetBody("Body")
+	_, err = draft.Send(ctx)
 	if err != nil {
 		t.Fatalf("failed to send: %v", err)
 	}
@@ -226,11 +226,11 @@ func TestConcurrentServiceAccess(t *testing.T) {
 			client := svc.Client(userID)
 
 			// Send
-			_, err := mustCompose(client).
-				SetRecipients("recipient").
+			draft := mustCompose(client)
+			draft.SetRecipients("recipient").
 				SetSubject("Test").
-				SetBody("Body").
-				Send(ctx)
+				SetBody("Body")
+			_, err := draft.Send(ctx)
 			if err != nil {
 				errors <- err
 				return
@@ -282,8 +282,8 @@ func TestConcurrentDraftOperations(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			draft := mustCompose(client).
-				SetRecipients("recipient").
+			draft := mustCompose(client)
+			draft.SetRecipients("recipient").
 				SetSubject("Draft " + string(rune('0'+n))).
 				SetBody("Draft body")
 
@@ -337,11 +337,11 @@ func TestConcurrentFolderMoves(t *testing.T) {
 	reader := svc.Client("reader")
 
 	for i := 0; i < 5; i++ {
-		_, err := mustCompose(sender).
-			SetRecipients("reader").
+		draft := mustCompose(sender)
+		draft.SetRecipients("reader").
 			SetSubject("Test").
-			SetBody("Body").
-			Send(ctx)
+			SetBody("Body")
+		_, err := draft.Send(ctx)
 		if err != nil {
 			t.Fatalf("failed to send: %v", err)
 		}

@@ -20,11 +20,14 @@ type DraftReader interface {
 }
 
 // DraftComposer provides methods for composing a draft.
+// Setter methods return DraftComposer to enable chaining:
+//
+//	draft.SetRecipients("user1").SetSubject("Hello").SetBody("World")
 type DraftComposer interface {
-	SetRecipients(recipientIDs ...string) Draft
-	SetSubject(subject string) Draft
-	SetBody(body string) Draft
-	SetMetadata(key string, value any) Draft
+	SetRecipients(recipientIDs ...string) DraftComposer
+	SetSubject(subject string) DraftComposer
+	SetBody(body string) DraftComposer
+	SetMetadata(key string, value any) DraftComposer
 	AddAttachment(attachment store.Attachment) error
 	ReplyTo(ctx context.Context, messageID string) error
 }
@@ -125,25 +128,25 @@ func (d *draft) Attachments() []store.Attachment {
 }
 
 // SetRecipients sets the recipient IDs.
-func (d *draft) SetRecipients(recipientIDs ...string) Draft {
+func (d *draft) SetRecipients(recipientIDs ...string) DraftComposer {
 	d.message.SetRecipients(recipientIDs...)
 	return d
 }
 
 // SetSubject sets the subject.
-func (d *draft) SetSubject(subject string) Draft {
+func (d *draft) SetSubject(subject string) DraftComposer {
 	d.message.SetSubject(subject)
 	return d
 }
 
 // SetBody sets the body.
-func (d *draft) SetBody(body string) Draft {
+func (d *draft) SetBody(body string) DraftComposer {
 	d.message.SetBody(body)
 	return d
 }
 
 // SetMetadata sets a metadata key-value pair.
-func (d *draft) SetMetadata(key string, value any) Draft {
+func (d *draft) SetMetadata(key string, value any) DraftComposer {
 	d.message.SetMetadata(key, value)
 	return d
 }

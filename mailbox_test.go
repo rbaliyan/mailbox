@@ -116,8 +116,8 @@ func TestComposeSendMessage(t *testing.T) {
 	recipient := svc.Client("recipient")
 
 	t.Run("send message to recipient", func(t *testing.T) {
-		draft := mustCompose(sender).
-			SetSubject("Hello").
+		draft := mustCompose(sender)
+		draft.SetSubject("Hello").
 			SetBody("This is a test message").
 			SetRecipients("recipient")
 
@@ -159,8 +159,8 @@ func TestComposeSendMessage(t *testing.T) {
 		r1 := svc.Client("r1")
 		r2 := svc.Client("r2")
 
-		draft := mustCompose(sender).
-			SetSubject("Multi").
+		draft := mustCompose(sender)
+		draft.SetSubject("Multi").
 			SetBody("Multi recipient").
 			SetRecipients("r1", "r2")
 
@@ -182,8 +182,8 @@ func TestComposeSendMessage(t *testing.T) {
 	})
 
 	t.Run("send with metadata", func(t *testing.T) {
-		draft := mustCompose(sender).
-			SetSubject("With Metadata").
+		draft := mustCompose(sender)
+		draft.SetSubject("With Metadata").
 			SetBody("Test body").
 			SetRecipients("recipient").
 			SetMetadata("priority", "high").
@@ -204,8 +204,8 @@ func TestComposeSendMessage(t *testing.T) {
 	})
 
 	t.Run("empty recipients fails", func(t *testing.T) {
-		draft := mustCompose(sender).
-			SetSubject("No Recipients").
+		draft := mustCompose(sender)
+		draft.SetSubject("No Recipients").
 			SetBody("Test")
 
 		_, err := draft.Send(ctx)
@@ -215,8 +215,8 @@ func TestComposeSendMessage(t *testing.T) {
 	})
 
 	t.Run("empty subject fails", func(t *testing.T) {
-		draft := mustCompose(sender).
-			SetBody("Test").
+		draft := mustCompose(sender)
+		draft.SetBody("Test").
 			SetRecipients("recipient")
 
 		_, err := draft.Send(ctx)
@@ -234,8 +234,8 @@ func TestSaveDraft(t *testing.T) {
 	user := svc.Client("user")
 
 	t.Run("save and retrieve draft", func(t *testing.T) {
-		draft := mustCompose(user).
-			SetSubject("Draft Subject").
+		draft := mustCompose(user)
+		draft.SetSubject("Draft Subject").
 			SetBody("Draft body")
 
 		saved, err := draft.Save(ctx)
@@ -262,8 +262,8 @@ func TestSaveDraft(t *testing.T) {
 	})
 
 	t.Run("delete draft", func(t *testing.T) {
-		draft := mustCompose(user).
-			SetSubject("To Delete").
+		draft := mustCompose(user)
+		draft.SetSubject("To Delete").
 			SetBody("Body")
 
 		saved, _ := draft.Save(ctx)
@@ -290,8 +290,8 @@ func TestMessageOperations(t *testing.T) {
 	recipient := svc.Client("recipient")
 
 	// Send a message first
-	draft := mustCompose(sender).
-		SetSubject("Test Message").
+	draft := mustCompose(sender)
+	draft.SetSubject("Test Message").
 		SetBody("Test body").
 		SetRecipients("recipient")
 	_, _ = draft.Send(ctx)
@@ -396,8 +396,8 @@ func TestSearch(t *testing.T) {
 	// Send some messages
 	subjects := []string{"Hello World", "Test Message", "Hello Again", "Goodbye"}
 	for _, subject := range subjects {
-		draft := mustCompose(sender).
-			SetSubject(subject).
+		draft := mustCompose(sender)
+		draft.SetSubject(subject).
 			SetBody("Body for " + subject).
 			SetRecipients("recipient")
 		_, _ = draft.Send(ctx)
@@ -440,8 +440,8 @@ func TestTags(t *testing.T) {
 	recipient := svc.Client("recipient")
 
 	// Send a message
-	draft := mustCompose(sender).
-		SetSubject("Tagged Message").
+	draft := mustCompose(sender)
+	draft.SetSubject("Tagged Message").
 		SetBody("Body").
 		SetRecipients("recipient")
 	_, _ = draft.Send(ctx)
@@ -489,8 +489,8 @@ func TestUnauthorizedAccess(t *testing.T) {
 	attacker := svc.Client("attacker")
 
 	// Send a message
-	draft := mustCompose(sender).
-		SetSubject("Private").
+	draft := mustCompose(sender)
+	draft.SetSubject("Private").
 		SetBody("Secret content").
 		SetRecipients("recipient")
 	msg, _ := draft.Send(ctx)
@@ -518,8 +518,8 @@ func TestConcurrentSends(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			draft := mustCompose(sender).
-				SetSubject("Concurrent Message").
+			draft := mustCompose(sender)
+			draft.SetSubject("Concurrent Message").
 				SetBody("Body").
 				SetRecipients("recipient")
 
@@ -553,8 +553,8 @@ func TestGracefulShutdown(t *testing.T) {
 	sender := svc.Client("sender")
 
 	// Compose draft before starting goroutine to avoid race with Close
-	draft := mustCompose(sender).
-		SetSubject("During Shutdown").
+	draft := mustCompose(sender)
+	draft.SetSubject("During Shutdown").
 		SetBody("Body").
 		SetRecipients("recipient")
 
