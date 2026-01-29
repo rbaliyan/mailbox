@@ -18,7 +18,15 @@ import (
 type Store struct {
 	messages       sync.Map // map[string]*message (both drafts and messages)
 	idempotencyIdx sync.Map // map[string]string (ownerID:idempotencyKey -> messageID)
+	msgLocks       sync.Map // map[string]*sync.Mutex (per-message locks for mutations)
 	connected      int32
+}
+
+// getMsgLock returns the mutex for a message ID, creating one if needed.
+// Uses LoadOrStore for atomic get-or-create.
+func (s *Store) getMsgLock(id string) *sync.Mutex {
+	lock, _ := s.msgLocks.LoadOrStore(id, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }
 
 // New creates a new in-memory store.
@@ -389,7 +397,7 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 }
 
 // MarkRead sets the read status of a message.
-// Uses copy-on-write to avoid races with concurrent readers.
+// Uses per-message locking to prevent concurrent mutation races.
 func (s *Store) MarkRead(ctx context.Context, id string, read bool) error {
 	if atomic.LoadInt32(&s.connected) == 0 {
 		return store.ErrNotConnected
@@ -397,6 +405,11 @@ func (s *Store) MarkRead(ctx context.Context, id string, read bool) error {
 	if id == "" {
 		return store.ErrInvalidID
 	}
+
+	// Acquire per-message lock to prevent concurrent mutation races
+	lock := s.getMsgLock(id)
+	lock.Lock()
+	defer lock.Unlock()
 
 	v, ok := s.messages.Load(id)
 	if !ok {
@@ -408,7 +421,7 @@ func (s *Store) MarkRead(ctx context.Context, id string, read bool) error {
 		return store.ErrNotFound
 	}
 
-	// Copy-on-write: clone, modify, store
+	// Copy-on-write: clone, modify, store (now atomic within lock)
 	m := orig.clone()
 	m.isRead = read
 	m.updatedAt = time.Now().UTC()
@@ -424,7 +437,7 @@ func (s *Store) MarkRead(ctx context.Context, id string, read bool) error {
 }
 
 // MoveToFolder moves a message to a different folder.
-// Uses copy-on-write to avoid races with concurrent readers.
+// Uses per-message locking to prevent concurrent mutation races.
 func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) error {
 	if atomic.LoadInt32(&s.connected) == 0 {
 		return store.ErrNotConnected
@@ -432,6 +445,11 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) er
 	if id == "" {
 		return store.ErrInvalidID
 	}
+
+	// Acquire per-message lock to prevent concurrent mutation races
+	lock := s.getMsgLock(id)
+	lock.Lock()
+	defer lock.Unlock()
 
 	v, ok := s.messages.Load(id)
 	if !ok {
@@ -443,7 +461,7 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) er
 		return store.ErrNotFound
 	}
 
-	// Copy-on-write: clone, modify, store
+	// Copy-on-write: clone, modify, store (now atomic within lock)
 	m := orig.clone()
 	m.folderID = folderID
 	m.updatedAt = time.Now().UTC()
@@ -452,7 +470,7 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) er
 }
 
 // AddTag adds a tag to a message.
-// Uses copy-on-write to avoid races with concurrent readers.
+// Uses per-message locking to prevent concurrent mutation races.
 func (s *Store) AddTag(ctx context.Context, id string, tagID string) error {
 	if atomic.LoadInt32(&s.connected) == 0 {
 		return store.ErrNotConnected
@@ -460,6 +478,11 @@ func (s *Store) AddTag(ctx context.Context, id string, tagID string) error {
 	if id == "" {
 		return store.ErrInvalidID
 	}
+
+	// Acquire per-message lock to prevent concurrent mutation races
+	lock := s.getMsgLock(id)
+	lock.Lock()
+	defer lock.Unlock()
 
 	v, ok := s.messages.Load(id)
 	if !ok {
@@ -478,7 +501,7 @@ func (s *Store) AddTag(ctx context.Context, id string, tagID string) error {
 		}
 	}
 
-	// Copy-on-write: clone, modify, store
+	// Copy-on-write: clone, modify, store (now atomic within lock)
 	m := orig.clone()
 	m.tags = append(m.tags, tagID)
 	m.updatedAt = time.Now().UTC()
@@ -487,7 +510,7 @@ func (s *Store) AddTag(ctx context.Context, id string, tagID string) error {
 }
 
 // RemoveTag removes a tag from a message.
-// Uses copy-on-write to avoid races with concurrent readers.
+// Uses per-message locking to prevent concurrent mutation races.
 func (s *Store) RemoveTag(ctx context.Context, id string, tagID string) error {
 	if atomic.LoadInt32(&s.connected) == 0 {
 		return store.ErrNotConnected
@@ -495,6 +518,11 @@ func (s *Store) RemoveTag(ctx context.Context, id string, tagID string) error {
 	if id == "" {
 		return store.ErrInvalidID
 	}
+
+	// Acquire per-message lock to prevent concurrent mutation races
+	lock := s.getMsgLock(id)
+	lock.Lock()
+	defer lock.Unlock()
 
 	v, ok := s.messages.Load(id)
 	if !ok {
@@ -518,7 +546,7 @@ func (s *Store) RemoveTag(ctx context.Context, id string, tagID string) error {
 		return nil // Tag not found, nothing to do
 	}
 
-	// Copy-on-write: clone, modify, store
+	// Copy-on-write: clone, modify, store (now atomic within lock)
 	m := orig.clone()
 	m.tags = append(m.tags[:tagIndex], m.tags[tagIndex+1:]...)
 	m.updatedAt = time.Now().UTC()
@@ -527,7 +555,7 @@ func (s *Store) RemoveTag(ctx context.Context, id string, tagID string) error {
 }
 
 // Delete soft-deletes a message.
-// Uses copy-on-write to avoid races with concurrent readers.
+// Uses per-message locking to prevent concurrent mutation races.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	if atomic.LoadInt32(&s.connected) == 0 {
 		return store.ErrNotConnected
@@ -535,6 +563,11 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if id == "" {
 		return store.ErrInvalidID
 	}
+
+	// Acquire per-message lock to prevent concurrent mutation races
+	lock := s.getMsgLock(id)
+	lock.Lock()
+	defer lock.Unlock()
 
 	v, ok := s.messages.Load(id)
 	if !ok {
@@ -546,7 +579,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		return store.ErrNotFound
 	}
 
-	// Copy-on-write: clone, modify, store
+	// Copy-on-write: clone, modify, store (now atomic within lock)
 	m := orig.clone()
 	m.deleted = true
 	m.folderID = store.FolderTrash
@@ -579,7 +612,7 @@ func (s *Store) HardDelete(ctx context.Context, id string) error {
 }
 
 // Restore restores a soft-deleted message from trash.
-// Uses copy-on-write to avoid races with concurrent readers.
+// Uses per-message locking to prevent concurrent mutation races.
 func (s *Store) Restore(ctx context.Context, id string) error {
 	if atomic.LoadInt32(&s.connected) == 0 {
 		return store.ErrNotConnected
@@ -587,6 +620,11 @@ func (s *Store) Restore(ctx context.Context, id string) error {
 	if id == "" {
 		return store.ErrInvalidID
 	}
+
+	// Acquire per-message lock to prevent concurrent mutation races
+	lock := s.getMsgLock(id)
+	lock.Lock()
+	defer lock.Unlock()
 
 	v, ok := s.messages.Load(id)
 	if !ok {
@@ -598,7 +636,7 @@ func (s *Store) Restore(ctx context.Context, id string) error {
 		return store.ErrNotFound
 	}
 
-	// Copy-on-write: clone, modify, store
+	// Copy-on-write: clone, modify, store (now atomic within lock)
 	m := orig.clone()
 	m.deleted = false
 	// Restore to appropriate folder based on sender

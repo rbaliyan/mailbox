@@ -19,16 +19,31 @@ type DraftReader interface {
 	ReplyToID() string
 }
 
-// DraftComposer provides methods for composing a draft.
-// Setter methods return DraftComposer to enable chaining:
+// DraftComposer provides fluent setter methods for composing a draft.
+// All setter methods return DraftComposer to enable chaining:
 //
 //	draft.SetRecipients("user1").SetSubject("Hello").SetBody("World")
+//
+// For operations that can fail (AddAttachment, ReplyTo), use the methods
+// on Draft directly — they are not part of the fluent interface.
 type DraftComposer interface {
 	SetRecipients(recipientIDs ...string) DraftComposer
 	SetSubject(subject string) DraftComposer
 	SetBody(body string) DraftComposer
 	SetMetadata(key string, value any) DraftComposer
+}
+
+// DraftPreparer provides draft preparation methods that can fail.
+// These methods return errors and are intentionally not part of the fluent
+// DraftComposer interface to keep the builder pattern clean.
+type DraftPreparer interface {
+	// AddAttachment adds an attachment after validating it.
+	// Returns an error if the attachment is invalid or limits are exceeded.
 	AddAttachment(attachment store.Attachment) error
+
+	// ReplyTo sets this draft as a reply to another message.
+	// It looks up the parent message to inherit the thread ID.
+	// Returns an error if the parent message cannot be found or accessed.
 	ReplyTo(ctx context.Context, messageID string) error
 }
 
@@ -67,12 +82,22 @@ type DraftMutator interface {
 //
 // Composed of:
 //   - DraftReader: Read draft content (ID, Subject, Body, etc.)
-//   - DraftComposer: Set draft content (SetSubject, SetBody, AddAttachment, etc.)
+//   - DraftComposer: Fluent setters (SetSubject, SetBody, SetRecipients, SetMetadata)
+//   - DraftPreparer: Failable operations (AddAttachment, ReplyTo)
 //   - DraftPublisher: Lifecycle operations (Send, Save)
 //   - DraftMutator: Mutation operations (Delete)
+//
+// Usage pattern:
+//
+//	draft, _ := mailbox.Compose()
+//	draft.SetRecipients("user1").SetSubject("Hello").SetBody("World")  // fluent chain
+//	if err := draft.AddAttachment(att); err != nil { ... }             // separate call
+//	if err := draft.ReplyTo(ctx, parentID); err != nil { ... }         // separate call
+//	msg, err := draft.Send(ctx)
 type Draft interface {
 	DraftReader
 	DraftComposer
+	DraftPreparer
 	DraftPublisher
 	DraftMutator
 }

@@ -4,13 +4,20 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/rbaliyan/mailbox/store"
 )
 
 // Sentinel errors for the mailbox package.
 // Use errors.Is() to check for these errors.
+//
+// These errors wrap corresponding store-level errors where applicable,
+// so errors.Is(err, mailbox.ErrNotFound) will match both mailbox-level
+// and store-level "not found" errors.
 var (
 	// ErrNotFound is returned when a message cannot be found.
-	ErrNotFound = errors.New("mailbox: not found")
+	// Wraps store.ErrNotFound for consistent error checking.
+	ErrNotFound = fmt.Errorf("mailbox: %w", store.ErrNotFound)
 
 	// ErrUnauthorized is returned when user doesn't have access to a message.
 	ErrUnauthorized = errors.New("mailbox: unauthorized")
@@ -19,28 +26,35 @@ var (
 	ErrInvalidMessage = errors.New("mailbox: invalid message")
 
 	// ErrEmptyRecipients is returned when no recipients are provided.
-	ErrEmptyRecipients = errors.New("mailbox: empty recipients")
+	// Wraps store.ErrEmptyRecipients for consistent error checking.
+	ErrEmptyRecipients = fmt.Errorf("mailbox: %w", store.ErrEmptyRecipients)
 
 	// ErrEmptySubject is returned when subject is empty.
-	ErrEmptySubject = errors.New("mailbox: empty subject")
+	// Wraps store.ErrEmptySubject for consistent error checking.
+	ErrEmptySubject = fmt.Errorf("mailbox: %w", store.ErrEmptySubject)
 
 	// ErrStoreRequired is returned when no store is configured.
 	ErrStoreRequired = errors.New("mailbox: store is required")
 
 	// ErrNotConnected is returned when operations are attempted before Connect().
-	ErrNotConnected = errors.New("mailbox: not connected")
+	// Wraps store.ErrNotConnected for consistent error checking.
+	ErrNotConnected = fmt.Errorf("mailbox: %w", store.ErrNotConnected)
 
 	// ErrAlreadyConnected is returned when Connect() is called twice.
-	ErrAlreadyConnected = errors.New("mailbox: already connected")
+	// Wraps store.ErrAlreadyConnected for consistent error checking.
+	ErrAlreadyConnected = fmt.Errorf("mailbox: %w", store.ErrAlreadyConnected)
 
 	// ErrInvalidID is returned when an invalid ID is provided.
-	ErrInvalidID = errors.New("mailbox: invalid id")
+	// Wraps store.ErrInvalidID for consistent error checking.
+	ErrInvalidID = fmt.Errorf("mailbox: %w", store.ErrInvalidID)
 
 	// ErrDuplicateEntry is returned when a duplicate entry is detected.
-	ErrDuplicateEntry = errors.New("mailbox: duplicate entry")
+	// Wraps store.ErrDuplicateEntry for consistent error checking.
+	ErrDuplicateEntry = fmt.Errorf("mailbox: %w", store.ErrDuplicateEntry)
 
 	// ErrFilterInvalid is returned when a filter is invalid.
-	ErrFilterInvalid = errors.New("mailbox: invalid filter")
+	// Wraps store.ErrFilterInvalid for consistent error checking.
+	ErrFilterInvalid = fmt.Errorf("mailbox: %w", store.ErrFilterInvalid)
 
 	// ErrEventClientRequired is returned when event client is nil.
 	ErrEventClientRequired = errors.New("mailbox: event client is required")
@@ -97,7 +111,8 @@ var (
 	ErrInvalidMIMEType = errors.New("mailbox: invalid mime type")
 
 	// ErrInvalidFolderID is returned when a folder ID is invalid.
-	ErrInvalidFolderID = errors.New("mailbox: invalid folder id")
+	// Wraps store.ErrInvalidFolderID for consistent error checking.
+	ErrInvalidFolderID = fmt.Errorf("mailbox: %w", store.ErrInvalidFolderID)
 
 	// ErrRateLimited is returned when a user exceeds their rate limit.
 	ErrRateLimited = errors.New("mailbox: rate limited")
@@ -106,7 +121,8 @@ var (
 	ErrInvalidUserID = errors.New("mailbox: invalid user id")
 
 	// ErrInvalidIdempotencyKey is returned when an idempotency key is invalid.
-	ErrInvalidIdempotencyKey = errors.New("mailbox: invalid idempotency key")
+	// Wraps store.ErrInvalidIdempotencyKey for consistent error checking.
+	ErrInvalidIdempotencyKey = fmt.Errorf("mailbox: %w", store.ErrInvalidIdempotencyKey)
 
 	// ErrCacheInvalidationFailed is returned when cache invalidation fails in strict mode.
 	// The underlying operation succeeded, but cached data may be stale.
@@ -203,11 +219,12 @@ func (e *PartialDeliveryError) SuccessRate() float64 {
 
 // IsRetryableError determines if an error is retryable.
 // Returns true for temporary/transient errors, false for permanent errors.
+// Handles both mailbox-level and store-level errors.
 func IsRetryableError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Permanent errors that should not be retried
+	// Permanent errors that should not be retried (mailbox-level)
 	permanentErrors := []error{
 		ErrNotFound,
 		ErrUnauthorized,
@@ -238,11 +255,31 @@ func IsRetryableError(err error) bool {
 		}
 	}
 
+	// Also check store-level permanent errors (in case they bubble up unwrapped)
+	storePermanentErrors := []error{
+		store.ErrNotFound,
+		store.ErrInvalidID,
+		store.ErrDuplicateEntry,
+		store.ErrEmptyRecipients,
+		store.ErrEmptySubject,
+		store.ErrFilterInvalid,
+		store.ErrInvalidFolderID,
+		store.ErrInvalidIdempotencyKey,
+	}
+
+	for _, permErr := range storePermanentErrors {
+		if errors.Is(err, permErr) {
+			return false
+		}
+	}
+
 	// Retryable errors
 	retryableErrors := []error{
-		ErrRateLimited,          // Rate limit can be waited out
-		ErrNotConnected,         // Connection can be re-established
+		ErrRateLimited,             // Rate limit can be waited out
+		ErrNotConnected,            // Connection can be re-established
 		ErrCacheInvalidationFailed, // Cache issues are transient
+		store.ErrNotConnected,      // Store connection can be re-established
+		store.ErrTransactionFailed, // Transaction can be retried
 	}
 
 	for _, retryErr := range retryableErrors {

@@ -445,6 +445,10 @@ type CleanupTrashResult struct {
 // CleanupTrash permanently deletes messages that have been in trash longer than
 // the configured retention period (default 30 days).
 //
+// This method processes all expired trash messages in batches until complete
+// or the context is cancelled. It uses the store's atomic DeleteExpiredTrash
+// operation for efficient bulk deletion.
+//
 // This method should be called periodically by the application using its own
 // scheduler (e.g., cron job, background worker). The library does not
 // automatically run cleanup to give applications full control over scheduling.
@@ -469,53 +473,71 @@ func (s *service) CleanupTrash(ctx context.Context) (*CleanupTrashResult, error)
 	}
 
 	result := &CleanupTrashResult{}
-
 	cutoff := time.Now().UTC().Add(-s.opts.trashRetention)
-	filters := []store.Filter{
-		store.InFolder(store.FolderTrash),
-	}
 
-	// Add filter for messages updated before cutoff (moved to trash before cutoff)
-	updatedBeforeFilter, err := store.MessageFilter("UpdatedAt").LessThan(cutoff)
-	if err != nil {
-		return nil, fmt.Errorf("create trash filter: %w", err)
-	}
-	filters = append(filters, updatedBeforeFilter)
-
-	// Find expired trash messages
-	list, err := s.store.Find(ctx, filters, store.ListOptions{Limit: 100})
-	if err != nil {
-		return nil, fmt.Errorf("find expired trash: %w", err)
-	}
-
-	for _, msg := range list.Messages {
+	// Process in batches until no more expired messages
+	const batchSize = 100
+	for {
 		// Check if context was cancelled
 		if ctx.Err() != nil {
 			result.Interrupted = true
 			return result, ctx.Err()
 		}
 
-		// Hard delete the message FIRST to avoid race condition.
-		// If we released attachment refs first and then delete failed,
-		// another process could see refs=0 and delete the attachments
-		// while the message still exists.
-		if err := s.store.HardDelete(ctx, msg.GetID()); err != nil {
-			s.logger.Error("failed to hard delete expired trash", "error", err, "message_id", msg.GetID())
-			continue
+		// Step 1: Find expired trash messages to collect attachment IDs before deletion
+		filters := []store.Filter{
+			store.InFolder(store.FolderTrash),
+		}
+		updatedBeforeFilter, err := store.MessageFilter("UpdatedAt").LessThan(cutoff)
+		if err != nil {
+			return result, fmt.Errorf("create trash filter: %w", err)
+		}
+		filters = append(filters, updatedBeforeFilter)
+
+		list, err := s.store.Find(ctx, filters, store.ListOptions{Limit: batchSize})
+		if err != nil {
+			return result, fmt.Errorf("find expired trash: %w", err)
 		}
 
-		// Release attachment references AFTER successful delete.
-		// If this fails, we have orphaned attachments (better than missing attachments on existing messages).
+		// No more messages to delete
+		if len(list.Messages) == 0 {
+			break
+		}
+
+		// Step 2: Collect attachment IDs for cleanup after deletion
+		var attachmentIDs []string
 		if s.attachments != nil {
-			for _, a := range msg.GetAttachments() {
-				if err := s.attachments.RemoveRef(ctx, a.GetID()); err != nil {
-					s.logger.Warn("failed to release attachment ref during cleanup", "error", err, "attachment_id", a.GetID())
+			for _, msg := range list.Messages {
+				for _, a := range msg.GetAttachments() {
+					attachmentIDs = append(attachmentIDs, a.GetID())
 				}
 			}
 		}
 
-		result.DeletedCount++
-		s.logger.Debug("deleted expired trash message", "message_id", msg.GetID(), "owner_id", msg.GetOwnerID())
+		// Step 3: Use atomic bulk deletion via DeleteExpiredTrash
+		deleted, err := s.store.DeleteExpiredTrash(ctx, cutoff)
+		if err != nil {
+			return result, fmt.Errorf("delete expired trash: %w", err)
+		}
+
+		result.DeletedCount += int(deleted)
+		s.logger.Debug("deleted expired trash batch", "count", deleted)
+
+		// Step 4: Release attachment references after successful deletion
+		// If this fails, we have orphaned attachments (better than missing attachments)
+		if s.attachments != nil {
+			for _, attachmentID := range attachmentIDs {
+				if err := s.attachments.RemoveRef(ctx, attachmentID); err != nil {
+					s.logger.Warn("failed to release attachment ref during cleanup",
+						"error", err, "attachment_id", attachmentID)
+				}
+			}
+		}
+
+		// If we deleted fewer than batch size, we're done
+		if deleted < batchSize {
+			break
+		}
 	}
 
 	return result, nil
