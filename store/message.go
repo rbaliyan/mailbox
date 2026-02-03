@@ -103,8 +103,6 @@ type Message interface {
 	// Thread support
 	GetThreadID() string
 	GetReplyToID() string
-	GetReactions() []Reaction
-	GetDeliveryReceipts() []DeliveryReceipt
 }
 
 // DraftMessage is a mutable message being composed.
@@ -132,20 +130,6 @@ type DraftMessage interface {
 	AddAttachment(attachment Attachment) DraftMessage
 }
 
-// Reaction represents an emoji reaction to a message.
-type Reaction struct {
-	Emoji     string    `json:"emoji"`
-	UserID    string    `json:"user_id"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-// DeliveryReceipt tracks per-recipient delivery and read status.
-type DeliveryReceipt struct {
-	RecipientID string     `json:"recipient_id"`
-	DeliveredAt time.Time  `json:"delivered_at"`
-	ReadAt      *time.Time `json:"read_at,omitempty"`
-}
-
 // MessageData contains data for creating a new message.
 // Used internally when sending a draft to create message copies.
 type MessageData struct {
@@ -161,7 +145,6 @@ type MessageData struct {
 	Tags             []string
 	ThreadID         string
 	ReplyToID        string
-	DeliveryReceipts []DeliveryReceipt
 }
 
 // MessageList represents a paginated list of messages.

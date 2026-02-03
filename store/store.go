@@ -207,6 +207,22 @@ type MessageStore interface {
 	MessageStoreCreator
 }
 
+// FolderCounts holds the message and unread counts for a folder.
+type FolderCounts struct {
+	Total  int64
+	Unread int64
+}
+
+// FolderCounter is an optional interface that Store implementations can
+// implement to provide optimized batch folder counting.
+// When implemented, ListFolders uses a single query instead of N separate
+// Count calls (one per folder).
+type FolderCounter interface {
+	// CountByFolders returns message counts and unread counts for the given folders.
+	// The returned map is keyed by folder ID. Missing keys indicate zero counts.
+	CountByFolders(ctx context.Context, ownerID string, folderIDs []string) (map[string]FolderCounts, error)
+}
+
 // MaintenanceStore provides operations for background maintenance tasks.
 // These operations are designed to be safely called concurrently from
 // multiple service instances without requiring distributed coordination.

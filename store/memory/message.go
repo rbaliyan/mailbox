@@ -27,8 +27,6 @@ type message struct {
 	isDraft          bool // true for drafts, false for sent messages
 	threadID         string
 	replyToID        string
-	reactions        []store.Reaction
-	deliveryReceipts []store.DeliveryReceipt
 }
 
 // clone creates a deep copy of the message.
@@ -72,15 +70,6 @@ func (m *message) clone() *message {
 		t := *m.readAt
 		c.readAt = &t
 	}
-	if m.reactions != nil {
-		c.reactions = make([]store.Reaction, len(m.reactions))
-		copy(c.reactions, m.reactions)
-	}
-	if m.deliveryReceipts != nil {
-		c.deliveryReceipts = make([]store.DeliveryReceipt, len(m.deliveryReceipts))
-		copy(c.deliveryReceipts, m.deliveryReceipts)
-	}
-
 	return c
 }
 
@@ -102,9 +91,6 @@ func (m *message) GetCreatedAt() time.Time                   { return m.createdA
 func (m *message) GetUpdatedAt() time.Time                   { return m.updatedAt }
 func (m *message) GetThreadID() string                       { return m.threadID }
 func (m *message) GetReplyToID() string                      { return m.replyToID }
-func (m *message) GetReactions() []store.Reaction            { return m.reactions }
-func (m *message) GetDeliveryReceipts() []store.DeliveryReceipt { return m.deliveryReceipts }
-
 // Draft setters (implements store.DraftMessage fluent API)
 func (m *message) SetSubject(subject string) store.DraftMessage {
 	m.subject = subject

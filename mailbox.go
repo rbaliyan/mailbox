@@ -11,10 +11,24 @@ import (
 
 	"github.com/rbaliyan/event/v3"
 	"github.com/rbaliyan/event/v3/transport/noop"
-	"github.com/rbaliyan/event/v3/transport/redis"
+	eventredis "github.com/rbaliyan/event/v3/transport/redis"
 	"github.com/rbaliyan/mailbox/store"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sync/semaphore"
+)
+
+// Type aliases for commonly used store types.
+// These allow users to work with the mailbox package without importing store directly.
+type (
+	ListOptions = store.ListOptions
+	SearchQuery = store.SearchQuery
+	SortOrder   = store.SortOrder
+)
+
+// Re-exported sort order constants.
+const (
+	SortAsc  = store.SortAsc
+	SortDesc = store.SortDesc
 )
 
 // ServiceHealth provides health and state information about the service.
@@ -42,6 +56,10 @@ type Service interface {
 	// longer than the configured retention period. Call this periodically
 	// using your application's scheduler.
 	CleanupTrash(ctx context.Context) (*CleanupTrashResult, error)
+	// Events returns per-service event instances for subscribing and publishing.
+	// Each service has its own events bound to its own event bus, enabling
+	// independent event routing and parallel testing.
+	Events() *ServiceEvents
 }
 
 // MessageReader provides single message retrieval.
@@ -289,6 +307,7 @@ type service struct {
 	otel        *otelInstrumentation
 	sendSem     *semaphore.Weighted // Limits concurrent sends to prevent resource exhaustion
 	eventBus    *event.Bus          // Event bus for publishing events
+	events      *ServiceEvents      // Per-service event instances
 }
 
 // NewService creates a new mailbox service.
@@ -325,6 +344,11 @@ func NewService(opts ...Option) (Service, error) {
 		otel:        otelInstr,
 		sendSem:     semaphore.NewWeighted(int64(o.maxConcurrentSends)),
 	}, nil
+}
+
+// Events returns per-service event instances for subscribing and publishing.
+func (s *service) Events() *ServiceEvents {
+	return s.events
 }
 
 // IsConnected returns true if the service is connected and ready.
@@ -392,14 +416,18 @@ func (s *service) initEventBus(ctx context.Context) error {
 	var bus *event.Bus
 	var err error
 
-	if s.opts.redisClient != nil {
+	switch {
+	case s.opts.eventTransport != nil:
+		s.logger.Info("initializing event bus with custom transport")
+		bus, err = event.NewBus(busName, event.WithTransport(s.opts.eventTransport))
+	case s.opts.redisClient != nil:
 		s.logger.Info("initializing event bus with Redis transport")
-		transport, transportErr := redis.New(s.opts.redisClient)
+		t, transportErr := eventredis.New(s.opts.redisClient)
 		if transportErr != nil {
 			return fmt.Errorf("create redis transport: %w", transportErr)
 		}
-		bus, err = event.NewBus(busName, event.WithTransport(transport))
-	} else {
+		bus, err = event.NewBus(busName, event.WithTransport(t))
+	default:
 		s.logger.Debug("initializing event bus with noop transport")
 		bus, err = event.NewBus(busName, event.WithTransport(noop.New()))
 	}
@@ -409,9 +437,15 @@ func (s *service) initEventBus(ctx context.Context) error {
 	}
 	s.eventBus = bus
 
-	// Register mailbox events with this bus.
-	// Events are global singletons - first registration wins, subsequent
-	// registrations are silently ignored (events remain bound to first bus).
+	// Create and register per-service events (unique per service instance).
+	s.events = newServiceEvents(busName)
+	if err := registerServiceEvents(ctx, bus, s.events); err != nil {
+		bus.Close(ctx)
+		return fmt.Errorf("register service events: %w", err)
+	}
+
+	// Also register global events for backward compatibility.
+	// Global events use "first registration wins" - subsequent calls are no-ops.
 	if err := registerEvents(ctx, bus); err != nil {
 		bus.Close(ctx)
 		return fmt.Errorf("register events: %w", err)
@@ -449,10 +483,10 @@ func (s *service) Close(ctx context.Context) error {
 		errs = append(errs, fmt.Errorf("close plugins: %w", err))
 	}
 
-	// Close event bus only if using a real transport (Redis).
+	// Close event bus only if using a real transport.
 	// For noop transport, the bus doesn't hold resources and closing would
 	// break events for other services sharing the same global events.
-	if s.eventBus != nil && s.opts.redisClient != nil {
+	if s.eventBus != nil && (s.opts.eventTransport != nil || s.opts.redisClient != nil) {
 		if err := s.eventBus.Close(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("close event bus: %w", err))
 		}
@@ -798,7 +832,7 @@ func (m *userMailbox) finalizeDelivery(ctx context.Context, senderCopy store.Mes
 	}
 
 	// Publish event - do this AFTER we have the updated copy so we can return it even on error
-	if err := EventMessageSent.Publish(ctx, MessageSentEvent{
+	if err := m.service.events.MessageSent.Publish(ctx, MessageSentEvent{
 		MessageID:    senderCopy.GetID(),
 		SenderID:     senderCopy.GetSenderID(),
 		RecipientIDs: deliveredTo,
@@ -1013,7 +1047,7 @@ func (m *userMailbox) UpdateFlags(ctx context.Context, messageID string, flags F
 
 	// Publish read event (only for marking as read, not unread)
 	if flags.Read != nil && *flags.Read {
-		if err := EventMessageRead.Publish(ctx, MessageReadEvent{
+		if err := m.service.events.MessageRead.Publish(ctx, MessageReadEvent{
 			MessageID: messageID,
 			UserID:    m.userID,
 			ReadAt:    time.Now().UTC(),
@@ -1129,7 +1163,7 @@ func (m *userMailbox) PermanentlyDelete(ctx context.Context, messageID string) e
 
 
 	// Publish event
-	if err := EventMessageDeleted.Publish(ctx, MessageDeletedEvent{
+	if err := m.service.events.MessageDeleted.Publish(ctx, MessageDeletedEvent{
 		MessageID: messageID,
 		UserID:    m.userID,
 		DeletedAt: time.Now().UTC(),
@@ -1485,11 +1519,41 @@ var systemFolders = []struct {
 
 // ListFolders returns information about all folders for the current user.
 // Includes system folders with message counts.
+//
+// If the store implements store.FolderCounter, a single batch query is used
+// instead of individual counts per folder.
 func (m *userMailbox) ListFolders(ctx context.Context) ([]FolderInfo, error) {
 	if err := m.checkAccess(); err != nil {
 		return nil, err
 	}
 
+	folderIDs := make([]string, len(systemFolders))
+	for i, sf := range systemFolders {
+		folderIDs[i] = sf.ID
+	}
+
+	// Fast path: use batch counting if the store supports it.
+	if fc, ok := m.service.store.(store.FolderCounter); ok {
+		counts, err := fc.CountByFolders(ctx, m.userID, folderIDs)
+		if err != nil {
+			return nil, fmt.Errorf("count folders: %w", err)
+		}
+
+		folders := make([]FolderInfo, 0, len(systemFolders))
+		for _, sf := range systemFolders {
+			c := counts[sf.ID]
+			folders = append(folders, FolderInfo{
+				ID:           sf.ID,
+				Name:         sf.Name,
+				IsSystem:     true,
+				MessageCount: c.Total,
+				UnreadCount:  c.Unread,
+			})
+		}
+		return folders, nil
+	}
+
+	// Slow path: individual Count queries per folder.
 	folders := make([]FolderInfo, 0, len(systemFolders))
 
 	for _, sf := range systemFolders {

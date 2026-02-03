@@ -94,9 +94,33 @@ func (s *Store) SaveDraft(ctx context.Context, draft store.DraftMessage) (store.
 		return nil, store.ErrNotConnected
 	}
 
+	// Fast path: draft created by this store.
 	m, ok := draft.(*message)
 	if !ok {
-		return nil, store.ErrInvalidID // wrong store type
+		// Slow path: build from interface (supports any DraftMessage implementation).
+		m = &message{
+			id:           draft.GetID(),
+			ownerID:      draft.GetOwnerID(),
+			senderID:     draft.GetSenderID(),
+			subject:      draft.GetSubject(),
+			body:         draft.GetBody(),
+			recipientIDs: draft.GetRecipientIDs(),
+			createdAt:    draft.GetCreatedAt(),
+			updatedAt:    draft.GetUpdatedAt(),
+			isDraft:      true,
+		}
+		if meta := draft.GetMetadata(); meta != nil {
+			m.metadata = make(map[string]any, len(meta))
+			for k, v := range meta {
+				m.metadata[k] = v
+			}
+		} else {
+			m.metadata = make(map[string]any)
+		}
+		if attachments := draft.GetAttachments(); attachments != nil {
+			m.attachments = make([]store.Attachment, len(attachments))
+			copy(m.attachments, attachments)
+		}
 	}
 
 	// Assign ID if new
@@ -815,6 +839,39 @@ func (s *Store) DeleteExpiredTrash(ctx context.Context, cutoff time.Time) (int64
 	}
 
 	return deleted, nil
+}
+
+// CountByFolders returns message counts and unread counts for the given folders.
+// Implements store.FolderCounter for optimized batch counting.
+func (s *Store) CountByFolders(ctx context.Context, ownerID string, folderIDs []string) (map[string]store.FolderCounts, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return nil, store.ErrNotConnected
+	}
+
+	folderSet := make(map[string]bool, len(folderIDs))
+	for _, id := range folderIDs {
+		folderSet[id] = true
+	}
+
+	counts := make(map[string]store.FolderCounts, len(folderIDs))
+	s.messages.Range(func(_, v any) bool {
+		m := v.(*message)
+		if m.isDraft || m.deleted || m.ownerID != ownerID {
+			return true
+		}
+		if !folderSet[m.folderID] {
+			return true
+		}
+		c := counts[m.folderID]
+		c.Total++
+		if !m.isRead {
+			c.Unread++
+		}
+		counts[m.folderID] = c
+		return true
+	})
+
+	return counts, nil
 }
 
 // =============================================================================

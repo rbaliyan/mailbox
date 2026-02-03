@@ -2,28 +2,14 @@ package mailbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/rbaliyan/event/v3"
 )
 
 // Event names for mailbox events.
-//
-// Events are OPTIONAL by default. If you don't call RegisterEvents(), all event
-// publishing is silently skipped (no-op). This allows the library to work without
-// any event infrastructure.
-//
-// To enable events, create a bus and register events:
-//
-//	bus, _ := event.NewBus("myapp", event.WithTransport(redis.New(client)))
-//	mailbox.RegisterEvents(ctx, bus)
-//
-// For development/testing without event infrastructure:
-//
-//	bus, _ := event.NewBus("myapp", event.WithTransport(noop.New()))
-//	mailbox.RegisterEvents(ctx, bus)
 const (
 	EventNameMessageSent    = "mailbox.message.sent"
 	EventNameMessageRead    = "mailbox.message.read"
@@ -56,44 +42,74 @@ type MessageDeletedEvent struct {
 	DeletedAt time.Time `json:"deleted_at"`
 }
 
-// Mailbox events.
+// Global event instances.
 //
-// Events are OPTIONAL - they use a no-op transport by default and silently
-// skip publishing if RegisterEvents() has not been called. This design allows
-// applications to use the mailbox library without any event infrastructure.
-//
-// To enable event publishing, call RegisterEvents() with a configured bus:
-//
-//	// Production: use Redis, NATS, Kafka, etc.
-//	bus, _ := event.NewBus("myapp", event.WithTransport(redis.New(client)))
-//	mailbox.RegisterEvents(ctx, bus)
-//
-//	// Development/testing: use noop transport (events silently dropped)
-//	bus, _ := event.NewBus("myapp", event.WithTransport(noop.New()))
-//	mailbox.RegisterEvents(ctx, bus)
-//
-// Subscribe to events:
-//
-//	mailbox.EventMessageSent.Subscribe(ctx, func(ctx context.Context, ev event.Event[MessageSentEvent], data MessageSentEvent) error {
-//	    log.Printf("Message sent: %s", data.MessageID)
-//	    return nil
-//	})
+// Deprecated: These global events use "first registration wins" semantics,
+// which makes parallel testing unreliable and prevents multiple independent
+// services in the same process. Prefer using Service.Events() for per-service
+// event access.
 var (
 	// EventMessageSent is published when a message is sent.
-	// This is the primary event for real-time notifications to recipients.
+	// Deprecated: Use Service.Events().MessageSent instead.
 	EventMessageSent = event.New[MessageSentEvent](EventNameMessageSent)
 
 	// EventMessageRead is published when a message is marked as read.
-	// Use this for read receipts and delivery confirmation.
+	// Deprecated: Use Service.Events().MessageRead instead.
 	EventMessageRead = event.New[MessageReadEvent](EventNameMessageRead)
 
 	// EventMessageDeleted is published when a message is permanently deleted.
-	// Only fired for permanent deletions, not trash operations.
+	// Deprecated: Use Service.Events().MessageDeleted instead.
 	EventMessageDeleted = event.New[MessageDeletedEvent](EventNameMessageDeleted)
 )
 
-// registerEvents registers all mailbox events with the given bus.
-// Events are global singletons - first registration wins, subsequent calls are no-ops.
+// ServiceEvents provides access to per-service event instances.
+// Each service creates its own events bound to its own event bus,
+// enabling independent event routing and parallel testing.
+//
+// Subscribe to events:
+//
+//	svc.Events().MessageSent.Subscribe(ctx, handler)
+//	svc.Events().MessageRead.Subscribe(ctx, handler)
+//	svc.Events().MessageDeleted.Subscribe(ctx, handler)
+type ServiceEvents struct {
+	// MessageSent is published when a message is sent.
+	MessageSent event.Event[MessageSentEvent]
+
+	// MessageRead is published when a message is marked as read.
+	MessageRead event.Event[MessageReadEvent]
+
+	// MessageDeleted is published when a message is permanently deleted.
+	MessageDeleted event.Event[MessageDeletedEvent]
+}
+
+// newServiceEvents creates per-service event instances with a unique name prefix.
+func newServiceEvents(namePrefix string) *ServiceEvents {
+	return &ServiceEvents{
+		MessageSent:    event.New[MessageSentEvent](namePrefix + "." + EventNameMessageSent),
+		MessageRead:    event.New[MessageReadEvent](namePrefix + "." + EventNameMessageRead),
+		MessageDeleted: event.New[MessageDeletedEvent](namePrefix + "." + EventNameMessageDeleted),
+	}
+}
+
+// registerServiceEvents registers per-service events with the given bus.
+func registerServiceEvents(ctx context.Context, bus *event.Bus, events *ServiceEvents) error {
+	if err := event.Register(ctx, bus, events.MessageSent); err != nil {
+		return fmt.Errorf("register MessageSent: %w", err)
+	}
+	if err := event.Register(ctx, bus, events.MessageRead); err != nil {
+		return fmt.Errorf("register MessageRead: %w", err)
+	}
+	if err := event.Register(ctx, bus, events.MessageDeleted); err != nil {
+		return fmt.Errorf("register MessageDeleted: %w", err)
+	}
+	return nil
+}
+
+// registerEvents registers global mailbox events with the given bus.
+// Global events use "first registration wins" - subsequent calls are no-ops.
+//
+// Deprecated: Global events are retained for backward compatibility.
+// Per-service events are registered separately via registerServiceEvents.
 func registerEvents(ctx context.Context, bus *event.Bus) error {
 	events := []any{
 		EventMessageSent,
@@ -119,7 +135,6 @@ func registerEvent(ctx context.Context, bus *event.Bus, ev any) error {
 	case event.Event[MessageDeletedEvent]:
 		return tryRegister(ctx, bus, v)
 	default:
-		// Return error for unknown event types to catch programming errors early.
 		return fmt.Errorf("mailbox: unknown event type %T - update registerEvent switch", ev)
 	}
 }
@@ -127,8 +142,13 @@ func registerEvent(ctx context.Context, bus *event.Bus, ev any) error {
 // tryRegister attempts to register an event, ignoring "already bound" errors.
 func tryRegister[T any](ctx context.Context, bus *event.Bus, ev event.Event[T]) error {
 	err := event.Register(ctx, bus, ev)
-	if err != nil && strings.Contains(err.Error(), "already bound") {
-		return nil // Event already registered, that's fine
+	if err == nil {
+		return nil
+	}
+	// Ignore "already bound" errors for global events that may have been
+	// registered by a previous service instance.
+	if errors.Is(err, event.ErrAlreadyBound) {
+		return nil
 	}
 	return err
 }

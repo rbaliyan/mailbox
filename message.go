@@ -73,190 +73,45 @@ func newMessage(msg store.Message, m *userMailbox) *message {
 }
 
 // Update updates the message flags.
-// Skips re-authorization since this message handle was already authorized.
+// Delegates to userMailbox.UpdateFlags to ensure consistent event publishing.
 func (m *message) Update(ctx context.Context, flags Flags) error {
-	if err := m.mailbox.checkAccess(); err != nil {
-		return err
-	}
-
-	// Apply read flag
-	if flags.Read != nil {
-		if err := m.mailbox.service.store.MarkRead(ctx, m.GetID(), *flags.Read); err != nil {
-			return fmt.Errorf("mark read: %w", err)
-		}
-	}
-
-	// Apply archived flag (moves to/from archived folder)
-	if flags.Archived != nil {
-		var folderID string
-		if *flags.Archived {
-			folderID = store.FolderArchived
-		} else {
-			// Restore to inbox for received messages, sent for sent messages
-			if store.IsSentByOwner(m.GetOwnerID(), m.GetSenderID()) {
-				folderID = store.FolderSent
-			} else {
-				folderID = store.FolderInbox
-			}
-		}
-		if err := m.mailbox.service.store.MoveToFolder(ctx, m.GetID(), folderID); err != nil {
-			return fmt.Errorf("move to folder: %w", err)
-		}
-	}
-
-	return nil
+	return m.mailbox.UpdateFlags(ctx, m.GetID(), flags)
 }
 
 // Move moves the message to a folder.
-// Skips re-authorization since this message handle was already authorized.
+// Delegates to userMailbox.MoveToFolder for consistent behavior.
 func (m *message) Move(ctx context.Context, folderID string) error {
-	if err := m.mailbox.checkAccess(); err != nil {
-		return err
-	}
-
-	// Validate folder ID
-	if !store.IsValidFolderID(folderID) {
-		return fmt.Errorf("%w: %s", ErrInvalidFolderID, folderID)
-	}
-
-	if err := m.mailbox.service.store.MoveToFolder(ctx, m.GetID(), folderID); err != nil {
-		return fmt.Errorf("move to folder: %w", err)
-	}
-
-	return nil
+	return m.mailbox.MoveToFolder(ctx, m.GetID(), folderID)
 }
 
 // Delete moves the message to trash.
-// Skips re-authorization since this message handle was already authorized.
+// Delegates to userMailbox.Delete for consistent behavior.
 func (m *message) Delete(ctx context.Context) error {
-	if err := m.mailbox.checkAccess(); err != nil {
-		return err
-	}
-
-	// Check current state - need to re-fetch to verify not already in trash
-	current, err := m.mailbox.service.store.Get(ctx, m.GetID())
-	if err != nil {
-		return fmt.Errorf("get message: %w", err)
-	}
-
-	if current.GetFolderID() == store.FolderTrash {
-		return ErrAlreadyInTrash
-	}
-
-	if err := m.mailbox.service.store.MoveToFolder(ctx, m.GetID(), store.FolderTrash); err != nil {
-		return fmt.Errorf("move to trash: %w", err)
-	}
-
-	return nil
+	return m.mailbox.Delete(ctx, m.GetID())
 }
 
 // Restore restores the message from trash.
-// Skips re-authorization since this message handle was already authorized.
+// Delegates to userMailbox.Restore for consistent behavior.
 func (m *message) Restore(ctx context.Context) error {
-	if err := m.mailbox.checkAccess(); err != nil {
-		return err
-	}
-
-	// Check current state - need to re-fetch to verify in trash
-	current, err := m.mailbox.service.store.Get(ctx, m.GetID())
-	if err != nil {
-		return fmt.Errorf("get message: %w", err)
-	}
-
-	if current.GetFolderID() != store.FolderTrash {
-		return ErrNotInTrash
-	}
-
-	// Restore to inbox for received messages, sent for sent messages
-	var folderID string
-	if store.IsSentByOwner(current.GetOwnerID(), current.GetSenderID()) {
-		folderID = store.FolderSent
-	} else {
-		folderID = store.FolderInbox
-	}
-
-	if err := m.mailbox.service.store.MoveToFolder(ctx, m.GetID(), folderID); err != nil {
-		return fmt.Errorf("restore message: %w", err)
-	}
-
-	return nil
+	return m.mailbox.Restore(ctx, m.GetID())
 }
 
 // PermanentlyDelete permanently deletes the message.
-// Skips re-authorization since this message handle was already authorized.
+// Delegates to userMailbox.PermanentlyDelete for consistent event publishing.
 func (m *message) PermanentlyDelete(ctx context.Context) error {
-	if err := m.mailbox.checkAccess(); err != nil {
-		return err
-	}
-
-	// Check current state - need to re-fetch to verify in trash
-	current, err := m.mailbox.service.store.Get(ctx, m.GetID())
-	if err != nil {
-		return fmt.Errorf("get message: %w", err)
-	}
-
-	if current.GetFolderID() != store.FolderTrash {
-		return ErrNotInTrash
-	}
-
-	// Hard delete the message
-	if err := m.mailbox.service.store.HardDelete(ctx, m.GetID()); err != nil {
-		return fmt.Errorf("hard delete message: %w", err)
-	}
-
-	// Release attachment references
-	if m.mailbox.service.attachments != nil {
-		for _, a := range current.GetAttachments() {
-			if err := m.mailbox.service.attachments.RemoveRef(ctx, a.GetID()); err != nil {
-				m.mailbox.service.logger.Error("failed to release attachment ref during permanent delete",
-					"error", err, "attachment_id", a.GetID())
-			}
-		}
-	}
-
-	return nil
+	return m.mailbox.PermanentlyDelete(ctx, m.GetID())
 }
 
 // AddTag adds a tag to the message.
-// Skips re-authorization since this message handle was already authorized.
+// Delegates to userMailbox.AddTag for consistent behavior.
 func (m *message) AddTag(ctx context.Context, tagID string) error {
-	if err := m.mailbox.checkAccess(); err != nil {
-		return err
-	}
-
-	if tagID == "" {
-		return fmt.Errorf("%w: empty tag ID", ErrInvalidID)
-	}
-	if len(tagID) > MaxTagIDLength {
-		return fmt.Errorf("%w: tag ID exceeds maximum length of %d", ErrInvalidID, MaxTagIDLength)
-	}
-
-	if err := m.mailbox.service.store.AddTag(ctx, m.GetID(), tagID); err != nil {
-		return fmt.Errorf("add tag: %w", err)
-	}
-
-	return nil
+	return m.mailbox.AddTag(ctx, m.GetID(), tagID)
 }
 
 // RemoveTag removes a tag from the message.
-// Skips re-authorization since this message handle was already authorized.
+// Delegates to userMailbox.RemoveTag for consistent behavior.
 func (m *message) RemoveTag(ctx context.Context, tagID string) error {
-	if err := m.mailbox.checkAccess(); err != nil {
-		return err
-	}
-
-	if tagID == "" {
-		return fmt.Errorf("%w: empty tag ID", ErrInvalidID)
-	}
-	if len(tagID) > MaxTagIDLength {
-		return fmt.Errorf("%w: tag ID exceeds maximum length of %d", ErrInvalidID, MaxTagIDLength)
-	}
-
-	if err := m.mailbox.service.store.RemoveTag(ctx, m.GetID(), tagID); err != nil {
-		return fmt.Errorf("remove tag: %w", err)
-	}
-
-	return nil
+	return m.mailbox.RemoveTag(ctx, m.GetID(), tagID)
 }
 
 // Compile-time check that message implements Message.

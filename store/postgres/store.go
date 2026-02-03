@@ -1264,7 +1264,8 @@ type rowScanner interface {
 
 func (s *Store) scanMessage(row rowScanner) (*message, error) {
 	var msg message
-	var metadataJSON, attachmentsJSON, reactionsJSON, receiptsJSON []byte
+	var metadataJSON, attachmentsJSON []byte
+	var reactionsJSON, receiptsJSON []byte // scanned but discarded (legacy columns)
 	var readAt sql.NullTime
 	var idempotencyKey, threadID, replyToID sql.NullString
 
@@ -1306,17 +1307,9 @@ func (s *Store) scanMessage(row rowScanner) (*message, error) {
 		}
 	}
 
-	if len(reactionsJSON) > 0 {
-		if err := json.Unmarshal(reactionsJSON, &msg.reactions); err != nil {
-			return nil, fmt.Errorf("unmarshal reactions: %w", err)
-		}
-	}
-
-	if len(receiptsJSON) > 0 {
-		if err := json.Unmarshal(receiptsJSON, &msg.deliveryReceipts); err != nil {
-			return nil, fmt.Errorf("unmarshal receipts: %w", err)
-		}
-	}
+	// reactionsJSON and receiptsJSON are legacy columns - scanned but not used.
+	_ = reactionsJSON
+	_ = receiptsJSON
 
 	return &msg, nil
 }
@@ -1389,8 +1382,6 @@ type message struct {
 	idempotencyKey   string
 	threadID         string
 	replyToID        string
-	reactions        []store.Reaction
-	deliveryReceipts []store.DeliveryReceipt
 	createdAt        time.Time
 	updatedAt        time.Time
 }
@@ -1413,9 +1404,6 @@ func (m *message) GetCreatedAt() time.Time                     { return m.create
 func (m *message) GetUpdatedAt() time.Time                     { return m.updatedAt }
 func (m *message) GetThreadID() string                         { return m.threadID }
 func (m *message) GetReplyToID() string                        { return m.replyToID }
-func (m *message) GetReactions() []store.Reaction              { return m.reactions }
-func (m *message) GetDeliveryReceipts() []store.DeliveryReceipt { return m.deliveryReceipts }
-
 // Draft setters (fluent)
 func (m *message) SetSubject(subject string) store.DraftMessage {
 	m.subject = subject

@@ -1070,8 +1070,6 @@ type message struct {
 	isDraft          bool
 	threadID         string
 	replyToID        string
-	reactions        []store.Reaction
-	deliveryReceipts []store.DeliveryReceipt
 
 	// delta tracking (internal use only)
 	delta messageDelta
@@ -1116,9 +1114,6 @@ func (m *message) GetCreatedAt() time.Time                   { return m.createdA
 func (m *message) GetUpdatedAt() time.Time                   { return m.updatedAt }
 func (m *message) GetThreadID() string                       { return m.threadID }
 func (m *message) GetReplyToID() string                      { return m.replyToID }
-func (m *message) GetReactions() []store.Reaction            { return m.reactions }
-func (m *message) GetDeliveryReceipts() []store.DeliveryReceipt { return m.deliveryReceipts }
-
 func (m *message) GetAttachments() []store.Attachment {
 	if m.attachments == nil {
 		return nil

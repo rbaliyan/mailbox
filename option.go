@@ -4,8 +4,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/rbaliyan/event/v3/transport/redis"
+	"github.com/rbaliyan/event/v3/transport"
 	"github.com/rbaliyan/mailbox/store"
+	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -74,8 +75,9 @@ type options struct {
 	meterProvider  metric.MeterProvider
 
 	// Event handling
-	eventErrorsFatal       bool                   // If true, event publishing failures cause operation to fail
-	redisClient            redis.Client           // Redis client for event transport (optional, uses noop if nil)
+	eventErrorsFatal       bool                    // If true, event publishing failures cause operation to fail
+	eventTransport         transport.Transport     // Event transport (optional, uses noop if nil)
+	redisClient            redis.UniversalClient   // Redis client for event transport (optional, uses noop if nil)
 	onEventPublishFailure  EventPublishFailureFunc // Callback for event publish failures (always set)
 }
 
@@ -302,6 +304,46 @@ func WithMaxRecipients(n int) Option {
 	}
 }
 
+// WithMaxSubjectLength sets the maximum subject length in characters.
+// Default is 998 (RFC 5322 max line length).
+func WithMaxSubjectLength(n int) Option {
+	return func(o *options) {
+		if n > 0 {
+			o.maxSubjectLength = n
+		}
+	}
+}
+
+// WithMaxAttachmentCount sets the maximum number of attachments per message.
+// Default is 20.
+func WithMaxAttachmentCount(n int) Option {
+	return func(o *options) {
+		if n > 0 {
+			o.maxAttachmentCount = n
+		}
+	}
+}
+
+// WithMaxMetadataSize sets the maximum total metadata size in bytes.
+// Default is 64 KB.
+func WithMaxMetadataSize(n int) Option {
+	return func(o *options) {
+		if n > 0 {
+			o.maxMetadataSize = n
+		}
+	}
+}
+
+// WithMaxMetadataKeys sets the maximum number of metadata keys per message.
+// Default is 100.
+func WithMaxMetadataKeys(n int) Option {
+	return func(o *options) {
+		if n > 0 {
+			o.maxMetadataKeys = n
+		}
+	}
+}
+
 // WithMaxConcurrentSends sets the maximum number of concurrent send operations.
 // This prevents resource exhaustion when many messages are being sent simultaneously.
 // Default is 10.
@@ -338,13 +380,28 @@ func WithEventErrorsFatal(fatal bool) Option {
 	}
 }
 
+// WithEventTransport sets the event transport for publishing and subscribing.
+// When provided, events are published via the given transport for reliable delivery.
+// If not provided, a noop transport is used (events are silently dropped).
+//
+// Example with Redis:
+//
+//	transport, _ := redis.New(redisClient)
+//	svc, _ := mailbox.NewService(mailbox.WithEventTransport(transport))
+func WithEventTransport(t transport.Transport) Option {
+	return func(o *options) {
+		if t != nil {
+			o.eventTransport = t
+		}
+	}
+}
+
 // WithRedisClient sets a Redis client for the event transport.
 // When provided, events are published to Redis Streams for reliable delivery.
-// If not provided, a noop transport is used (events are logged but not delivered).
+// If not provided, a noop transport is used (events are silently dropped).
 //
-// The client must implement the redis.Client interface from the event package.
 // Compatible with *redis.Client, *redis.ClusterClient, and redis.UniversalClient.
-func WithRedisClient(client redis.Client) Option {
+func WithRedisClient(client redis.UniversalClient) Option {
 	return func(o *options) {
 		if client != nil {
 			o.redisClient = client
