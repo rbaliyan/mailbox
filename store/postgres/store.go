@@ -44,11 +44,12 @@ func NewFromDB(db *sql.DB, opts ...Option) *Store {
 
 // Connect initializes the schema and indexes.
 func (s *Store) Connect(ctx context.Context) error {
-	if atomic.LoadInt32(&s.connected) == 1 {
+	if !atomic.CompareAndSwapInt32(&s.connected, 0, 1) {
 		return store.ErrAlreadyConnected
 	}
 
 	if s.db == nil {
+		atomic.StoreInt32(&s.connected, 0)
 		return fmt.Errorf("postgres: db is required")
 	}
 
@@ -56,14 +57,15 @@ func (s *Store) Connect(ctx context.Context) error {
 	defer cancel()
 
 	if err := s.db.PingContext(ctx); err != nil {
+		atomic.StoreInt32(&s.connected, 0)
 		return fmt.Errorf("postgres ping: %w", err)
 	}
 
 	if err := s.ensureSchema(ctx); err != nil {
+		atomic.StoreInt32(&s.connected, 0)
 		return fmt.Errorf("ensure schema: %w", err)
 	}
 
-	atomic.StoreInt32(&s.connected, 1)
 	s.logger.Info("connected to PostgreSQL", "table", s.opts.table)
 	return nil
 }
@@ -1160,7 +1162,10 @@ func (s *Store) buildWhereClause(filters []store.Filter) (string, []any) {
 }
 
 func (s *Store) filterToCondition(f store.Filter, argIdx *int) (string, any) {
-	key := s.mapFilterKey(f.Key())
+	key, ok := s.mapFilterKey(f.Key())
+	if !ok {
+		return "", nil
+	}
 	op := f.Operator()
 	val := f.Value()
 
@@ -1212,34 +1217,34 @@ func (s *Store) filterToCondition(f store.Filter, argIdx *int) (string, any) {
 	}
 }
 
-func (s *Store) mapFilterKey(key string) string {
+func (s *Store) mapFilterKey(key string) (string, bool) {
 	switch key {
 	case "OwnerID", "owner_id":
-		return "owner_id"
+		return "owner_id", true
 	case "SenderID", "sender_id":
-		return "sender_id"
+		return "sender_id", true
 	case "RecipientIDs", "recipient_ids":
-		return "recipient_ids"
+		return "recipient_ids", true
 	case "Status", "status":
-		return "status"
+		return "status", true
 	case "FolderID", "folder_id":
-		return "folder_id"
+		return "folder_id", true
 	case "IsRead", "is_read":
-		return "is_read"
+		return "is_read", true
 	case "Tags", "tags":
-		return "tags"
+		return "tags", true
 	case "CreatedAt", "created_at":
-		return "created_at"
+		return "created_at", true
 	case "UpdatedAt", "updated_at":
-		return "updated_at"
+		return "updated_at", true
 	case "Deleted", "__deleted", "is_deleted":
-		return "is_deleted"
+		return "is_deleted", true
 	case "ThreadID", "thread_id":
-		return "thread_id"
+		return "thread_id", true
 	case "ReplyToID", "reply_to_id":
-		return "reply_to_id"
+		return "reply_to_id", true
 	default:
-		return key
+		return "", false
 	}
 }
 

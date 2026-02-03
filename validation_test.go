@@ -312,13 +312,10 @@ func TestValidateRecipients(t *testing.T) {
 		}
 	})
 
-	t.Run("duplicate recipient", func(t *testing.T) {
+	t.Run("duplicate recipients are allowed", func(t *testing.T) {
 		err := ValidateRecipients([]string{"user1", "user2", "user1"}, limits)
-		if !errors.Is(err, ErrInvalidRecipient) {
-			t.Errorf("expected ErrInvalidRecipient, got %v", err)
-		}
-		if !strings.Contains(err.Error(), "duplicate") {
-			t.Errorf("expected error to mention 'duplicate', got %v", err)
+		if err != nil {
+			t.Errorf("expected no error for duplicates (deduplication happens at send time), got %v", err)
 		}
 	})
 

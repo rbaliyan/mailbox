@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"log/slog"
+	"regexp"
 	"time"
 )
 
@@ -33,10 +34,15 @@ func newOptions(opts ...Option) *options {
 // Option configures a PostgreSQL store.
 type Option func(*options)
 
+// validIdentifier matches safe SQL identifier names (letters, digits, underscores).
+var validIdentifier = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
 // WithTable sets the table name.
+// The name must be a valid SQL identifier (letters, digits, underscores only)
+// since it is interpolated into queries as an identifier.
 func WithTable(name string) Option {
 	return func(o *options) {
-		if name != "" {
+		if name != "" && validIdentifier.MatchString(name) {
 			o.table = name
 		}
 	}

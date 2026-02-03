@@ -13,7 +13,6 @@ import (
 
 // Default configuration values.
 const (
-	DefaultTimeout         = 30 * time.Second
 	DefaultTrashRetention  = 30 * 24 * time.Hour // 30 days
 	MinTrashRetention      = 24 * time.Hour      // 1 day minimum
 	DefaultShutdownTimeout = 30 * time.Second    // default graceful shutdown timeout
@@ -42,8 +41,7 @@ type options struct {
 	attachments store.AttachmentManager
 	logger      *slog.Logger
 
-	defaultTimeout time.Duration
-	plugins        []Plugin
+	plugins []Plugin
 
 	// Trash cleanup configuration (for manual cleanup via CleanupTrash method)
 	trashRetention time.Duration
@@ -103,8 +101,7 @@ func (o *options) safeEventPublishFailure(eventName string, err error) {
 // newOptions creates options with defaults and applies provided options.
 func newOptions(opts ...Option) *options {
 	o := &options{
-		defaultTimeout: DefaultTimeout,
-		logger:         slog.Default(),
+		logger: slog.Default(),
 		trashRetention: DefaultTrashRetention,
 		// Message limits defaults
 		maxSubjectLength:   DefaultMaxSubjectLength,
@@ -158,15 +155,6 @@ func WithLogger(l *slog.Logger) Option {
 	return func(o *options) {
 		if l != nil {
 			o.logger = l
-		}
-	}
-}
-
-// WithDefaultTimeout sets the default operation timeout.
-func WithDefaultTimeout(d time.Duration) Option {
-	return func(o *options) {
-		if d > 0 {
-			o.defaultTimeout = d
 		}
 	}
 }

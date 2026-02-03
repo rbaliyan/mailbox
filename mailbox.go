@@ -78,7 +78,7 @@ type MessageLister interface {
 
 // MessageSearcher provides message search capability.
 type MessageSearcher interface {
-	Search(ctx context.Context, query store.SearchQuery) (MessageList, error)
+	Search(ctx context.Context, query SearchQuery) (MessageList, error)
 }
 
 // ThreadReader provides access to message threads.
@@ -1161,7 +1161,6 @@ func (m *userMailbox) PermanentlyDelete(ctx context.Context, messageID string) e
 			"error", err, "message_id", messageID)
 	}
 
-
 	// Publish event
 	if err := m.service.events.MessageDeleted.Publish(ctx, MessageDeletedEvent{
 		MessageID: messageID,
@@ -1456,7 +1455,7 @@ func (m *userMailbox) listWithOTel(ctx context.Context, folder string, opts stor
 }
 
 // Search searches messages accessible to the current user.
-func (m *userMailbox) Search(ctx context.Context, query store.SearchQuery) (MessageList, error) {
+func (m *userMailbox) Search(ctx context.Context, query SearchQuery) (MessageList, error) {
 	if err := m.checkAccess(); err != nil {
 		return nil, err
 	}

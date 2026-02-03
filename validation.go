@@ -167,16 +167,11 @@ func ValidateRecipients(recipientIDs []string, limits MessageLimits) error {
 		return fmt.Errorf("%w: recipient count %d exceeds max %d", ErrTooManyRecipients, len(recipientIDs), limits.MaxRecipientCount)
 	}
 
-	// Check for empty or duplicate recipients
-	seen := make(map[string]bool, len(recipientIDs))
+	// Check for empty recipient IDs (duplicates are silently deduplicated at send time)
 	for _, id := range recipientIDs {
 		if id == "" {
 			return fmt.Errorf("%w: empty recipient ID", ErrInvalidRecipient)
 		}
-		if seen[id] {
-			return fmt.Errorf("%w: duplicate recipient %s", ErrInvalidRecipient, id)
-		}
-		seen[id] = true
 	}
 
 	return nil

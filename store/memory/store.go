@@ -605,7 +605,6 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 
 	// Copy-on-write: clone, modify, store (now atomic within lock)
 	m := orig.clone()
-	m.deleted = true
 	m.folderID = store.FolderTrash
 	m.updatedAt = time.Now().UTC()
 	s.messages.Store(id, m)
@@ -656,13 +655,12 @@ func (s *Store) Restore(ctx context.Context, id string) error {
 	}
 
 	orig := v.(*message)
-	if orig.isDraft || !orig.deleted {
+	if orig.isDraft || orig.folderID != store.FolderTrash {
 		return store.ErrNotFound
 	}
 
 	// Copy-on-write: clone, modify, store (now atomic within lock)
 	m := orig.clone()
-	m.deleted = false
 	// Restore to appropriate folder based on sender
 	if store.IsSentByOwner(m.ownerID, m.senderID) {
 		m.folderID = store.FolderSent
@@ -822,7 +820,7 @@ func (s *Store) DeleteExpiredTrash(ctx context.Context, cutoff time.Time) (int64
 	// First pass: collect IDs to delete
 	s.messages.Range(func(key, value any) bool {
 		m := value.(*message)
-		if !m.isDraft && m.deleted && m.folderID == store.FolderTrash {
+		if !m.isDraft && m.folderID == store.FolderTrash {
 			if m.updatedAt.Before(cutoff) {
 				toDelete = append(toDelete, key.(string))
 			}

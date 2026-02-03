@@ -48,11 +48,12 @@ func New(client *mongo.Client, opts ...Option) *Store {
 
 // Connect initializes the database, collection, and indexes.
 func (s *Store) Connect(ctx context.Context) error {
-	if atomic.LoadInt32(&s.connected) == 1 {
+	if !atomic.CompareAndSwapInt32(&s.connected, 0, 1) {
 		return store.ErrAlreadyConnected
 	}
 
 	if s.client == nil {
+		atomic.StoreInt32(&s.connected, 0)
 		return fmt.Errorf("mongo: client is required")
 	}
 
@@ -60,6 +61,7 @@ func (s *Store) Connect(ctx context.Context) error {
 	defer cancel()
 
 	if err := s.client.Ping(ctx, nil); err != nil {
+		atomic.StoreInt32(&s.connected, 0)
 		return fmt.Errorf("mongo ping: %w", err)
 	}
 
@@ -67,10 +69,10 @@ func (s *Store) Connect(ctx context.Context) error {
 	s.collection = s.db.Collection(s.opts.collection)
 
 	if err := s.ensureIndexes(ctx); err != nil {
+		atomic.StoreInt32(&s.connected, 0)
 		return fmt.Errorf("ensure indexes: %w", err)
 	}
 
-	atomic.StoreInt32(&s.connected, 1)
 	s.logger.Info("connected to MongoDB", "database", s.opts.database, "collection", s.opts.collection)
 	return nil
 }
@@ -302,6 +304,12 @@ func (s *Store) ListDrafts(ctx context.Context, ownerID string, opts store.ListO
 	}
 	findOpts.SetSort(bson.D{bson.E{Key: "created_at", Value: -1}})
 
+	// Get total count for pagination
+	total, err := s.collection.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("count drafts: %w", err)
+	}
+
 	cursor, err := s.collection.Find(ctx, filter, findOpts)
 	if err != nil {
 		return nil, fmt.Errorf("find drafts: %w", err)
@@ -320,7 +328,7 @@ func (s *Store) ListDrafts(ctx context.Context, ownerID string, opts store.ListO
 
 	return &store.DraftList{
 		Drafts:  drafts,
-		Total:   int64(len(drafts)),
+		Total:   total,
 		HasMore: opts.Limit > 0 && len(drafts) >= opts.Limit,
 	}, nil
 }
@@ -390,6 +398,12 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 		findOpts.SetSort(bson.D{bson.E{Key: "created_at", Value: -1}})
 	}
 
+	// Get total count for pagination
+	total, err := s.collection.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("count messages: %w", err)
+	}
+
 	cursor, err := s.collection.Find(ctx, filter, findOpts)
 	if err != nil {
 		return nil, fmt.Errorf("find messages: %w", err)
@@ -408,7 +422,7 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 
 	return &store.MessageList{
 		Messages: messages,
-		Total:    int64(len(messages)),
+		Total:    total,
 		HasMore:  opts.Limit > 0 && len(messages) >= opts.Limit,
 	}, nil
 }
@@ -487,6 +501,12 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 	}
 	findOpts.SetSort(bson.D{bson.E{Key: "created_at", Value: -1}})
 
+	// Get total count for pagination
+	total, err := s.collection.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("count search results: %w", err)
+	}
+
 	cursor, err := s.collection.Find(ctx, filter, findOpts)
 	if err != nil {
 		return nil, fmt.Errorf("search messages: %w", err)
@@ -505,7 +525,7 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 
 	return &store.MessageList{
 		Messages: messages,
-		Total:    int64(len(messages)),
+		Total:    total,
 		HasMore:  query.Options.Limit > 0 && len(messages) >= query.Options.Limit,
 	}, nil
 }
@@ -738,6 +758,7 @@ func (s *Store) HardDelete(ctx context.Context, id string) error {
 }
 
 // Restore restores a soft-deleted message.
+// Determines the correct folder based on ownership (sent vs inbox).
 func (s *Store) Restore(ctx context.Context, id string) error {
 	if atomic.LoadInt32(&s.connected) == 0 {
 		return store.ErrNotConnected
@@ -751,14 +772,34 @@ func (s *Store) Restore(ctx context.Context, id string) error {
 		return store.ErrInvalidID
 	}
 
-	filter := bson.M{
+	// Read the message to determine the correct restore folder
+	var doc messageDoc
+	err = s.collection.FindOne(ctx, bson.M{
 		"_id":        oid,
-		"__deleted":  true,
 		"__is_draft": bson.M{"$ne": true},
+		"folder_id":  store.FolderTrash,
+	}).Decode(&doc)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return store.ErrNotFound
+		}
+		return fmt.Errorf("find message for restore: %w", err)
+	}
+
+	// Determine restore folder based on ownership
+	folderID := store.FolderInbox
+	if store.IsSentByOwner(doc.OwnerID, doc.SenderID) {
+		folderID = store.FolderSent
+	}
+
+	filter := bson.M{
+		"_id":       oid,
+		"folder_id": store.FolderTrash,
 	}
 	update := bson.M{
 		"$set": bson.M{
 			"__deleted":  false,
+			"folder_id":  folderID,
 			"updated_at": time.Now().UTC(),
 		},
 	}
@@ -797,6 +838,12 @@ func (s *Store) CreateMessage(ctx context.Context, data store.MessageData) (stor
 		CreatedAt:    now,
 		UpdatedAt:    now,
 		IsDraft:      false,
+		ThreadID:     data.ThreadID,
+		ReplyToID:    data.ReplyToID,
+	}
+
+	if len(data.Tags) > 0 {
+		doc.Tags = data.Tags
 	}
 
 	if len(data.Attachments) > 0 {
@@ -855,9 +902,12 @@ func (s *Store) CreateMessages(ctx context.Context, data []store.MessageData) ([
 			Metadata:     d.Metadata,
 			Status:       string(d.Status),
 			FolderID:     d.FolderID,
+			Tags:         d.Tags,
 			CreatedAt:    now,
 			UpdatedAt:    now,
 			IsDraft:      false,
+			ThreadID:     d.ThreadID,
+			ReplyToID:    d.ReplyToID,
 		}
 
 		if len(d.Attachments) > 0 {
@@ -932,10 +982,13 @@ func (s *Store) CreateMessageIdempotent(ctx context.Context, data store.MessageD
 		Metadata:       data.Metadata,
 		Status:         string(data.Status),
 		FolderID:       data.FolderID,
+		Tags:           data.Tags,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 		IsDraft:        false,
 		IdempotencyKey: idempotencyKey,
+		ThreadID:       data.ThreadID,
+		ReplyToID:      data.ReplyToID,
 	}
 
 	if len(data.Attachments) > 0 {
@@ -1037,6 +1090,8 @@ type messageDoc struct {
 	Deleted        bool               `bson:"__deleted,omitempty"`
 	IsDraft        bool               `bson:"__is_draft,omitempty"`
 	IdempotencyKey string             `bson:"idempotency_key,omitempty"` // For atomic idempotent creates
+	ThreadID       string             `bson:"thread_id,omitempty"`
+	ReplyToID      string             `bson:"reply_to_id,omitempty"`
 }
 
 // attachmentDoc is the MongoDB document for attachments.
@@ -1223,6 +1278,8 @@ func messageToDoc(msg *message) *messageDoc {
 		UpdatedAt:    msg.updatedAt,
 		Deleted:      msg.deleted,
 		IsDraft:      msg.isDraft,
+		ThreadID:     msg.threadID,
+		ReplyToID:    msg.replyToID,
 	}
 
 	if len(msg.attachments) > 0 {
@@ -1265,6 +1322,8 @@ func docToMessage(doc *messageDoc) *message {
 		updatedAt:    doc.UpdatedAt,
 		deleted:      doc.Deleted,
 		isDraft:      doc.IsDraft,
+		threadID:     doc.ThreadID,
+		replyToID:    doc.ReplyToID,
 	}
 
 	if len(doc.Attachments) > 0 {

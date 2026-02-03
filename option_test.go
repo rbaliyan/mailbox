@@ -11,9 +11,6 @@ func TestNewOptions(t *testing.T) {
 	t.Run("returns defaults without options", func(t *testing.T) {
 		opts := newOptions()
 
-		if opts.defaultTimeout != DefaultTimeout {
-			t.Errorf("expected defaultTimeout %v, got %v", DefaultTimeout, opts.defaultTimeout)
-		}
 		if opts.trashRetention != DefaultTrashRetention {
 			t.Errorf("expected trashRetention %v, got %v", DefaultTrashRetention, opts.trashRetention)
 		}
@@ -64,28 +61,6 @@ func TestWithLogger(t *testing.T) {
 		opts := newOptions(WithLogger(nil))
 		if opts.logger == nil {
 			t.Error("expected default logger when nil passed")
-		}
-	})
-}
-
-func TestWithDefaultTimeout(t *testing.T) {
-	t.Run("sets custom timeout", func(t *testing.T) {
-		timeout := 60 * time.Second
-		opts := newOptions(WithDefaultTimeout(timeout))
-		if opts.defaultTimeout != timeout {
-			t.Errorf("expected timeout %v, got %v", timeout, opts.defaultTimeout)
-		}
-	})
-
-	t.Run("ignores zero or negative timeout", func(t *testing.T) {
-		opts := newOptions(WithDefaultTimeout(0))
-		if opts.defaultTimeout != DefaultTimeout {
-			t.Errorf("expected default timeout %v, got %v", DefaultTimeout, opts.defaultTimeout)
-		}
-
-		opts = newOptions(WithDefaultTimeout(-1 * time.Second))
-		if opts.defaultTimeout != DefaultTimeout {
-			t.Errorf("expected default timeout %v, got %v", DefaultTimeout, opts.defaultTimeout)
 		}
 	})
 }
