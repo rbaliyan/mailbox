@@ -41,7 +41,7 @@
 //   - Get: Retrieve a message by ID
 //   - Inbox/Sent/Archived/Trash: List messages
 //   - Search: Full-text search
-//   - StreamInbox/StreamSent: Iterator-based streaming
+//   - Stream: Iterator-based streaming with filters
 //
 // # Storage Backends
 //

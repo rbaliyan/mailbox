@@ -80,25 +80,32 @@ type Attachment interface {
 	GetCreatedAt() time.Time
 }
 
+// MessageReader provides read access to the fields shared by both
+// sent messages and drafts: identity, content, and timestamps.
+type MessageReader interface {
+	GetID() string
+	GetOwnerID() string
+	GetSenderID() string
+	GetSubject() string
+	GetBody() string
+	GetRecipientIDs() []string
+	GetMetadata() map[string]any
+	GetAttachments() []Attachment
+	GetCreatedAt() time.Time
+	GetUpdatedAt() time.Time
+}
+
 // Message is a read-only view of a sent or received message.
 // Messages cannot be directly modified - use specific Store operations
 // like MarkRead, MoveToFolder, AddTag, etc.
 type Message interface {
-	GetID() string
-	GetOwnerID() string
-	GetSenderID() string
-	GetRecipientIDs() []string
-	GetSubject() string
-	GetBody() string
-	GetMetadata() map[string]any
+	MessageReader
+
 	GetStatus() MessageStatus
 	GetIsRead() bool
 	GetReadAt() *time.Time
 	GetFolderID() string
 	GetTags() []string
-	GetAttachments() []Attachment
-	GetCreatedAt() time.Time
-	GetUpdatedAt() time.Time
 
 	// Thread support
 	GetThreadID() string
@@ -110,17 +117,7 @@ type Message interface {
 // owned by a single user. They cannot be moved to folders, marked
 // as read, or tagged - those operations only apply to sent messages.
 type DraftMessage interface {
-	// Read operations
-	GetID() string
-	GetOwnerID() string
-	GetSenderID() string
-	GetSubject() string
-	GetBody() string
-	GetRecipientIDs() []string
-	GetMetadata() map[string]any
-	GetAttachments() []Attachment
-	GetCreatedAt() time.Time
-	GetUpdatedAt() time.Time
+	MessageReader
 
 	// Write operations (fluent API)
 	SetSubject(subject string) DraftMessage

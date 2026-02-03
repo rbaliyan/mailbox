@@ -230,6 +230,9 @@ func (d *draft) ReplyTo(ctx context.Context, messageID string) error {
 	d.replyToID = messageID
 	if tid := parent.GetThreadID(); tid != "" {
 		d.threadID = tid
+	} else {
+		// First reply in a conversation: use the parent's message ID as thread ID.
+		d.threadID = messageID
 	}
 
 	return nil

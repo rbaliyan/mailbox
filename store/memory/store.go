@@ -874,6 +874,44 @@ func (s *Store) CountByFolders(ctx context.Context, ownerID string, folderIDs []
 	return counts, nil
 }
 
+// FindWithCount retrieves messages and total count in a single pass.
+// Implements store.FindWithCounter for optimized list operations.
+func (s *Store) FindWithCount(ctx context.Context, filters []store.Filter, opts store.ListOptions) (*store.MessageList, int64, error) {
+	list, err := s.Find(ctx, filters, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	count, err := s.Count(ctx, filters)
+	if err != nil {
+		return nil, 0, err
+	}
+	return list, count, nil
+}
+
+// ListDistinctFolders returns all distinct folder IDs for a user's non-deleted messages.
+// Implements store.FolderLister for custom folder discovery.
+func (s *Store) ListDistinctFolders(ctx context.Context, ownerID string) ([]string, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return nil, store.ErrNotConnected
+	}
+
+	seen := make(map[string]bool)
+	s.messages.Range(func(_, v any) bool {
+		m := v.(*message)
+		if m.isDraft || m.deleted || m.ownerID != ownerID {
+			return true
+		}
+		seen[m.folderID] = true
+		return true
+	})
+
+	folders := make([]string, 0, len(seen))
+	for id := range seen {
+		folders = append(folders, id)
+	}
+	return folders, nil
+}
+
 // =============================================================================
 // Helper Functions
 // =============================================================================
@@ -892,6 +930,15 @@ func matchesFilter(m *message, f store.Filter) bool {
 	value := f.Value()
 	op := f.Operator()
 
+	// Handle slice-based fields with special operators.
+	switch key {
+	case "tags":
+		return matchesSliceFilter(m.tags, op, value)
+	case "recipient_ids":
+		return matchesSliceFilter(m.recipientIDs, op, value)
+	}
+
+	// Scalar fields.
 	var fieldValue any
 	switch key {
 	case "id", "_id":
@@ -910,6 +957,14 @@ func matchesFilter(m *message, f store.Filter) bool {
 		fieldValue = m.status
 	case "__deleted":
 		fieldValue = m.deleted
+	case "thread_id":
+		fieldValue = m.threadID
+	case "reply_to_id":
+		fieldValue = m.replyToID
+	case "created_at":
+		fieldValue = m.createdAt
+	case "updated_at":
+		fieldValue = m.updatedAt
 	default:
 		return true // Unknown field, skip filter
 	}
@@ -927,9 +982,78 @@ func matchesFilter(m *message, f store.Filter) bool {
 		return compareValues(fieldValue, value) > 0
 	case "gte", ">=":
 		return compareValues(fieldValue, value) >= 0
+	case "exists":
+		exists, _ := value.(bool)
+		isEmpty := fieldValue == "" || fieldValue == nil
+		return exists != isEmpty
+	case "in":
+		return valueInSet(fieldValue, value)
+	case "nin":
+		return !valueInSet(fieldValue, value)
 	default:
 		return true
 	}
+}
+
+// matchesSliceFilter handles filter operations on slice fields (tags, recipient_ids).
+func matchesSliceFilter(slice []string, op string, value any) bool {
+	switch op {
+	case "contains":
+		s, ok := value.(string)
+		if !ok {
+			return false
+		}
+		for _, item := range slice {
+			if item == s {
+				return true
+			}
+		}
+		return false
+	case "exists":
+		exists, _ := value.(bool)
+		hasItems := len(slice) > 0
+		return exists == hasItems
+	case "eq", "=", "":
+		// Equality on slice: check if all elements match
+		other, ok := value.([]string)
+		if !ok {
+			return false
+		}
+		if len(slice) != len(other) {
+			return false
+		}
+		for i := range slice {
+			if slice[i] != other[i] {
+				return false
+			}
+		}
+		return true
+	default:
+		return true
+	}
+}
+
+// valueInSet checks if a scalar value is in a set (slice) of values.
+func valueInSet(fieldValue any, set any) bool {
+	switch s := set.(type) {
+	case []string:
+		fv, ok := fieldValue.(string)
+		if !ok {
+			return false
+		}
+		for _, v := range s {
+			if v == fv {
+				return true
+			}
+		}
+	case []any:
+		for _, v := range s {
+			if v == fieldValue {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func compareValues(a, b any) int {

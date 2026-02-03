@@ -101,8 +101,6 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 			idempotency_key VARCHAR(255),
 			thread_id VARCHAR(255),
 			reply_to_id VARCHAR(255),
-			reactions JSONB DEFAULT '[]',
-			delivery_receipts JSONB DEFAULT '[]',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)
@@ -189,8 +187,8 @@ func (s *Store) GetDraft(ctx context.Context, id string) (store.DraftMessage, er
 	query := fmt.Sprintf(`
 		SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
 		       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
-		       idempotency_key, thread_id, reply_to_id, reactions,
-		       delivery_receipts, created_at, updated_at
+		       idempotency_key, thread_id, reply_to_id,
+		       created_at, updated_at
 		FROM %s
 		WHERE id = $1 AND is_draft = true
 	`, s.opts.table)
@@ -347,8 +345,8 @@ func (s *Store) ListDrafts(ctx context.Context, ownerID string, opts store.ListO
 	query := fmt.Sprintf(`
 		SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
 		       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
-		       idempotency_key, thread_id, reply_to_id, reactions,
-		       delivery_receipts, created_at, updated_at
+		       idempotency_key, thread_id, reply_to_id,
+		       created_at, updated_at
 		FROM %s
 		WHERE owner_id = $1 AND is_draft = true
 		ORDER BY created_at DESC
@@ -401,8 +399,8 @@ func (s *Store) Get(ctx context.Context, id string) (store.Message, error) {
 	query := fmt.Sprintf(`
 		SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
 		       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
-		       idempotency_key, thread_id, reply_to_id, reactions,
-		       delivery_receipts, created_at, updated_at
+		       idempotency_key, thread_id, reply_to_id,
+		       created_at, updated_at
 		FROM %s
 		WHERE id = $1 AND is_deleted = false AND is_draft = false
 	`, s.opts.table)
@@ -457,8 +455,8 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 	query := fmt.Sprintf(`
 		SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
 		       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
-		       idempotency_key, thread_id, reply_to_id, reactions,
-		       delivery_receipts, created_at, updated_at
+		       idempotency_key, thread_id, reply_to_id,
+		       created_at, updated_at
 		FROM %s
 		WHERE %s
 		ORDER BY %s %s
@@ -590,8 +588,8 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 	sqlQuery := fmt.Sprintf(`
 		SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
 		       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
-		       idempotency_key, thread_id, reply_to_id, reactions,
-		       delivery_receipts, created_at, updated_at
+		       idempotency_key, thread_id, reply_to_id,
+		       created_at, updated_at
 		FROM %s
 		WHERE %s
 		ORDER BY created_at DESC
@@ -1063,8 +1061,8 @@ func (s *Store) CreateMessageIdempotent(ctx context.Context, data store.MessageD
 		selectQuery := fmt.Sprintf(`
 			SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
 			       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
-			       idempotency_key, thread_id, reply_to_id, reactions,
-			       delivery_receipts, created_at, updated_at
+			       idempotency_key, thread_id, reply_to_id,
+			       created_at, updated_at
 			FROM %s
 			WHERE owner_id = $1 AND idempotency_key = $2
 		`, s.opts.table)
@@ -1265,7 +1263,6 @@ type rowScanner interface {
 func (s *Store) scanMessage(row rowScanner) (*message, error) {
 	var msg message
 	var metadataJSON, attachmentsJSON []byte
-	var reactionsJSON, receiptsJSON []byte // scanned but discarded (legacy columns)
 	var readAt sql.NullTime
 	var idempotencyKey, threadID, replyToID sql.NullString
 
@@ -1274,7 +1271,7 @@ func (s *Store) scanMessage(row rowScanner) (*message, error) {
 		&metadataJSON, &msg.status, &msg.folderID, &msg.isRead, &readAt,
 		pq.Array(&msg.recipientIDs), pq.Array(&msg.tags), &attachmentsJSON,
 		&msg.isDeleted, &msg.isDraft, &idempotencyKey, &threadID, &replyToID,
-		&reactionsJSON, &receiptsJSON, &msg.createdAt, &msg.updatedAt,
+		&msg.createdAt, &msg.updatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -1306,10 +1303,6 @@ func (s *Store) scanMessage(row rowScanner) (*message, error) {
 			return nil, fmt.Errorf("unmarshal attachments: %w", err)
 		}
 	}
-
-	// reactionsJSON and receiptsJSON are legacy columns - scanned but not used.
-	_ = reactionsJSON
-	_ = receiptsJSON
 
 	return &msg, nil
 }

@@ -28,7 +28,7 @@ import (
 // Example comparison:
 //
 //	// Iterator: memory-efficient, process one at a time
-//	iter, _ := mb.StreamInbox(ctx, StreamOptions{BatchSize: 100})
+//	iter, _ := mb.Stream(ctx, nil, StreamOptions{BatchSize: 100})
 //	for hasNext, err := iter.Next(ctx); hasNext && err == nil; hasNext, err = iter.Next(ctx) {
 //	    msg, _ := iter.Message()
 //	    // process each message individually
@@ -46,7 +46,7 @@ import (
 //
 // Example:
 //
-//	iter, _ := mb.StreamInbox(ctx, StreamOptions{BatchSize: 100})
+//	iter, _ := mb.Stream(ctx, nil, StreamOptions{BatchSize: 100})
 //
 //	for {
 //	    hasNext, err := iter.Next(ctx)
@@ -182,98 +182,22 @@ func (it *messageIterator) Message() (Message, error) {
 	return newMessage(it.batch[it.batchIdx-1], it.mailbox), nil
 }
 
-// StreamInbox returns an iterator for inbox messages.
-func (m *userMailbox) StreamInbox(ctx context.Context, opts StreamOptions) (MessageIterator, error) {
+// Stream returns an iterator for messages matching the given filters.
+// The owner filter and not-deleted filter are automatically prepended.
+// Pass additional filters to narrow results (e.g., store.InFolder, store.HasTag).
+func (m *userMailbox) Stream(ctx context.Context, filters []store.Filter, opts StreamOptions) (MessageIterator, error) {
 	if err := m.checkAccess(); err != nil {
 		return nil, err
 	}
-	filters := []store.Filter{
+	base := []store.Filter{
 		store.OwnerIs(m.userID),
-		store.InFolder(store.FolderInbox),
 		store.NotDeleted(),
 	}
-	return newMessageIterator(m, filters, opts), nil
-}
-
-// StreamSent returns an iterator for sent messages.
-func (m *userMailbox) StreamSent(ctx context.Context, opts StreamOptions) (MessageIterator, error) {
-	if err := m.checkAccess(); err != nil {
-		return nil, err
-	}
-	filters := []store.Filter{
-		store.OwnerIs(m.userID),
-		store.InFolder(store.FolderSent),
-		store.NotDeleted(),
-	}
-	return newMessageIterator(m, filters, opts), nil
-}
-
-// StreamFolder returns an iterator for messages in a specific folder.
-func (m *userMailbox) StreamFolder(ctx context.Context, folderID string, opts StreamOptions) (MessageIterator, error) {
-	if err := m.checkAccess(); err != nil {
-		return nil, err
-	}
-	filters := []store.Filter{
-		store.OwnerIs(m.userID),
-		store.InFolder(folderID),
-		store.NotDeleted(),
-	}
-	return newMessageIterator(m, filters, opts), nil
-}
-
-// StreamArchived returns an iterator for archived messages.
-func (m *userMailbox) StreamArchived(ctx context.Context, opts StreamOptions) (MessageIterator, error) {
-	if err := m.checkAccess(); err != nil {
-		return nil, err
-	}
-	filters := []store.Filter{
-		store.OwnerIs(m.userID),
-		store.InFolder(store.FolderArchived),
-		store.NotDeleted(),
-	}
-	return newMessageIterator(m, filters, opts), nil
-}
-
-// StreamTrash returns an iterator for trashed messages.
-func (m *userMailbox) StreamTrash(ctx context.Context, opts StreamOptions) (MessageIterator, error) {
-	if err := m.checkAccess(); err != nil {
-		return nil, err
-	}
-	filters := []store.Filter{
-		store.OwnerIs(m.userID),
-		store.InFolder(store.FolderTrash),
-	}
-	return newMessageIterator(m, filters, opts), nil
-}
-
-// StreamByTag returns an iterator for messages with a specific tag.
-func (m *userMailbox) StreamByTag(ctx context.Context, tagID string, opts StreamOptions) (MessageIterator, error) {
-	if err := m.checkAccess(); err != nil {
-		return nil, err
-	}
-	filters := []store.Filter{
-		store.OwnerIs(m.userID),
-		store.HasTag(tagID),
-		store.NotDeleted(),
-	}
-	return newMessageIterator(m, filters, opts), nil
-}
-
-// StreamUnread returns an iterator for unread messages.
-func (m *userMailbox) StreamUnread(ctx context.Context, opts StreamOptions) (MessageIterator, error) {
-	if err := m.checkAccess(); err != nil {
-		return nil, err
-	}
-	filters := []store.Filter{
-		store.OwnerIs(m.userID),
-		store.IsReadFilter(false),
-		store.NotDeleted(),
-	}
-	return newMessageIterator(m, filters, opts), nil
+	return newMessageIterator(m, append(base, filters...), opts), nil
 }
 
 // StreamSearch returns an iterator for search results.
-func (m *userMailbox) StreamSearch(ctx context.Context, query string, opts StreamOptions) (MessageIterator, error) {
+func (m *userMailbox) StreamSearch(ctx context.Context, query SearchQuery, opts StreamOptions) (MessageIterator, error) {
 	if err := m.checkAccess(); err != nil {
 		return nil, err
 	}
@@ -281,16 +205,20 @@ func (m *userMailbox) StreamSearch(ctx context.Context, query string, opts Strea
 	if batchSize <= 0 {
 		batchSize = 100
 	}
+	// Ensure owner and not-deleted filters are set.
+	baseFilters := []store.Filter{
+		store.OwnerIs(m.userID),
+		store.NotDeleted(),
+	}
 	return &searchIterator{
 		mailbox:  m,
 		storeRef: m.service.store,
 		query: store.SearchQuery{
-			Query:   query,
+			Query:   query.Query,
 			OwnerID: m.userID,
-			Filters: []store.Filter{
-				store.OwnerIs(m.userID),
-				store.NotDeleted(),
-			},
+			Fields:  query.Fields,
+			Tags:    query.Tags,
+			Filters: append(baseFilters, query.Filters...),
 			Options: store.ListOptions{
 				Limit:     batchSize,
 				SortBy:    "created_at",

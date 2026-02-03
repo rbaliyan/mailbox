@@ -223,6 +223,24 @@ type FolderCounter interface {
 	CountByFolders(ctx context.Context, ownerID string, folderIDs []string) (map[string]FolderCounts, error)
 }
 
+// FindWithCounter is an optional interface that Store implementations can
+// implement to return messages and total count in a single query.
+// When implemented, list operations avoid a separate Count round-trip.
+type FindWithCounter interface {
+	// FindWithCount retrieves messages matching the filters and returns
+	// both the messages and the total count in a single operation.
+	FindWithCount(ctx context.Context, filters []Filter, opts ListOptions) (*MessageList, int64, error)
+}
+
+// FolderLister is an optional interface that Store implementations can
+// implement to discover custom (non-system) folders for a user.
+// When implemented, ListFolders includes custom folders alongside system folders.
+type FolderLister interface {
+	// ListDistinctFolders returns all distinct folder IDs for a user's non-deleted messages.
+	// This is used to discover custom folders that are not system folders.
+	ListDistinctFolders(ctx context.Context, ownerID string) ([]string, error)
+}
+
 // MaintenanceStore provides operations for background maintenance tasks.
 // These operations are designed to be safely called concurrently from
 // multiple service instances without requiring distributed coordination.

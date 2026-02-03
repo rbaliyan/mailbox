@@ -160,23 +160,17 @@ type AttachmentLoader interface {
 // MessageStreamer provides streaming access to messages.
 // Use streaming for memory-efficient processing of large result sets.
 // For paginated UI with bulk operations, use MessageLister instead.
+//
+// Example - stream inbox messages:
+//
+//	iter, _ := mb.Stream(ctx, []store.Filter{store.InFolder(store.FolderInbox)}, mailbox.StreamOptions{BatchSize: 100})
+//	for iter.Next(ctx) { msg, _ := iter.Message(); ... }
 type MessageStreamer interface {
-	// StreamInbox returns an iterator for inbox messages.
-	StreamInbox(ctx context.Context, opts StreamOptions) (MessageIterator, error)
-	// StreamSent returns an iterator for sent messages.
-	StreamSent(ctx context.Context, opts StreamOptions) (MessageIterator, error)
-	// StreamArchived returns an iterator for archived messages.
-	StreamArchived(ctx context.Context, opts StreamOptions) (MessageIterator, error)
-	// StreamTrash returns an iterator for trashed messages.
-	StreamTrash(ctx context.Context, opts StreamOptions) (MessageIterator, error)
-	// StreamFolder returns an iterator for messages in a specific folder.
-	StreamFolder(ctx context.Context, folderID string, opts StreamOptions) (MessageIterator, error)
-	// StreamByTag returns an iterator for messages with a specific tag.
-	StreamByTag(ctx context.Context, tagID string, opts StreamOptions) (MessageIterator, error)
-	// StreamUnread returns an iterator for unread messages.
-	StreamUnread(ctx context.Context, opts StreamOptions) (MessageIterator, error)
+	// Stream returns an iterator for messages matching the given filters.
+	// The owner filter and not-deleted filter are automatically added.
+	Stream(ctx context.Context, filters []store.Filter, opts StreamOptions) (MessageIterator, error)
 	// StreamSearch returns an iterator for search results.
-	StreamSearch(ctx context.Context, query string, opts StreamOptions) (MessageIterator, error)
+	StreamSearch(ctx context.Context, query SearchQuery, opts StreamOptions) (MessageIterator, error)
 }
 
 // MessageClient provides all message-related read operations.
@@ -1021,10 +1015,12 @@ func (m *userMailbox) UpdateFlags(ctx context.Context, messageID string, flags F
 	}
 
 	// Apply read flag
+	var readChanged bool
 	if flags.Read != nil {
 		if err := m.service.store.MarkRead(ctx, messageID, *flags.Read); err != nil {
 			return fmt.Errorf("mark read: %w", err)
 		}
+		readChanged = true
 	}
 
 	// Apply archived flag (moves to/from archived folder)
@@ -1041,6 +1037,10 @@ func (m *userMailbox) UpdateFlags(ctx context.Context, messageID string, flags F
 			}
 		}
 		if err := m.service.store.MoveToFolder(ctx, messageID, folderID); err != nil {
+			// Rollback: restore read state if it was changed
+			if readChanged {
+				_ = m.service.store.MarkRead(ctx, messageID, msg.GetIsRead())
+			}
 			return fmt.Errorf("move to folder: %w", err)
 		}
 	}
@@ -1517,29 +1517,52 @@ var systemFolders = []struct {
 	{store.FolderTrash, "Trash"},
 }
 
+// systemFolderSet is used to quickly check if a folder ID is a system folder.
+var systemFolderSet = func() map[string]bool {
+	m := make(map[string]bool, len(systemFolders))
+	for _, sf := range systemFolders {
+		m[sf.ID] = true
+	}
+	return m
+}()
+
 // ListFolders returns information about all folders for the current user.
-// Includes system folders with message counts.
-//
-// If the store implements store.FolderCounter, a single batch query is used
-// instead of individual counts per folder.
+// Always includes system folders. If the store implements store.FolderLister,
+// custom (non-system) folders are included as well.
+// If the store implements store.FolderCounter, batch counting is used.
 func (m *userMailbox) ListFolders(ctx context.Context) ([]FolderInfo, error) {
 	if err := m.checkAccess(); err != nil {
 		return nil, err
 	}
 
-	folderIDs := make([]string, len(systemFolders))
+	// Discover all folder IDs (system + custom if store supports it).
+	allFolderIDs := make([]string, len(systemFolders))
 	for i, sf := range systemFolders {
-		folderIDs[i] = sf.ID
+		allFolderIDs[i] = sf.ID
+	}
+
+	var customFolderIDs []string
+	if fl, ok := m.service.store.(store.FolderLister); ok {
+		distinct, err := fl.ListDistinctFolders(ctx, m.userID)
+		if err != nil {
+			return nil, fmt.Errorf("list distinct folders: %w", err)
+		}
+		for _, id := range distinct {
+			if !systemFolderSet[id] {
+				customFolderIDs = append(customFolderIDs, id)
+				allFolderIDs = append(allFolderIDs, id)
+			}
+		}
 	}
 
 	// Fast path: use batch counting if the store supports it.
 	if fc, ok := m.service.store.(store.FolderCounter); ok {
-		counts, err := fc.CountByFolders(ctx, m.userID, folderIDs)
+		counts, err := fc.CountByFolders(ctx, m.userID, allFolderIDs)
 		if err != nil {
 			return nil, fmt.Errorf("count folders: %w", err)
 		}
 
-		folders := make([]FolderInfo, 0, len(systemFolders))
+		folders := make([]FolderInfo, 0, len(allFolderIDs))
 		for _, sf := range systemFolders {
 			c := counts[sf.ID]
 			folders = append(folders, FolderInfo{
@@ -1550,36 +1573,56 @@ func (m *userMailbox) ListFolders(ctx context.Context) ([]FolderInfo, error) {
 				UnreadCount:  c.Unread,
 			})
 		}
+		for _, id := range customFolderIDs {
+			c := counts[id]
+			folders = append(folders, FolderInfo{
+				ID:           id,
+				Name:         id,
+				MessageCount: c.Total,
+				UnreadCount:  c.Unread,
+			})
+		}
 		return folders, nil
 	}
 
 	// Slow path: individual Count queries per folder.
-	folders := make([]FolderInfo, 0, len(systemFolders))
+	folders := make([]FolderInfo, 0, len(allFolderIDs))
 
-	for _, sf := range systemFolders {
+	for _, id := range allFolderIDs {
 		count, err := m.service.store.Count(ctx, []store.Filter{
 			store.OwnerIs(m.userID),
 			store.NotDeleted(),
-			store.InFolder(sf.ID),
+			store.InFolder(id),
 		})
 		if err != nil {
-			return nil, fmt.Errorf("count folder %s: %w", sf.ID, err)
+			return nil, fmt.Errorf("count folder %s: %w", id, err)
 		}
 
 		unreadCount, err := m.service.store.Count(ctx, []store.Filter{
 			store.OwnerIs(m.userID),
 			store.NotDeleted(),
-			store.InFolder(sf.ID),
+			store.InFolder(id),
 			store.IsReadFilter(false),
 		})
 		if err != nil {
-			return nil, fmt.Errorf("count unread in folder %s: %w", sf.ID, err)
+			return nil, fmt.Errorf("count unread in folder %s: %w", id, err)
+		}
+
+		isSystem := systemFolderSet[id]
+		name := id
+		if isSystem {
+			for _, sf := range systemFolders {
+				if sf.ID == id {
+					name = sf.Name
+					break
+				}
+			}
 		}
 
 		folders = append(folders, FolderInfo{
-			ID:           sf.ID,
-			Name:         sf.Name,
-			IsSystem:     true,
+			ID:           id,
+			Name:         name,
+			IsSystem:     isSystem,
 			MessageCount: count,
 			UnreadCount:  unreadCount,
 		})
@@ -1728,82 +1771,41 @@ func (m *userMailbox) SendMessage(ctx context.Context, req SendRequest) (Message
 
 // BulkUpdateFlags updates flags on multiple messages by ID.
 func (m *userMailbox) BulkUpdateFlags(ctx context.Context, messageIDs []string, flags Flags) (*BulkResult, error) {
-	if err := m.checkAccess(); err != nil {
-		return nil, err
-	}
-
-	result := &BulkResult{Results: make([]OperationResult, 0, len(messageIDs))}
-	for _, id := range messageIDs {
-		res := OperationResult{ID: id}
-		if err := m.UpdateFlags(ctx, id, flags); err != nil {
-			res.Error = err
-		} else {
-			res.Success = true
-		}
-		result.Results = append(result.Results, res)
-	}
-	return result, result.Err()
+	return m.bulkOp(messageIDs, func(id string) error {
+		return m.UpdateFlags(ctx, id, flags)
+	})
 }
 
 // BulkMove moves multiple messages to a folder by ID.
 func (m *userMailbox) BulkMove(ctx context.Context, messageIDs []string, folderID string) (*BulkResult, error) {
-	if err := m.checkAccess(); err != nil {
-		return nil, err
-	}
-
-	result := &BulkResult{Results: make([]OperationResult, 0, len(messageIDs))}
-	for _, id := range messageIDs {
-		res := OperationResult{ID: id}
-		if err := m.MoveToFolder(ctx, id, folderID); err != nil {
-			res.Error = err
-		} else {
-			res.Success = true
-		}
-		result.Results = append(result.Results, res)
-	}
-	return result, result.Err()
+	return m.bulkOp(messageIDs, func(id string) error {
+		return m.MoveToFolder(ctx, id, folderID)
+	})
 }
 
 // BulkDelete moves multiple messages to trash by ID.
 func (m *userMailbox) BulkDelete(ctx context.Context, messageIDs []string) (*BulkResult, error) {
-	if err := m.checkAccess(); err != nil {
-		return nil, err
-	}
-
-	result := &BulkResult{Results: make([]OperationResult, 0, len(messageIDs))}
-	for _, id := range messageIDs {
-		res := OperationResult{ID: id}
-		if err := m.Delete(ctx, id); err != nil {
-			res.Error = err
-		} else {
-			res.Success = true
-		}
-		result.Results = append(result.Results, res)
-	}
-	return result, result.Err()
+	return m.bulkOp(messageIDs, func(id string) error {
+		return m.Delete(ctx, id)
+	})
 }
 
 // BulkAddTag adds a tag to multiple messages by ID.
 func (m *userMailbox) BulkAddTag(ctx context.Context, messageIDs []string, tagID string) (*BulkResult, error) {
-	if err := m.checkAccess(); err != nil {
-		return nil, err
-	}
-
-	result := &BulkResult{Results: make([]OperationResult, 0, len(messageIDs))}
-	for _, id := range messageIDs {
-		res := OperationResult{ID: id}
-		if err := m.AddTag(ctx, id, tagID); err != nil {
-			res.Error = err
-		} else {
-			res.Success = true
-		}
-		result.Results = append(result.Results, res)
-	}
-	return result, result.Err()
+	return m.bulkOp(messageIDs, func(id string) error {
+		return m.AddTag(ctx, id, tagID)
+	})
 }
 
 // BulkRemoveTag removes a tag from multiple messages by ID.
 func (m *userMailbox) BulkRemoveTag(ctx context.Context, messageIDs []string, tagID string) (*BulkResult, error) {
+	return m.bulkOp(messageIDs, func(id string) error {
+		return m.RemoveTag(ctx, id, tagID)
+	})
+}
+
+// bulkOp applies an operation to each message ID, collecting results.
+func (m *userMailbox) bulkOp(messageIDs []string, op func(id string) error) (*BulkResult, error) {
 	if err := m.checkAccess(); err != nil {
 		return nil, err
 	}
@@ -1811,7 +1813,7 @@ func (m *userMailbox) BulkRemoveTag(ctx context.Context, messageIDs []string, ta
 	result := &BulkResult{Results: make([]OperationResult, 0, len(messageIDs))}
 	for _, id := range messageIDs {
 		res := OperationResult{ID: id}
-		if err := m.RemoveTag(ctx, id, tagID); err != nil {
+		if err := op(id); err != nil {
 			res.Error = err
 		} else {
 			res.Success = true
@@ -1864,14 +1866,25 @@ func (m *userMailbox) listMessages(ctx context.Context, filters []store.Filter, 
 		opts.SortOrder = store.SortDesc
 	}
 
-	list, err := m.service.store.Find(ctx, filters, opts)
-	if err != nil {
-		return nil, fmt.Errorf("find messages: %w", err)
-	}
-
-	total, err := m.service.store.Count(ctx, filters)
-	if err != nil {
-		return nil, fmt.Errorf("count messages: %w", err)
+	// Fast path: use combined find+count if the store supports it.
+	var list *store.MessageList
+	var total int64
+	if fwc, ok := m.service.store.(store.FindWithCounter); ok {
+		var err error
+		list, total, err = fwc.FindWithCount(ctx, filters, opts)
+		if err != nil {
+			return nil, fmt.Errorf("find messages: %w", err)
+		}
+	} else {
+		var err error
+		list, err = m.service.store.Find(ctx, filters, opts)
+		if err != nil {
+			return nil, fmt.Errorf("find messages: %w", err)
+		}
+		total, err = m.service.store.Count(ctx, filters)
+		if err != nil {
+			return nil, fmt.Errorf("count messages: %w", err)
+		}
 	}
 
 	var nextCursor string
