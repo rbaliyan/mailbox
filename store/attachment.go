@@ -99,6 +99,10 @@ type AttachmentManager interface {
 	// Load returns a reader for the attachment content.
 	Load(ctx context.Context, id string) (io.ReadCloser, error)
 
+	// GetMetadata retrieves attachment metadata by ID.
+	// Returns ErrNotFound if the attachment doesn't exist.
+	GetMetadata(ctx context.Context, id string) (AttachmentMetadata, error)
+
 	// AddRef increments the reference count for an attachment.
 	// Called when a message with this attachment is created.
 	AddRef(ctx context.Context, id string) error

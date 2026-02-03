@@ -38,8 +38,6 @@ type Filter interface {
 	Key() string
 	Value() any
 	Operator() string
-	And(Filter) Filter
-	Or(Filter) Filter
 }
 
 // Filters is a filter builder for a specific field.
@@ -62,30 +60,39 @@ type filter struct {
 	key      string
 	value    any
 	operator string
-	and      Filter
-	or       Filter
 }
 
 func (f *filter) Key() string      { return f.key }
 func (f *filter) Value() any       { return f.value }
 func (f *filter) Operator() string { return f.operator }
 
-func (f *filter) And(other Filter) Filter {
-	return &filter{
-		key:      f.key,
-		value:    f.value,
-		operator: f.operator,
-		and:      other,
-	}
+// validOperators is the set of supported filter operators.
+var validOperators = map[string]bool{
+	"eq":       true,
+	"ne":       true,
+	"gt":       true,
+	"gte":      true,
+	"lt":       true,
+	"lte":      true,
+	"in":       true,
+	"nin":      true,
+	"exists":   true,
+	"contains": true,
 }
 
-func (f *filter) Or(other Filter) Filter {
-	return &filter{
-		key:      f.key,
-		value:    f.value,
-		operator: f.operator,
-		or:       other,
+// NewFilter creates a filter with the given key, operator, and value.
+// The key must be a valid message field (validated via MessageFieldKey).
+// The operator must be one of: eq, ne, gt, gte, lt, lte, in, nin, exists, contains.
+// Returns ErrFilterInvalid if the key or operator is invalid.
+func NewFilter(key, operator string, value any) (Filter, error) {
+	storageKey, ok := MessageFieldKey(key)
+	if !ok {
+		return nil, fmt.Errorf("%w: unsupported field: %s", ErrFilterInvalid, key)
 	}
+	if !validOperators[operator] {
+		return nil, fmt.Errorf("%w: unsupported operator: %s", ErrFilterInvalid, operator)
+	}
+	return &filter{key: storageKey, value: value, operator: operator}, nil
 }
 
 // filterBuilder implements Filters.

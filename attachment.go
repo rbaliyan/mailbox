@@ -26,6 +26,11 @@ func NewAttachmentManager(metadata store.AttachmentMetadataStore, files store.At
 	}
 }
 
+// GetMetadata retrieves attachment metadata by ID.
+func (m *attachmentManager) GetMetadata(ctx context.Context, id string) (store.AttachmentMetadata, error) {
+	return m.metadata.Get(ctx, id)
+}
+
 // Upload uploads a file and creates metadata with ref count of 0.
 // If an attachment with the same hash exists, returns existing metadata (deduplication).
 //

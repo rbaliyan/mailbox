@@ -185,6 +185,57 @@ type StorageClient interface {
 	AttachmentLoader
 }
 
+// AttachmentResolver provides attachment metadata resolution by ID.
+// This is useful for server integrations that need to resolve attachment
+// references without loading the full message.
+type AttachmentResolver interface {
+	ResolveAttachments(ctx context.Context, attachmentIDs []string) ([]store.Attachment, error)
+}
+
+// MailboxMutator provides mutation operations on messages by ID.
+// These methods are equivalent to calling Get() then mutating the Message,
+// but skip the intermediate Get for efficiency in server integrations.
+type MailboxMutator interface {
+	UpdateFlags(ctx context.Context, messageID string, flags Flags) error
+	MoveToFolder(ctx context.Context, messageID string, folderID string) error
+	Delete(ctx context.Context, messageID string) error
+	Restore(ctx context.Context, messageID string) error
+	PermanentlyDelete(ctx context.Context, messageID string) error
+	AddTag(ctx context.Context, messageID string, tagID string) error
+	RemoveTag(ctx context.Context, messageID string, tagID string) error
+}
+
+// SendRequest contains the data needed to send a message directly,
+// without going through the draft composition flow.
+type SendRequest struct {
+	RecipientIDs  []string
+	Subject       string
+	Body          string
+	Metadata      map[string]any
+	Attachments   []store.Attachment
+	AttachmentIDs []string
+	ThreadID      string
+	ReplyToID     string
+}
+
+// MessageSender provides direct message sending without drafts.
+// This is useful for server integrations where the draft composition
+// flow is handled externally (e.g., via gRPC).
+type MessageSender interface {
+	SendMessage(ctx context.Context, req SendRequest) (Message, error)
+}
+
+// BulkOperator provides bulk mutation operations by message IDs.
+// Each method operates on a list of message IDs and returns a BulkResult
+// with per-ID success/failure information.
+type BulkOperator interface {
+	BulkUpdateFlags(ctx context.Context, messageIDs []string, flags Flags) (*BulkResult, error)
+	BulkMove(ctx context.Context, messageIDs []string, folderID string) (*BulkResult, error)
+	BulkDelete(ctx context.Context, messageIDs []string) (*BulkResult, error)
+	BulkAddTag(ctx context.Context, messageIDs []string, tagID string) (*BulkResult, error)
+	BulkRemoveTag(ctx context.Context, messageIDs []string, tagID string) (*BulkResult, error)
+}
+
 // Mailbox provides email-like messaging functionality for a user.
 // This is the main interface for mailbox operations.
 //
@@ -192,14 +243,18 @@ type StorageClient interface {
 //   - MessageClient: All message read operations (Get, List, Search, Stream, Threads)
 //   - DraftClient: Draft operations (List drafts, Compose new)
 //   - StorageClient: Storage operations (Folders, Attachments)
+//   - MailboxMutator: Direct mutation by message ID (UpdateFlags, Move, Delete, Tags)
+//   - MessageSender: Direct message sending without drafts (SendMessage)
+//   - BulkOperator: Bulk mutations by message IDs (BulkUpdateFlags, BulkMove, etc.)
+//   - AttachmentResolver: Resolve attachment metadata by ID
 //
 // For applications needing only a subset of functionality, use the focused
 // interfaces directly (MessageClient, DraftClient, StorageClient).
 //
-// For single message operations (update, move, delete, tags), use the methods
+// For single message operations via a message handle, use the methods
 // on the Message interface returned by Get().
 //
-// For bulk operations, use the methods on MessageList returned by list methods:
+// For bulk operations on listed messages, use the methods on MessageList:
 //
 //	inbox, _ := mailbox.Inbox(ctx, opts)
 //	inbox.MarkRead(ctx)           // mark all as read
@@ -210,6 +265,10 @@ type Mailbox interface {
 	MessageClient
 	DraftClient
 	StorageClient
+	MailboxMutator
+	MessageSender
+	BulkOperator
+	AttachmentResolver
 }
 
 // Connection states for the service.
@@ -1562,6 +1621,163 @@ func (m *userMailbox) LoadAttachment(ctx context.Context, messageID, attachmentI
 
 	// Load content from attachment manager
 	return m.service.attachments.Load(ctx, attachmentID)
+}
+
+// SendMessage sends a message directly without going through the draft flow.
+// If AttachmentIDs are provided, they are resolved via ResolveAttachments
+// and merged with any Attachments already in the request.
+func (m *userMailbox) SendMessage(ctx context.Context, req SendRequest) (Message, error) {
+	if err := m.checkAccess(); err != nil {
+		return nil, err
+	}
+
+	// Resolve attachment IDs if any
+	allAttachments := req.Attachments
+	if len(req.AttachmentIDs) > 0 {
+		resolved, err := m.ResolveAttachments(ctx, req.AttachmentIDs)
+		if err != nil {
+			return nil, fmt.Errorf("resolve attachments: %w", err)
+		}
+		allAttachments = append(allAttachments, resolved...)
+	}
+
+	// Build a transient draft
+	draft := m.service.store.NewDraft(m.userID)
+	draft.SetRecipients(req.RecipientIDs...)
+	draft.SetSubject(req.Subject)
+	draft.SetBody(req.Body)
+	for k, v := range req.Metadata {
+		draft.SetMetadata(k, v)
+	}
+	for _, a := range allAttachments {
+		draft.AddAttachment(a)
+	}
+
+	// Send via existing flow
+	msg, err := m.sendDraft(ctx, draft, req.ThreadID, req.ReplyToID)
+	if err != nil {
+		return nil, err
+	}
+
+	return newMessage(msg, m), nil
+}
+
+// BulkUpdateFlags updates flags on multiple messages by ID.
+func (m *userMailbox) BulkUpdateFlags(ctx context.Context, messageIDs []string, flags Flags) (*BulkResult, error) {
+	if err := m.checkAccess(); err != nil {
+		return nil, err
+	}
+
+	result := &BulkResult{Results: make([]OperationResult, 0, len(messageIDs))}
+	for _, id := range messageIDs {
+		res := OperationResult{ID: id}
+		if err := m.UpdateFlags(ctx, id, flags); err != nil {
+			res.Error = err
+		} else {
+			res.Success = true
+		}
+		result.Results = append(result.Results, res)
+	}
+	return result, result.Err()
+}
+
+// BulkMove moves multiple messages to a folder by ID.
+func (m *userMailbox) BulkMove(ctx context.Context, messageIDs []string, folderID string) (*BulkResult, error) {
+	if err := m.checkAccess(); err != nil {
+		return nil, err
+	}
+
+	result := &BulkResult{Results: make([]OperationResult, 0, len(messageIDs))}
+	for _, id := range messageIDs {
+		res := OperationResult{ID: id}
+		if err := m.MoveToFolder(ctx, id, folderID); err != nil {
+			res.Error = err
+		} else {
+			res.Success = true
+		}
+		result.Results = append(result.Results, res)
+	}
+	return result, result.Err()
+}
+
+// BulkDelete moves multiple messages to trash by ID.
+func (m *userMailbox) BulkDelete(ctx context.Context, messageIDs []string) (*BulkResult, error) {
+	if err := m.checkAccess(); err != nil {
+		return nil, err
+	}
+
+	result := &BulkResult{Results: make([]OperationResult, 0, len(messageIDs))}
+	for _, id := range messageIDs {
+		res := OperationResult{ID: id}
+		if err := m.Delete(ctx, id); err != nil {
+			res.Error = err
+		} else {
+			res.Success = true
+		}
+		result.Results = append(result.Results, res)
+	}
+	return result, result.Err()
+}
+
+// BulkAddTag adds a tag to multiple messages by ID.
+func (m *userMailbox) BulkAddTag(ctx context.Context, messageIDs []string, tagID string) (*BulkResult, error) {
+	if err := m.checkAccess(); err != nil {
+		return nil, err
+	}
+
+	result := &BulkResult{Results: make([]OperationResult, 0, len(messageIDs))}
+	for _, id := range messageIDs {
+		res := OperationResult{ID: id}
+		if err := m.AddTag(ctx, id, tagID); err != nil {
+			res.Error = err
+		} else {
+			res.Success = true
+		}
+		result.Results = append(result.Results, res)
+	}
+	return result, result.Err()
+}
+
+// BulkRemoveTag removes a tag from multiple messages by ID.
+func (m *userMailbox) BulkRemoveTag(ctx context.Context, messageIDs []string, tagID string) (*BulkResult, error) {
+	if err := m.checkAccess(); err != nil {
+		return nil, err
+	}
+
+	result := &BulkResult{Results: make([]OperationResult, 0, len(messageIDs))}
+	for _, id := range messageIDs {
+		res := OperationResult{ID: id}
+		if err := m.RemoveTag(ctx, id, tagID); err != nil {
+			res.Error = err
+		} else {
+			res.Success = true
+		}
+		result.Results = append(result.Results, res)
+	}
+	return result, result.Err()
+}
+
+// ResolveAttachments resolves attachment metadata by IDs.
+// Returns attachment metadata for each ID in order.
+func (m *userMailbox) ResolveAttachments(ctx context.Context, attachmentIDs []string) ([]store.Attachment, error) {
+	if err := m.checkAccess(); err != nil {
+		return nil, err
+	}
+
+	if m.service.attachments == nil {
+		return nil, ErrAttachmentStoreNotConfigured
+	}
+
+	attachments := make([]store.Attachment, 0, len(attachmentIDs))
+	for _, id := range attachmentIDs {
+		meta, err := m.service.attachments.GetMetadata(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("resolve attachment %s: %w", id, err)
+		}
+		attachments = append(attachments, meta)
+	}
+
+	return attachments, nil
 }
 
 // Helper methods
