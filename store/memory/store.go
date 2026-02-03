@@ -929,7 +929,7 @@ func matchesFilter(m *message, f store.Filter) bool {
 	// Scalar fields.
 	var fieldValue any
 	switch key {
-	case "id", "_id":
+	case "id":
 		fieldValue = m.id
 	case "owner_id":
 		fieldValue = m.ownerID

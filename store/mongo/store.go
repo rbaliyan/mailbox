@@ -383,7 +383,7 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 	sortDir := -1 // DESC
 	if opts.SortBy != "" {
 		if key, ok := store.MessageFieldKey(opts.SortBy); ok {
-			sortKey = key
+			sortKey = mapKey(key)
 		}
 	}
 	if opts.SortOrder == store.SortAsc {
@@ -1468,6 +1468,14 @@ func docToMessage(doc *messageDoc) *message {
 	return msg
 }
 
+// mapKey translates shared filter keys to MongoDB field names.
+func mapKey(key string) string {
+	if key == "id" {
+		return "_id"
+	}
+	return key
+}
+
 func buildFilter(filters []store.Filter) bson.M {
 	if len(filters) == 0 {
 		return bson.M{}
@@ -1478,7 +1486,7 @@ func buildFilter(filters []store.Filter) bson.M {
 		if f == nil {
 			continue
 		}
-		key := f.Key()
+		key := mapKey(f.Key())
 		value := f.Value()
 		op := f.Operator()
 

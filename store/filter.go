@@ -145,7 +145,7 @@ func MessageFilter(field string) Filters {
 func MessageFieldKey(field string) (string, bool) {
 	switch field {
 	case "ID", "id":
-		return "_id", true
+		return "id", true
 	case "OwnerID", "owner_id":
 		return "owner_id", true
 	case "SenderID", "sender_id":

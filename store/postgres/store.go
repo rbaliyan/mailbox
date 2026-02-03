@@ -1309,6 +1309,8 @@ func (s *Store) filterToCondition(f store.Filter, argIdx *int) (string, any) {
 
 func (s *Store) mapFilterKey(key string) (string, bool) {
 	switch key {
+	case "id":
+		return "id", true
 	case "OwnerID", "owner_id":
 		return "owner_id", true
 	case "SenderID", "sender_id":
