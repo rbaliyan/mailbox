@@ -363,6 +363,18 @@ func (e *AttachmentRefError) Error() string {
 	return msg
 }
 
+// Unwrap returns the individual errors from failed operations.
+func (e *AttachmentRefError) Unwrap() []error {
+	var errs []error
+	for _, err := range e.Failed {
+		errs = append(errs, err)
+	}
+	for _, err := range e.RollbackFailed {
+		errs = append(errs, err)
+	}
+	return errs
+}
+
 // HasRollbackFailures returns true if rollback also failed during an add operation.
 func (e *AttachmentRefError) HasRollbackFailures() bool {
 	return len(e.RollbackFailed) > 0

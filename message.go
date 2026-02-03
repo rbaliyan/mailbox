@@ -273,6 +273,17 @@ func (e *BulkOperationError) Error() string {
 		e.Result.FailureCount(), e.Result.TotalCount())
 }
 
+// Unwrap returns the individual errors from failed operations.
+func (e *BulkOperationError) Unwrap() []error {
+	var errs []error
+	for _, r := range e.Result.Results {
+		if r.Error != nil {
+			errs = append(errs, r.Error)
+		}
+	}
+	return errs
+}
+
 // messageList is the internal implementation of MessageList.
 type messageList struct {
 	messages   []Message

@@ -227,9 +227,6 @@ func (s *Store) Get(ctx context.Context, id string) (store.Message, error) {
 	if m.isDraft {
 		return nil, store.ErrNotFound // drafts are not messages
 	}
-	if m.deleted {
-		return nil, store.ErrNotFound
-	}
 
 	return m.clone(), nil
 }
@@ -243,7 +240,7 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 	var all []*message
 	s.messages.Range(func(_, v any) bool {
 		m := v.(*message)
-		if !m.isDraft && !m.deleted && matchesFilters(m, filters) {
+		if !m.isDraft && matchesFilters(m, filters) {
 			all = append(all, m)
 		}
 		return true
@@ -259,37 +256,20 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 	total := int64(len(all))
 
 	// Apply cursor-based pagination using StartAfter
-	// Find messages after the cursor using > comparison on sorted order
 	start := 0
 	if opts.StartAfter != "" {
+		found := false
 		for i, m := range all {
 			if m.id == opts.StartAfter {
 				start = i + 1 // Start after this message
+				found = true
 				break
 			}
 		}
-		// If cursor not found (deleted), use ID comparison
-		// This ensures pagination works even if cursor message was deleted
-		if start == 0 {
-			for i, m := range all {
-				// For descending sort, find first message with ID < cursor
-				// For ascending sort, find first message with ID > cursor
-				if opts.SortOrder == store.SortDesc {
-					if m.id < opts.StartAfter {
-						start = i
-						break
-					}
-				} else {
-					if m.id > opts.StartAfter {
-						start = i
-						break
-					}
-				}
-			}
-			if start == 0 && len(all) > 0 {
-				// Cursor is beyond all results
-				start = len(all)
-			}
+		if !found {
+			// Cursor not found (deleted). Return empty results since the page
+			// boundary is unknown. Callers should re-query without a cursor.
+			return &store.MessageList{Total: total}, nil
 		}
 	}
 
@@ -323,7 +303,7 @@ func (s *Store) Count(ctx context.Context, filters []store.Filter) (int64, error
 	var count int64
 	s.messages.Range(func(_, v any) bool {
 		m := v.(*message)
-		if !m.isDraft && !m.deleted && matchesFilters(m, filters) {
+		if !m.isDraft && matchesFilters(m, filters) {
 			count++
 		}
 		return true
@@ -342,7 +322,7 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 
 	s.messages.Range(func(_, v any) bool {
 		m := v.(*message)
-		if m.isDraft || m.deleted {
+		if m.isDraft {
 			return true
 		}
 		if query.OwnerID != "" && m.ownerID != query.OwnerID {
@@ -372,30 +352,16 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 	// Apply cursor-based pagination using StartAfter
 	start := 0
 	if query.Options.StartAfter != "" {
+		found := false
 		for i, m := range all {
 			if m.id == query.Options.StartAfter {
 				start = i + 1
+				found = true
 				break
 			}
 		}
-		// Fallback to ID comparison if cursor deleted
-		if start == 0 {
-			for i, m := range all {
-				if query.Options.SortOrder == store.SortDesc {
-					if m.id < query.Options.StartAfter {
-						start = i
-						break
-					}
-				} else {
-					if m.id > query.Options.StartAfter {
-						start = i
-						break
-					}
-				}
-			}
-			if start == 0 && len(all) > 0 {
-				start = len(all)
-			}
+		if !found {
+			return &store.MessageList{Total: total}, nil
 		}
 	}
 
@@ -441,7 +407,7 @@ func (s *Store) MarkRead(ctx context.Context, id string, read bool) error {
 	}
 
 	orig := v.(*message)
-	if orig.isDraft || orig.deleted {
+	if orig.isDraft {
 		return store.ErrNotFound
 	}
 
@@ -481,7 +447,7 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) er
 	}
 
 	orig := v.(*message)
-	if orig.isDraft || orig.deleted {
+	if orig.isDraft {
 		return store.ErrNotFound
 	}
 
@@ -514,7 +480,7 @@ func (s *Store) AddTag(ctx context.Context, id string, tagID string) error {
 	}
 
 	orig := v.(*message)
-	if orig.isDraft || orig.deleted {
+	if orig.isDraft {
 		return store.ErrNotFound
 	}
 
@@ -554,7 +520,7 @@ func (s *Store) RemoveTag(ctx context.Context, id string, tagID string) error {
 	}
 
 	orig := v.(*message)
-	if orig.isDraft || orig.deleted {
+	if orig.isDraft {
 		return store.ErrNotFound
 	}
 
@@ -680,19 +646,28 @@ func (s *Store) CreateMessage(ctx context.Context, data store.MessageData) (stor
 
 	now := time.Now().UTC()
 	m := &message{
-		id:           uuid.New().String(),
-		ownerID:      data.OwnerID,
-		senderID:     data.SenderID,
-		recipientIDs: data.RecipientIDs,
-		subject:      data.Subject,
-		body:         data.Body,
-		status:       data.Status,
-		folderID:     data.FolderID,
-		createdAt:    now,
-		updatedAt:    now,
-		isDraft:      false,
+		id:        uuid.New().String(),
+		ownerID:   data.OwnerID,
+		senderID:  data.SenderID,
+		subject:   data.Subject,
+		body:      data.Body,
+		status:    data.Status,
+		folderID:  data.FolderID,
+		threadID:  data.ThreadID,
+		replyToID: data.ReplyToID,
+		createdAt: now,
+		updatedAt: now,
+		isDraft:   false,
 	}
 
+	if data.RecipientIDs != nil {
+		m.recipientIDs = make([]string, len(data.RecipientIDs))
+		copy(m.recipientIDs, data.RecipientIDs)
+	}
+	if data.Tags != nil {
+		m.tags = make([]string, len(data.Tags))
+		copy(m.tags, data.Tags)
+	}
 	if data.Metadata != nil {
 		m.metadata = make(map[string]any, len(data.Metadata))
 		for k, v := range data.Metadata {
@@ -750,42 +725,57 @@ func (s *Store) CreateMessageIdempotent(ctx context.Context, data store.MessageD
 	// Create the idempotency index key
 	idxKey := data.OwnerID + ":" + idempotencyKey
 
-	// Generate a new message ID optimistically
-	newMsgID := uuid.New().String()
+	// Loop to handle the rare case where index exists but message was deleted.
+	// Limited to 2 attempts to prevent infinite loops.
+	var newMsgID string
+	for attempt := 0; attempt < 2; attempt++ {
+		// Generate a new message ID optimistically
+		newMsgID = uuid.New().String()
 
-	// Atomically try to store the idempotency mapping
-	// If it already exists, LoadOrStore returns the existing value
-	existingID, loaded := s.idempotencyIdx.LoadOrStore(idxKey, newMsgID)
+		// Atomically try to store the idempotency mapping
+		// If it already exists, LoadOrStore returns the existing value
+		existingID, loaded := s.idempotencyIdx.LoadOrStore(idxKey, newMsgID)
 
-	if loaded {
+		if !loaded {
+			break // We won the race, proceed to create
+		}
+
 		// Message already exists, return it
 		msgID := existingID.(string)
 		v, ok := s.messages.Load(msgID)
-		if !ok {
-			// Shouldn't happen - index exists but message doesn't
-			// Clean up the stale index and retry
-			s.idempotencyIdx.Delete(idxKey)
-			return s.CreateMessageIdempotent(ctx, data, idempotencyKey)
+		if ok {
+			return v.(*message).clone(), false, nil
 		}
-		return v.(*message).clone(), false, nil
+
+		// Index exists but message doesn't - clean up stale index and retry
+		s.idempotencyIdx.Delete(idxKey)
 	}
 
 	// We won the race - create the message with the ID we reserved
 	now := time.Now().UTC()
 	m := &message{
-		id:           newMsgID,
-		ownerID:      data.OwnerID,
-		senderID:     data.SenderID,
-		recipientIDs: data.RecipientIDs,
-		subject:      data.Subject,
-		body:         data.Body,
-		status:       data.Status,
-		folderID:     data.FolderID,
-		createdAt:    now,
-		updatedAt:    now,
-		isDraft:      false,
+		id:        newMsgID,
+		ownerID:   data.OwnerID,
+		senderID:  data.SenderID,
+		subject:   data.Subject,
+		body:      data.Body,
+		status:    data.Status,
+		folderID:  data.FolderID,
+		threadID:  data.ThreadID,
+		replyToID: data.ReplyToID,
+		createdAt: now,
+		updatedAt: now,
+		isDraft:   false,
 	}
 
+	if data.RecipientIDs != nil {
+		m.recipientIDs = make([]string, len(data.RecipientIDs))
+		copy(m.recipientIDs, data.RecipientIDs)
+	}
+	if data.Tags != nil {
+		m.tags = make([]string, len(data.Tags))
+		copy(m.tags, data.Tags)
+	}
 	if data.Metadata != nil {
 		m.metadata = make(map[string]any, len(data.Metadata))
 		for k, v := range data.Metadata {
@@ -854,7 +844,7 @@ func (s *Store) CountByFolders(ctx context.Context, ownerID string, folderIDs []
 	counts := make(map[string]store.FolderCounts, len(folderIDs))
 	s.messages.Range(func(_, v any) bool {
 		m := v.(*message)
-		if m.isDraft || m.deleted || m.ownerID != ownerID {
+		if m.isDraft || m.ownerID != ownerID {
 			return true
 		}
 		if !folderSet[m.folderID] {
@@ -896,7 +886,7 @@ func (s *Store) ListDistinctFolders(ctx context.Context, ownerID string) ([]stri
 	seen := make(map[string]bool)
 	s.messages.Range(func(_, v any) bool {
 		m := v.(*message)
-		if m.isDraft || m.deleted || m.ownerID != ownerID {
+		if m.isDraft || m.ownerID != ownerID {
 			return true
 		}
 		seen[m.folderID] = true
@@ -953,8 +943,6 @@ func matchesFilter(m *message, f store.Filter) bool {
 		fieldValue = m.isRead
 	case "status":
 		fieldValue = m.status
-	case "__deleted":
-		fieldValue = m.deleted
 	case "thread_id":
 		fieldValue = m.threadID
 	case "reply_to_id":

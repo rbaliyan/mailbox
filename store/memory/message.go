@@ -23,7 +23,6 @@ type message struct {
 	attachments      []store.Attachment
 	createdAt        time.Time
 	updatedAt        time.Time
-	deleted          bool
 	isDraft          bool // true for drafts, false for sent messages
 	threadID         string
 	replyToID        string
@@ -42,7 +41,6 @@ func (m *message) clone() *message {
 		folderID:  m.folderID,
 		createdAt: m.createdAt,
 		updatedAt: m.updatedAt,
-		deleted:   m.deleted,
 		isDraft:   m.isDraft,
 		threadID:  m.threadID,
 		replyToID: m.replyToID,

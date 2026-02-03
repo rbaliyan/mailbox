@@ -562,72 +562,68 @@ func (s *service) CleanupTrash(ctx context.Context) (*CleanupTrashResult, error)
 	result := &CleanupTrashResult{}
 	cutoff := time.Now().UTC().Add(-s.opts.trashRetention)
 
-	// Process in batches until no more expired messages
-	const batchSize = 100
-	for {
-		// Check if context was cancelled
-		if ctx.Err() != nil {
-			result.Interrupted = true
-			return result, ctx.Err()
-		}
-
-		// Step 1: Find expired trash messages to collect attachment IDs before deletion.
-		// Note: There is a small race window between this query and the delete in Step 3.
-		// Messages restored or newly trashed between steps may cause attachment orphans.
-		// This is acceptable: orphaned attachments are harmless (wasted storage) while
-		// prematurely deleted attachments would cause data loss.
-		filters := []store.Filter{
-			store.InFolder(store.FolderTrash),
-		}
+	// Step 1: Collect ALL attachment IDs from expired trash by paging through results.
+	// This must happen before deletion so we know which attachment refs to release.
+	// Note: There is a small race window between this scan and the delete in Step 2.
+	// Messages restored or newly trashed between steps may cause attachment orphans.
+	// This is acceptable: orphaned attachments are harmless (wasted storage) while
+	// prematurely deleted attachments would cause data loss.
+	var attachmentIDs []string
+	if s.attachments != nil {
 		updatedBeforeFilter, err := store.MessageFilter("UpdatedAt").LessThan(cutoff)
 		if err != nil {
 			return result, fmt.Errorf("create trash filter: %w", err)
 		}
-		filters = append(filters, updatedBeforeFilter)
-
-		list, err := s.store.Find(ctx, filters, store.ListOptions{Limit: batchSize})
-		if err != nil {
-			return result, fmt.Errorf("find expired trash: %w", err)
+		filters := []store.Filter{
+			store.InFolder(store.FolderTrash),
+			updatedBeforeFilter,
 		}
 
-		// No more messages to delete
-		if len(list.Messages) == 0 {
-			break
-		}
+		const scanBatchSize = 100
+		var cursor string
+		for {
+			if ctx.Err() != nil {
+				result.Interrupted = true
+				return result, ctx.Err()
+			}
 
-		// Step 2: Collect attachment IDs for cleanup after deletion
-		var attachmentIDs []string
-		if s.attachments != nil {
+			opts := store.ListOptions{Limit: scanBatchSize, StartAfter: cursor}
+			list, err := s.store.Find(ctx, filters, opts)
+			if err != nil {
+				return result, fmt.Errorf("find expired trash: %w", err)
+			}
+
 			for _, msg := range list.Messages {
 				for _, a := range msg.GetAttachments() {
 					attachmentIDs = append(attachmentIDs, a.GetID())
 				}
 			}
-		}
 
-		// Step 3: Use atomic bulk deletion via DeleteExpiredTrash
-		deleted, err := s.store.DeleteExpiredTrash(ctx, cutoff)
-		if err != nil {
-			return result, fmt.Errorf("delete expired trash: %w", err)
-		}
-
-		result.DeletedCount += int(deleted)
-		s.logger.Debug("deleted expired trash batch", "count", deleted)
-
-		// Step 4: Release attachment references after successful deletion
-		// If this fails, we have orphaned attachments (better than missing attachments)
-		if s.attachments != nil {
-			for _, attachmentID := range attachmentIDs {
-				if err := s.attachments.RemoveRef(ctx, attachmentID); err != nil {
-					s.logger.Warn("failed to release attachment ref during cleanup",
-						"error", err, "attachment_id", attachmentID)
-				}
+			if !list.HasMore || len(list.Messages) == 0 {
+				break
 			}
+			cursor = list.Messages[len(list.Messages)-1].GetID()
 		}
+	}
 
-		// If we deleted fewer than batch size, we're done
-		if deleted < batchSize {
-			break
+	// Step 2: Bulk delete all expired trash messages atomically.
+	deleted, err := s.store.DeleteExpiredTrash(ctx, cutoff)
+	if err != nil {
+		return result, fmt.Errorf("delete expired trash: %w", err)
+	}
+	result.DeletedCount = int(deleted)
+	if deleted > 0 {
+		s.logger.Debug("deleted expired trash messages", "count", deleted)
+	}
+
+	// Step 3: Release attachment references after successful deletion.
+	// If this fails, we have orphaned attachments (better than missing attachments).
+	if s.attachments != nil {
+		for _, attachmentID := range attachmentIDs {
+			if err := s.attachments.RemoveRef(ctx, attachmentID); err != nil {
+				s.logger.Warn("failed to release attachment ref during cleanup",
+					"error", err, "attachment_id", attachmentID)
+			}
 		}
 	}
 
@@ -917,7 +913,9 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 	updatedSenderCopy, eventErr := m.finalizeDelivery(ctx, senderCopy, deliveredTo, draft, now)
 	if eventErr != nil {
 		sendErr = eventErr
-		return nil, sendErr
+		// Return the sender copy even on finalization failure since the message
+		// was already created and delivered to recipients.
+		return senderCopy, sendErr
 	}
 
 	// Step 9: Handle partial delivery
@@ -1465,9 +1463,10 @@ func (m *userMailbox) Search(ctx context.Context, query SearchQuery) (MessageLis
 	)
 	start := time.Now()
 	var searchErr error
+	var resultCount int
 	defer func() {
 		endSpan(searchErr)
-		m.service.otel.recordSearch(ctx, time.Since(start), 0)
+		m.service.otel.recordSearch(ctx, time.Since(start), resultCount)
 	}()
 
 	// Apply default query limit if not specified
@@ -1499,7 +1498,7 @@ func (m *userMailbox) Search(ctx context.Context, query SearchQuery) (MessageLis
 		return nil, fmt.Errorf("search messages: %w", err)
 	}
 
-
+	resultCount = len(storeList.Messages)
 	return wrapMessageList(storeList, m), nil
 }
 

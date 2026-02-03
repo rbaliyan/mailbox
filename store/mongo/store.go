@@ -98,7 +98,6 @@ func (s *Store) ensureIndexes(ctx context.Context) error {
 		{Keys: bson.D{bson.E{Key: "folder_id", Value: 1}}},
 		{Keys: bson.D{bson.E{Key: "tags", Value: 1}}},
 		{Keys: bson.D{bson.E{Key: "created_at", Value: -1}}},
-		{Keys: bson.D{bson.E{Key: "__deleted", Value: 1}}},
 		{Keys: bson.D{bson.E{Key: "__is_draft", Value: 1}}},
 		// Idempotency index: unique constraint on (owner_id, idempotency_key) for non-null keys
 		// This enables atomic idempotent message creation without distributed locks
@@ -120,7 +119,6 @@ func (s *Store) ensureIndexes(ctx context.Context) error {
 		{Keys: bson.D{
 			bson.E{Key: "owner_id", Value: 1},
 			bson.E{Key: "folder_id", Value: 1},
-			bson.E{Key: "__deleted", Value: 1},
 			bson.E{Key: "created_at", Value: -1},
 		}},
 		// Draft listing index
@@ -353,7 +351,6 @@ func (s *Store) Get(ctx context.Context, id string) (store.Message, error) {
 
 	filter := bson.M{
 		"_id":        oid,
-		"__deleted":  bson.M{"$ne": true},
 		"__is_draft": bson.M{"$ne": true},
 	}
 
@@ -379,7 +376,6 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 	defer cancel()
 
 	filter := buildFilter(filters)
-	filter["__deleted"] = bson.M{"$ne": true}
 	filter["__is_draft"] = bson.M{"$ne": true}
 
 	// Determine sort key and direction
@@ -488,7 +484,6 @@ func (s *Store) Count(ctx context.Context, filters []store.Filter) (int64, error
 	defer cancel()
 
 	filter := buildFilter(filters)
-	filter["__deleted"] = bson.M{"$ne": true}
 	filter["__is_draft"] = bson.M{"$ne": true}
 
 	count, err := s.collection.CountDocuments(ctx, filter)
@@ -509,7 +504,6 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 	defer cancel()
 
 	filter := buildFilter(query.Filters)
-	filter["__deleted"] = bson.M{"$ne": true}
 	filter["__is_draft"] = bson.M{"$ne": true}
 
 	if query.OwnerID != "" {
@@ -543,20 +537,56 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 		filter["tags"] = bson.M{"$all": query.Tags}
 	}
 
-	findOpts := mongoopts.Find()
-	if query.Options.Limit > 0 {
-		findOpts.SetLimit(int64(query.Options.Limit))
-	}
-	if query.Options.Offset > 0 {
-		findOpts.SetSkip(int64(query.Options.Offset))
-	}
-	findOpts.SetSort(bson.D{bson.E{Key: "created_at", Value: -1}})
-
-	// Get total count for pagination
+	// Count total before applying cursor filter (for true total)
 	total, err := s.collection.CountDocuments(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("count search results: %w", err)
 	}
+
+	// Cursor-based pagination: add keyset filter when StartAfter is provided.
+	// Since the text search may already use $or, we wrap the cursor condition
+	// with $and to avoid conflicts.
+	if query.Options.StartAfter != "" {
+		cursorOID, cursorErr := primitive.ObjectIDFromHex(query.Options.StartAfter)
+		if cursorErr != nil {
+			return nil, store.ErrInvalidID
+		}
+		var cursorDoc messageDoc
+		cursorErr = s.collection.FindOne(ctx, bson.M{"_id": cursorOID}).Decode(&cursorDoc)
+		if cursorErr != nil {
+			if errors.Is(cursorErr, mongo.ErrNoDocuments) {
+				return nil, store.ErrNotFound
+			}
+			return nil, fmt.Errorf("fetch cursor document: %w", cursorErr)
+		}
+		// Build keyset condition for DESC sort on created_at
+		cursorCond := []bson.M{
+			{"created_at": bson.M{"$lt": cursorDoc.CreatedAt}},
+			{"created_at": cursorDoc.CreatedAt, "_id": bson.M{"$lt": cursorOID}},
+		}
+		// If filter already has $or (from text search), use $and to combine
+		if existingOr, hasOr := filter["$or"]; hasOr {
+			delete(filter, "$or")
+			filter["$and"] = []bson.M{
+				{"$or": existingOr.([]bson.M)},
+				{"$or": cursorCond},
+			}
+		} else {
+			filter["$or"] = cursorCond
+		}
+	}
+
+	findOpts := mongoopts.Find()
+	if query.Options.Limit > 0 {
+		findOpts.SetLimit(int64(query.Options.Limit))
+	}
+	if query.Options.StartAfter == "" && query.Options.Offset > 0 {
+		findOpts.SetSkip(int64(query.Options.Offset))
+	}
+	findOpts.SetSort(bson.D{
+		bson.E{Key: "created_at", Value: -1},
+		bson.E{Key: "_id", Value: -1},
+	})
 
 	cursor, err := s.collection.Find(ctx, filter, findOpts)
 	if err != nil {
@@ -574,10 +604,16 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 		messages[i] = docToMessage(&docs[i])
 	}
 
+	var nextCursor string
+	if query.Options.Limit > 0 && len(messages) >= query.Options.Limit {
+		nextCursor = messages[len(messages)-1].GetID()
+	}
+
 	return &store.MessageList{
-		Messages: messages,
-		Total:    total,
-		HasMore:  query.Options.Limit > 0 && len(messages) >= query.Options.Limit,
+		Messages:   messages,
+		Total:      total,
+		HasMore:    query.Options.Limit > 0 && len(messages) >= query.Options.Limit,
+		NextCursor: nextCursor,
 	}, nil
 }
 
@@ -610,7 +646,6 @@ func (s *Store) MarkRead(ctx context.Context, id string, read bool) error {
 
 	filter := bson.M{
 		"_id":        oid,
-		"__deleted":  bson.M{"$ne": true},
 		"__is_draft": bson.M{"$ne": true},
 	}
 
@@ -646,7 +681,6 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) er
 
 	filter := bson.M{
 		"_id":        oid,
-		"__deleted":  bson.M{"$ne": true},
 		"__is_draft": bson.M{"$ne": true},
 	}
 	update := bson.M{
@@ -684,7 +718,6 @@ func (s *Store) AddTag(ctx context.Context, id string, tagID string) error {
 
 	filter := bson.M{
 		"_id":        oid,
-		"__deleted":  bson.M{"$ne": true},
 		"__is_draft": bson.M{"$ne": true},
 	}
 	update := bson.M{
@@ -720,7 +753,6 @@ func (s *Store) RemoveTag(ctx context.Context, id string, tagID string) error {
 
 	filter := bson.M{
 		"_id":        oid,
-		"__deleted":  bson.M{"$ne": true},
 		"__is_draft": bson.M{"$ne": true},
 	}
 	update := bson.M{
@@ -850,7 +882,6 @@ func (s *Store) Restore(ctx context.Context, id string) error {
 	}
 	update := bson.M{
 		"$set": bson.M{
-			"__deleted":  false,
 			"folder_id":  folderID,
 			"updated_at": time.Now().UTC(),
 		},
@@ -1185,7 +1216,6 @@ type messageDoc struct {
 	Attachments    []attachmentDoc    `bson:"attachments,omitempty"`
 	CreatedAt      time.Time          `bson:"created_at"`
 	UpdatedAt      time.Time          `bson:"updated_at"`
-	Deleted        bool               `bson:"__deleted,omitempty"`
 	IsDraft        bool               `bson:"__is_draft,omitempty"`
 	IdempotencyKey string             `bson:"idempotency_key,omitempty"` // For atomic idempotent creates
 	ThreadID       string             `bson:"thread_id,omitempty"`
@@ -1219,7 +1249,6 @@ type message struct {
 	attachments      []*attachment
 	createdAt        time.Time
 	updatedAt        time.Time
-	deleted          bool
 	isDraft          bool
 	threadID         string
 	replyToID        string
@@ -1374,7 +1403,6 @@ func messageToDoc(msg *message) *messageDoc {
 		Tags:         msg.tags,
 		CreatedAt:    msg.createdAt,
 		UpdatedAt:    msg.updatedAt,
-		Deleted:      msg.deleted,
 		IsDraft:      msg.isDraft,
 		ThreadID:     msg.threadID,
 		ReplyToID:    msg.replyToID,
@@ -1418,7 +1446,6 @@ func docToMessage(doc *messageDoc) *message {
 		tags:         doc.Tags,
 		createdAt:    doc.CreatedAt,
 		updatedAt:    doc.UpdatedAt,
-		deleted:      doc.Deleted,
 		isDraft:      doc.IsDraft,
 		threadID:     doc.ThreadID,
 		replyToID:    doc.ReplyToID,

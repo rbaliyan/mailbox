@@ -56,16 +56,16 @@
 // Events use the github.com/rbaliyan/event/v3 library which supports
 // multiple transports (Redis Streams, NATS, Kafka, in-memory channel).
 //
-// To enable events, create a bus and register the events:
+// To enable events, pass WithRedisClient or WithEventTransport when creating the service:
 //
-//	// Create bus with your preferred transport
-//	bus, _ := event.NewBus("myapp", event.WithTransport(redis.New(client)))
-//	defer bus.Close(ctx)
+//	svc, err := mailbox.NewService(
+//	    mailbox.WithStore(store),
+//	    mailbox.WithRedisClient(redisClient),
+//	)
 //
-//	// Register mailbox events
-//	mailbox.RegisterEvents(ctx, bus)
+// Events are automatically registered during Connect(). Subscribe to them
+// using the global event variables:
 //
-//	// Subscribe to events
 //	mailbox.EventMessageSent.Subscribe(ctx, func(ctx context.Context, e event.Event[mailbox.MessageSentEvent], ev mailbox.MessageSentEvent) error {
 //	    fmt.Printf("Message %s sent to %v\n", ev.MessageID, ev.RecipientIDs)
 //	    return nil

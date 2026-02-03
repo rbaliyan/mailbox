@@ -168,8 +168,6 @@ func MessageFieldKey(field string) (string, bool) {
 		return "created_at", true
 	case "UpdatedAt", "updated_at":
 		return "updated_at", true
-	case "Deleted", "deleted", "__deleted":
-		return "__deleted", true
 	case "ThreadID", "thread_id":
 		return "thread_id", true
 	case "ReplyToID", "reply_to_id":
@@ -210,10 +208,9 @@ func StatusIs(status MessageStatus) Filter {
 	return f
 }
 
-// NotDeleted returns a filter for non-deleted messages.
+// NotDeleted returns a filter that excludes messages in the trash folder.
 func NotDeleted() Filter {
-	f, _ := MessageFilter("Deleted").Equal(false)
-	return f
+	return NotInFolder(FolderTrash)
 }
 
 // IsReadFilter returns a filter for read/unread messages.

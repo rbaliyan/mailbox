@@ -121,13 +121,12 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_created ON %s(created_at DESC)`, s.opts.table, s.opts.table),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_updated ON %s(updated_at DESC)`, s.opts.table, s.opts.table),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_is_read ON %s(is_read)`, s.opts.table, s.opts.table),
-		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_is_deleted ON %s(is_deleted)`, s.opts.table, s.opts.table),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_is_draft ON %s(is_draft)`, s.opts.table, s.opts.table),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_tags ON %s USING GIN(tags)`, s.opts.table, s.opts.table),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_recipients ON %s USING GIN(recipient_ids)`, s.opts.table, s.opts.table),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_thread ON %s(thread_id) WHERE thread_id IS NOT NULL`, s.opts.table, s.opts.table),
 		// Compound indexes for common queries
-		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_owner_folder ON %s(owner_id, folder_id, is_deleted, created_at DESC)`, s.opts.table, s.opts.table),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_owner_folder ON %s(owner_id, folder_id, created_at DESC)`, s.opts.table, s.opts.table),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_owner_draft ON %s(owner_id, is_draft, created_at DESC)`, s.opts.table, s.opts.table),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_folder_updated ON %s(folder_id, updated_at)`, s.opts.table, s.opts.table),
 	}
@@ -404,7 +403,7 @@ func (s *Store) Get(ctx context.Context, id string) (store.Message, error) {
 		       idempotency_key, thread_id, reply_to_id,
 		       created_at, updated_at
 		FROM %s
-		WHERE id = $1 AND is_deleted = false AND is_draft = false
+		WHERE id = $1 AND is_draft = false
 	`, s.opts.table)
 
 	msg, err := s.scanMessage(s.db.QueryRowContext(ctx, query, id))
@@ -602,33 +601,68 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 	}
 
 	// Always exclude deleted and drafts
-	conditions = append(conditions, "is_deleted = false", "is_draft = false")
+	conditions = append(conditions, "is_draft = false")
 
 	where := strings.Join(conditions, " AND ")
 	if where == "" {
 		where = "1=1"
 	}
 
-	// Count
-	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE %s`, s.opts.table, where)
+	// Cursor-based pagination: use keyset filtering when StartAfter is provided
+	if query.Options.StartAfter != "" {
+		if _, err := uuid.Parse(query.Options.StartAfter); err != nil {
+			return nil, store.ErrInvalidID
+		}
+		where = where + fmt.Sprintf(` AND (created_at, id) < (SELECT created_at, id FROM %s WHERE id = $%d)`,
+			s.opts.table, argIdx)
+		args = append(args, query.Options.StartAfter)
+		argIdx++
+	}
+
+	// Count (without cursor filter)
+	countWhere := strings.Join(conditions, " AND ")
+	if countWhere == "" {
+		countWhere = "1=1"
+	}
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE %s`, s.opts.table, countWhere)
+	countArgs := make([]any, len(args))
+	copy(countArgs, args)
+	// Remove cursor arg from count args if present
+	if query.Options.StartAfter != "" {
+		countArgs = countArgs[:len(countArgs)-1]
+	}
 	var total int64
-	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 		return nil, fmt.Errorf("count search: %w", err)
 	}
 
 	// Query
-	sqlQuery := fmt.Sprintf(`
-		SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
-		       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
-		       idempotency_key, thread_id, reply_to_id,
-		       created_at, updated_at
-		FROM %s
-		WHERE %s
-		ORDER BY created_at DESC
-		LIMIT $%d OFFSET $%d
-	`, s.opts.table, where, argIdx, argIdx+1)
-
-	args = append(args, query.Options.Limit+1, query.Options.Offset)
+	var sqlQuery string
+	if query.Options.StartAfter != "" {
+		sqlQuery = fmt.Sprintf(`
+			SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
+			       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
+			       idempotency_key, thread_id, reply_to_id,
+			       created_at, updated_at
+			FROM %s
+			WHERE %s
+			ORDER BY created_at DESC
+			LIMIT $%d
+		`, s.opts.table, where, argIdx)
+		args = append(args, query.Options.Limit+1)
+	} else {
+		sqlQuery = fmt.Sprintf(`
+			SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
+			       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
+			       idempotency_key, thread_id, reply_to_id,
+			       created_at, updated_at
+			FROM %s
+			WHERE %s
+			ORDER BY created_at DESC
+			LIMIT $%d OFFSET $%d
+		`, s.opts.table, where, argIdx, argIdx+1)
+		args = append(args, query.Options.Limit+1, query.Options.Offset)
+	}
 
 	rows, err := s.db.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
@@ -650,11 +684,16 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 		messages = messages[:query.Options.Limit]
 	}
 
+	var nextCursor string
+	if hasMore && len(messages) > 0 {
+		nextCursor = messages[len(messages)-1].GetID()
+	}
+
 	return &store.MessageList{
 		Messages:   messages,
 		Total:      total,
 		HasMore:    hasMore,
-		NextCursor: "",
+		NextCursor: nextCursor,
 	}, nil
 }
 
@@ -677,13 +716,13 @@ func (s *Store) MarkRead(ctx context.Context, id string, read bool) error {
 	if read {
 		query = fmt.Sprintf(`
 			UPDATE %s SET is_read = true, read_at = $1, updated_at = $2
-			WHERE id = $3 AND is_deleted = false AND is_draft = false
+			WHERE id = $3 AND is_draft = false
 		`, s.opts.table)
 		args = []any{now, now, id}
 	} else {
 		query = fmt.Sprintf(`
 			UPDATE %s SET is_read = false, read_at = NULL, updated_at = $1
-			WHERE id = $2 AND is_deleted = false AND is_draft = false
+			WHERE id = $2 AND is_draft = false
 		`, s.opts.table)
 		args = []any{now, id}
 	}
@@ -722,7 +761,7 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) er
 
 	query := fmt.Sprintf(`
 		UPDATE %s SET folder_id = $1, updated_at = $2
-		WHERE id = $3 AND is_deleted = false AND is_draft = false
+		WHERE id = $3 AND is_draft = false
 	`, s.opts.table)
 
 	result, err := s.db.ExecContext(ctx, query, folderID, time.Now().UTC(), id)
@@ -761,7 +800,7 @@ func (s *Store) AddTag(ctx context.Context, id string, tagID string) error {
 			ELSE array_append(tags, $1)
 		END,
 		updated_at = $2
-		WHERE id = $3 AND is_deleted = false AND is_draft = false
+		WHERE id = $3 AND is_draft = false
 	`, s.opts.table)
 
 	result, err := s.db.ExecContext(ctx, query, tagID, time.Now().UTC(), id)
@@ -794,7 +833,7 @@ func (s *Store) RemoveTag(ctx context.Context, id string, tagID string) error {
 
 	query := fmt.Sprintf(`
 		UPDATE %s SET tags = array_remove(tags, $1), updated_at = $2
-		WHERE id = $3 AND is_deleted = false AND is_draft = false
+		WHERE id = $3 AND is_draft = false
 	`, s.opts.table)
 
 	result, err := s.db.ExecContext(ctx, query, tagID, time.Now().UTC(), id)
@@ -858,7 +897,7 @@ func (s *Store) HardDelete(ctx context.Context, id string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	query := fmt.Sprintf(`DELETE FROM %s WHERE id = $1`, s.opts.table)
+	query := fmt.Sprintf(`DELETE FROM %s WHERE id = $1 AND is_draft = false`, s.opts.table)
 	result, err := s.db.ExecContext(ctx, query, id)
 	if err != nil {
 		return fmt.Errorf("hard delete: %w", err)
@@ -1251,10 +1290,18 @@ func (s *Store) filterToCondition(f store.Filter, argIdx *int) (string, any) {
 		*argIdx++
 		return cond, val
 	case "exists":
-		if val == true {
-			return fmt.Sprintf("%s IS NOT NULL", key), nil
+		// For array columns (tags, recipient_ids), check array length.
+		// For scalar columns, check non-null and non-empty.
+		if key == "tags" || key == "recipient_ids" {
+			if val == true {
+				return fmt.Sprintf("array_length(%s, 1) > 0", key), nil
+			}
+			return fmt.Sprintf("(array_length(%s, 1) IS NULL OR array_length(%s, 1) = 0)", key, key), nil
 		}
-		return fmt.Sprintf("%s IS NULL", key), nil
+		if val == true {
+			return fmt.Sprintf("(%s IS NOT NULL AND %s != '')", key, key), nil
+		}
+		return fmt.Sprintf("(%s IS NULL OR %s = '')", key, key), nil
 	default:
 		return "", nil
 	}
@@ -1280,8 +1327,6 @@ func (s *Store) mapFilterKey(key string) (string, bool) {
 		return "created_at", true
 	case "UpdatedAt", "updated_at":
 		return "updated_at", true
-	case "Deleted", "__deleted", "is_deleted":
-		return "is_deleted", true
 	case "ThreadID", "thread_id":
 		return "thread_id", true
 	case "ReplyToID", "reply_to_id":

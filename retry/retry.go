@@ -4,6 +4,7 @@ package retry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"math/rand"
 	"time"
@@ -143,7 +144,7 @@ type RetryError struct {
 }
 
 func (e *RetryError) Error() string {
-	return e.Cause.Error()
+	return fmt.Sprintf("retry failed after %d attempts (%s): %s", e.Attempts, e.Err, e.Cause)
 }
 
 func (e *RetryError) Unwrap() error {
