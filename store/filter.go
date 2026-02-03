@@ -42,7 +42,6 @@ type Filter interface {
 
 // Filters is a filter builder for a specific field.
 type Filters interface {
-	Is(v any) (Filter, error)
 	Equal(v any) (Filter, error)
 	NotEqual(v any) (Filter, error)
 	GreaterThan(v any) (Filter, error)
@@ -122,7 +121,6 @@ func (b *filterBuilder) build(op string, v any) (Filter, error) {
 	return &filter{key: b.key, value: v, operator: op}, nil
 }
 
-func (b *filterBuilder) Is(v any) (Filter, error)               { return b.build("eq", v) }
 func (b *filterBuilder) Equal(v any) (Filter, error)            { return b.build("eq", v) }
 func (b *filterBuilder) NotEqual(v any) (Filter, error)         { return b.build("ne", v) }
 func (b *filterBuilder) GreaterThan(v any) (Filter, error)      { return b.build("gt", v) }
@@ -190,13 +188,13 @@ func MessageOrderingKey(field string) (string, bool) {
 
 // OwnerIs returns a filter for messages owned by a specific user.
 func OwnerIs(ownerID string) Filter {
-	f, _ := MessageFilter("OwnerID").Is(ownerID)
+	f, _ := MessageFilter("OwnerID").Equal(ownerID)
 	return f
 }
 
 // SenderIs returns a filter for messages from a specific sender.
 func SenderIs(senderID string) Filter {
-	f, _ := MessageFilter("SenderID").Is(senderID)
+	f, _ := MessageFilter("SenderID").Equal(senderID)
 	return f
 }
 
@@ -208,25 +206,25 @@ func RecipientIs(recipientID string) Filter {
 
 // StatusIs returns a filter for messages with a specific status.
 func StatusIs(status MessageStatus) Filter {
-	f, _ := MessageFilter("Status").Is(string(status))
+	f, _ := MessageFilter("Status").Equal(string(status))
 	return f
 }
 
 // NotDeleted returns a filter for non-deleted messages.
 func NotDeleted() Filter {
-	f, _ := MessageFilter("Deleted").Is(false)
+	f, _ := MessageFilter("Deleted").Equal(false)
 	return f
 }
 
 // IsReadFilter returns a filter for read/unread messages.
 func IsReadFilter(isRead bool) Filter {
-	f, _ := MessageFilter("IsRead").Is(isRead)
+	f, _ := MessageFilter("IsRead").Equal(isRead)
 	return f
 }
 
 // InFolder returns a filter for messages in a specific folder.
 func InFolder(folderID string) Filter {
-	f, _ := MessageFilter("FolderID").Is(folderID)
+	f, _ := MessageFilter("FolderID").Equal(folderID)
 	return f
 }
 
@@ -259,13 +257,13 @@ func HasTags(tags []string) []Filter {
 
 // ThreadIs returns a filter for messages in a specific thread.
 func ThreadIs(threadID string) Filter {
-	f, _ := MessageFilter("ThreadID").Is(threadID)
+	f, _ := MessageFilter("ThreadID").Equal(threadID)
 	return f
 }
 
 // ReplyToIs returns a filter for messages that are replies to a specific message.
 func ReplyToIs(messageID string) Filter {
-	f, _ := MessageFilter("ReplyToID").Is(messageID)
+	f, _ := MessageFilter("ReplyToID").Equal(messageID)
 	return f
 }
 

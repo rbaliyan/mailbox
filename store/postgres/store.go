@@ -453,19 +453,49 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 	}
 	sortField := s.mapSortField(opts.SortBy)
 
-	// Query messages
-	query := fmt.Sprintf(`
-		SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
-		       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
-		       idempotency_key, thread_id, reply_to_id,
-		       created_at, updated_at
-		FROM %s
-		WHERE %s
-		ORDER BY %s %s
-		LIMIT $%d OFFSET $%d
-	`, s.opts.table, where, sortField, sortOrder, len(args)+1, len(args)+2)
+	// Cursor-based pagination: use keyset filtering when StartAfter is provided
+	if opts.StartAfter != "" {
+		if _, err := uuid.Parse(opts.StartAfter); err != nil {
+			return nil, store.ErrInvalidID
+		}
+		comp := "<"
+		if opts.SortOrder == store.SortAsc {
+			comp = ">"
+		}
+		where = where + fmt.Sprintf(` AND (%s, id) %s (SELECT %s, id FROM %s WHERE id = $%d)`,
+			sortField, comp, sortField, s.opts.table, len(args)+1)
+		args = append(args, opts.StartAfter)
+	}
 
-	args = append(args, opts.Limit+1, opts.Offset)
+	// Query messages
+	var query string
+	if opts.StartAfter != "" {
+		// Cursor-based: no OFFSET needed
+		query = fmt.Sprintf(`
+			SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
+			       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
+			       idempotency_key, thread_id, reply_to_id,
+			       created_at, updated_at
+			FROM %s
+			WHERE %s
+			ORDER BY %s %s
+			LIMIT $%d
+		`, s.opts.table, where, sortField, sortOrder, len(args)+1)
+		args = append(args, opts.Limit+1)
+	} else {
+		// Offset-based
+		query = fmt.Sprintf(`
+			SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
+			       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
+			       idempotency_key, thread_id, reply_to_id,
+			       created_at, updated_at
+			FROM %s
+			WHERE %s
+			ORDER BY %s %s
+			LIMIT $%d OFFSET $%d
+		`, s.opts.table, where, sortField, sortOrder, len(args)+1, len(args)+2)
+		args = append(args, opts.Limit+1, opts.Offset)
+	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -796,13 +826,13 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	defer cancel()
 
 	query := fmt.Sprintf(`
-		UPDATE %s SET is_deleted = true, updated_at = $1
-		WHERE id = $2 AND is_deleted = false AND is_draft = false
+		UPDATE %s SET folder_id = $1, updated_at = $2
+		WHERE id = $3 AND folder_id != $1 AND is_draft = false
 	`, s.opts.table)
 
-	result, err := s.db.ExecContext(ctx, query, time.Now().UTC(), id)
+	result, err := s.db.ExecContext(ctx, query, store.FolderTrash, time.Now().UTC(), id)
 	if err != nil {
-		return fmt.Errorf("soft delete: %w", err)
+		return fmt.Errorf("move to trash: %w", err)
 	}
 
 	rows, err := result.RowsAffected()
@@ -857,12 +887,25 @@ func (s *Store) Restore(ctx context.Context, id string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
+	// Read the message to determine restore folder based on ownership
+	getQuery := fmt.Sprintf(`SELECT owner_id, sender_id FROM %s WHERE id = $1 AND folder_id = $2 AND is_draft = false`, s.opts.table)
+	var ownerID, senderID string
+	err := s.db.QueryRowContext(ctx, getQuery, id, store.FolderTrash).Scan(&ownerID, &senderID)
+	if err != nil {
+		return store.ErrNotFound
+	}
+
+	folderID := store.FolderInbox
+	if store.IsSentByOwner(ownerID, senderID) {
+		folderID = store.FolderSent
+	}
+
 	query := fmt.Sprintf(`
-		UPDATE %s SET is_deleted = false, updated_at = $1
-		WHERE id = $2 AND is_deleted = true
+		UPDATE %s SET folder_id = $1, updated_at = $2
+		WHERE id = $3 AND folder_id = $4
 	`, s.opts.table)
 
-	result, err := s.db.ExecContext(ctx, query, time.Now().UTC(), id)
+	result, err := s.db.ExecContext(ctx, query, folderID, time.Now().UTC(), id, store.FolderTrash)
 	if err != nil {
 		return fmt.Errorf("restore: %w", err)
 	}

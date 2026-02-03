@@ -382,24 +382,75 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 	filter["__deleted"] = bson.M{"$ne": true}
 	filter["__is_draft"] = bson.M{"$ne": true}
 
+	// Determine sort key and direction
+	sortKey := "created_at"
+	sortDir := -1 // DESC
+	if opts.SortBy != "" {
+		if key, ok := store.MessageFieldKey(opts.SortBy); ok {
+			sortKey = key
+		}
+	}
+	if opts.SortOrder == store.SortAsc {
+		sortDir = 1
+	}
+
+	// Cursor-based pagination: use keyset filtering when StartAfter is provided
+	if opts.StartAfter != "" {
+		cursorOID, cursorErr := primitive.ObjectIDFromHex(opts.StartAfter)
+		if cursorErr != nil {
+			return nil, store.ErrInvalidID
+		}
+		// Fetch cursor document's sort field value
+		var cursorDoc messageDoc
+		cursorErr = s.collection.FindOne(ctx, bson.M{"_id": cursorOID}).Decode(&cursorDoc)
+		if cursorErr != nil {
+			if errors.Is(cursorErr, mongo.ErrNoDocuments) {
+				return nil, store.ErrNotFound
+			}
+			return nil, fmt.Errorf("fetch cursor document: %w", cursorErr)
+		}
+		// Get the sort field value from cursor document
+		var cursorSortValue any
+		switch sortKey {
+		case "created_at":
+			cursorSortValue = cursorDoc.CreatedAt
+		case "updated_at":
+			cursorSortValue = cursorDoc.UpdatedAt
+		default:
+			cursorSortValue = cursorDoc.CreatedAt
+		}
+		// Add keyset condition: (sortField < cursorValue) OR (sortField == cursorValue AND _id < cursorOID) for DESC
+		// For ASC: (sortField > cursorValue) OR (sortField == cursorValue AND _id > cursorOID)
+		comp := "$lt"
+		if sortDir == 1 {
+			comp = "$gt"
+		}
+		filter["$or"] = []bson.M{
+			{sortKey: bson.M{comp: cursorSortValue}},
+			{sortKey: cursorSortValue, "_id": bson.M{comp: cursorOID}},
+		}
+	}
+
 	findOpts := mongoopts.Find()
 	if opts.Limit > 0 {
 		findOpts.SetLimit(int64(opts.Limit))
 	}
-	if opts.Offset > 0 {
+	if opts.StartAfter == "" && opts.Offset > 0 {
 		findOpts.SetSkip(int64(opts.Offset))
 	}
-	if opts.SortBy != "" {
-		key, ok := store.MessageFieldKey(opts.SortBy)
-		if ok {
-			findOpts.SetSort(bson.D{bson.E{Key: key, Value: int(opts.SortOrder)}})
-		}
-	} else {
-		findOpts.SetSort(bson.D{bson.E{Key: "created_at", Value: -1}})
-	}
+	findOpts.SetSort(bson.D{
+		bson.E{Key: sortKey, Value: sortDir},
+		bson.E{Key: "_id", Value: sortDir},
+	})
 
-	// Get total count for pagination
-	total, err := s.collection.CountDocuments(ctx, filter)
+	// Get total count for pagination (without cursor filter to get true total)
+	countFilter := bson.M{}
+	for k, v := range filter {
+		if k != "$or" {
+			countFilter[k] = v
+		}
+	}
+	total, err := s.collection.CountDocuments(ctx, countFilter)
 	if err != nil {
 		return nil, fmt.Errorf("count messages: %w", err)
 	}
@@ -706,17 +757,18 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	filter := bson.M{
 		"_id":        oid,
 		"__is_draft": bson.M{"$ne": true},
+		"folder_id":  bson.M{"$ne": store.FolderTrash},
 	}
 	update := bson.M{
 		"$set": bson.M{
-			"__deleted":  true,
+			"folder_id":  store.FolderTrash,
 			"updated_at": time.Now().UTC(),
 		},
 	}
 
 	result, err := s.collection.UpdateOne(ctx, filter, update)
 	if err != nil {
-		return fmt.Errorf("delete message: %w", err)
+		return fmt.Errorf("move to trash: %w", err)
 	}
 
 	if result.MatchedCount == 0 {
@@ -875,7 +927,9 @@ func (s *Store) CreateMessage(ctx context.Context, data store.MessageData) (stor
 	return docToMessage(doc), nil
 }
 
-// CreateMessages creates multiple messages in a batch.
+// CreateMessages creates multiple messages in a batch using a transaction for atomicity.
+// If the MongoDB deployment does not support transactions (e.g., standalone),
+// falls back to a non-transactional InsertMany.
 func (s *Store) CreateMessages(ctx context.Context, data []store.MessageData) ([]store.Message, error) {
 	if atomic.LoadInt32(&s.connected) == 0 {
 		return nil, store.ErrNotConnected
@@ -928,12 +982,21 @@ func (s *Store) CreateMessages(ctx context.Context, data []store.MessageData) ([
 		docRefs[i] = doc
 	}
 
-	result, err := s.collection.InsertMany(ctx, docs)
+	// Try transactional insert first for atomicity
+	session, err := s.client.StartSession()
+	if err != nil {
+		// Standalone MongoDB doesn't support sessions - fall back to plain InsertMany
+		return s.insertManyFallback(ctx, docs, docRefs)
+	}
+	defer session.EndSession(ctx)
 
-	// Handle partial success - InsertMany with ordered=true (default) stops at first error
-	// but successfully inserted documents remain in the database
 	var messages []store.Message
-	if result != nil && len(result.InsertedIDs) > 0 {
+	_, txErr := session.WithTransaction(ctx, func(sessCtx mongo.SessionContext) (any, error) {
+		result, insertErr := s.collection.InsertMany(sessCtx, docs)
+		if insertErr != nil {
+			return nil, fmt.Errorf("insert messages: %w", insertErr)
+		}
+
 		messages = make([]store.Message, len(result.InsertedIDs))
 		for i, insertedID := range result.InsertedIDs {
 			if oid, ok := insertedID.(primitive.ObjectID); ok {
@@ -941,14 +1004,49 @@ func (s *Store) CreateMessages(ctx context.Context, data []store.MessageData) ([
 			}
 			messages[i] = docToMessage(docRefs[i])
 		}
-	}
+		return nil, nil
+	})
 
-	if err != nil {
-		// Atomic batch failed - return no partial results
-		return nil, fmt.Errorf("insert messages: %w", err)
+	if txErr != nil {
+		// If transaction failed due to unsupported topology, fall back
+		if isTransactionNotSupported(txErr) {
+			return s.insertManyFallback(ctx, docs, docRefs)
+		}
+		return nil, txErr
 	}
 
 	return messages, nil
+}
+
+// insertManyFallback performs a non-transactional InsertMany for standalone deployments.
+func (s *Store) insertManyFallback(ctx context.Context, docs []any, docRefs []*messageDoc) ([]store.Message, error) {
+	result, err := s.collection.InsertMany(ctx, docs)
+	if err != nil {
+		return nil, fmt.Errorf("insert messages: %w", err)
+	}
+
+	messages := make([]store.Message, len(result.InsertedIDs))
+	for i, insertedID := range result.InsertedIDs {
+		if oid, ok := insertedID.(primitive.ObjectID); ok {
+			docRefs[i].ID = oid
+		}
+		messages[i] = docToMessage(docRefs[i])
+	}
+	return messages, nil
+}
+
+// isTransactionNotSupported checks if the error indicates transactions aren't supported.
+func isTransactionNotSupported(err error) bool {
+	if err == nil {
+		return false
+	}
+	// MongoDB returns code 263 (OperationNotSupportedInTransaction) or
+	// "Transaction numbers are only allowed on..." for standalone servers
+	var cmdErr mongo.CommandError
+	if errors.As(err, &cmdErr) {
+		return cmdErr.Code == 263 || cmdErr.Code == 20
+	}
+	return false
 }
 
 // CreateMessageIdempotent atomically creates a message or returns existing.

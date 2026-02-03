@@ -332,6 +332,29 @@ func WithMaxMetadataKeys(n int) Option {
 	}
 }
 
+// WithMaxQueryLimit sets the maximum number of messages per query.
+// Any query requesting more than this limit will be capped.
+// Default is 100.
+func WithMaxQueryLimit(n int) Option {
+	return func(o *options) {
+		if n > 0 {
+			o.maxQueryLimit = n
+		}
+	}
+}
+
+// WithDefaultQueryLimit sets the default number of messages per query
+// when no limit is specified. If this exceeds MaxQueryLimit, it is
+// automatically capped to MaxQueryLimit.
+// Default is 20.
+func WithDefaultQueryLimit(n int) Option {
+	return func(o *options) {
+		if n > 0 {
+			o.defaultQueryLimit = n
+		}
+	}
+}
+
 // WithMaxConcurrentSends sets the maximum number of concurrent send operations.
 // This prevents resource exhaustion when many messages are being sent simultaneously.
 // Default is 10.

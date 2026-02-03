@@ -571,7 +571,11 @@ func (s *service) CleanupTrash(ctx context.Context) (*CleanupTrashResult, error)
 			return result, ctx.Err()
 		}
 
-		// Step 1: Find expired trash messages to collect attachment IDs before deletion
+		// Step 1: Find expired trash messages to collect attachment IDs before deletion.
+		// Note: There is a small race window between this query and the delete in Step 3.
+		// Messages restored or newly trashed between steps may cause attachment orphans.
+		// This is acceptable: orphaned attachments are harmless (wasted storage) while
+		// prematurely deleted attachments would cause data loss.
 		filters := []store.Filter{
 			store.InFolder(store.FolderTrash),
 		}
@@ -733,8 +737,7 @@ func deduplicateRecipients(recipientIDs []string) []string {
 // senderMsgID is used as the idempotency base to prevent duplicates on retry.
 // Returns lists of successful and failed recipients.
 func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.DraftMessage, threadID, replyToID, senderMsgID string) ([]string, map[string]error) {
-	uniqueRecipients := deduplicateRecipients(draft.GetRecipientIDs())
-
+	// Recipients are already deduplicated in sendDraft before validation.
 	// Use sender message ID as idempotency base.
 	// This ensures retries after partial delivery don't create duplicates,
 	// while allowing multiple sends with the same content to create separate messages.
@@ -744,7 +747,7 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 	failedRecipients := make(map[string]error)
 
 	// Create message for each recipient with idempotency
-	for _, recipientID := range uniqueRecipients {
+	for _, recipientID := range draft.GetRecipientIDs() {
 		data := store.MessageData{
 			OwnerID:      recipientID,
 			SenderID:     m.userID,
@@ -855,7 +858,11 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 		return nil, err
 	}
 
-	// Step 1: Validate the draft (before acquiring semaphore to avoid wasting slots)
+	// Step 1: Deduplicate recipients before validation so that the recipient count
+	// check reflects the actual number of unique recipients.
+	draft.SetRecipients(deduplicateRecipients(draft.GetRecipientIDs())...)
+
+	// Step 2: Validate the draft (before acquiring semaphore to avoid wasting slots)
 	if err := ValidateDraft(draft, m.service.opts.getLimits()); err != nil {
 		return nil, err
 	}
@@ -872,40 +879,40 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 		m.service.otel.recordSend(ctx, time.Since(start), len(draft.GetRecipientIDs()), sendErr)
 	}()
 
-	// Step 2: Acquire send semaphore
+	// Step 3: Acquire send semaphore
 	if err := m.service.sendSem.Acquire(ctx, 1); err != nil {
 		sendErr = err
 		return nil, sendErr
 	}
 	defer m.service.sendSem.Release(1)
 
-	// Step 3: Plugin BeforeSend hook
+	// Step 4: Plugin BeforeSend hook
 	if err := m.service.plugins.beforeSend(ctx, m.userID, draft); err != nil {
 		sendErr = err
 		return nil, sendErr
 	}
 
-	// Step 4: Create sender's copy
+	// Step 5: Create sender's copy
 	senderCopy, err := m.createSenderMessage(ctx, draft, threadID, replyToID)
 	if err != nil {
 		sendErr = err
 		return nil, sendErr
 	}
 
-	// Step 5: Deliver to recipients (use sender message ID for idempotency)
+	// Step 6: Deliver to recipients (use sender message ID for idempotency)
 	deliveredTo, failedRecipients := m.deliverToRecipients(ctx, draft, threadID, replyToID, senderCopy.GetID())
 
-	// Step 6: Handle total delivery failure
+	// Step 7: Handle total delivery failure
 	if len(deliveredTo) == 0 {
 		rollbackErr := m.rollbackSenderMessage(ctx, senderCopy)
-		sendErr = fmt.Errorf("send failed: all %d recipients failed delivery", len(deduplicateRecipients(draft.GetRecipientIDs())))
+		sendErr = fmt.Errorf("send failed: all %d recipients failed delivery", len(draft.GetRecipientIDs()))
 		if rollbackErr != nil {
 			sendErr = fmt.Errorf("%w (rollback also failed: %v)", sendErr, rollbackErr)
 		}
 		return nil, sendErr
 	}
 
-	// Step 7: Finalize successful delivery
+	// Step 8: Finalize successful delivery
 	now := time.Now().UTC()
 	updatedSenderCopy, eventErr := m.finalizeDelivery(ctx, senderCopy, deliveredTo, draft, now)
 	if eventErr != nil {
@@ -913,7 +920,7 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 		return nil, sendErr
 	}
 
-	// Step 8: Handle partial delivery
+	// Step 9: Handle partial delivery
 	if len(failedRecipients) > 0 {
 		sendErr = &PartialDeliveryError{
 			MessageID:        updatedSenderCopy.GetID(),
@@ -923,7 +930,7 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 		return updatedSenderCopy, sendErr
 	}
 
-	// Step 9: Plugin AfterSend hook
+	// Step 10: Plugin AfterSend hook
 	if err := m.service.plugins.afterSend(ctx, m.userID, updatedSenderCopy); err != nil {
 		sendErr = err
 		return updatedSenderCopy, sendErr
@@ -1014,16 +1021,9 @@ func (m *userMailbox) UpdateFlags(ctx context.Context, messageID string, flags F
 		return ErrUnauthorized
 	}
 
-	// Apply read flag
-	var readChanged bool
-	if flags.Read != nil {
-		if err := m.service.store.MarkRead(ctx, messageID, *flags.Read); err != nil {
-			return fmt.Errorf("mark read: %w", err)
-		}
-		readChanged = true
-	}
-
-	// Apply archived flag (moves to/from archived folder)
+	// Apply archived flag first (moves to/from archived folder).
+	// This is the more complex operation and is done first so that if it fails,
+	// no rollback of the read flag is needed.
 	if flags.Archived != nil {
 		var folderID string
 		if *flags.Archived {
@@ -1037,11 +1037,14 @@ func (m *userMailbox) UpdateFlags(ctx context.Context, messageID string, flags F
 			}
 		}
 		if err := m.service.store.MoveToFolder(ctx, messageID, folderID); err != nil {
-			// Rollback: restore read state if it was changed
-			if readChanged {
-				_ = m.service.store.MarkRead(ctx, messageID, msg.GetIsRead())
-			}
 			return fmt.Errorf("move to folder: %w", err)
+		}
+	}
+
+	// Apply read flag after archive (less severe failure mode if this fails)
+	if flags.Read != nil {
+		if err := m.service.store.MarkRead(ctx, messageID, *flags.Read); err != nil {
+			return fmt.Errorf("mark read: %w", err)
 		}
 	}
 
@@ -1332,18 +1335,12 @@ func (m *userMailbox) Drafts(ctx context.Context, opts store.ListOptions) (Draft
 		}
 	}
 
-	// Build next cursor from last draft
-	var nextCursor string
-	if storeDrafts.HasMore && len(drafts) > 0 {
-		nextCursor = drafts[len(drafts)-1].ID()
-	}
-
 	return &draftList{
 		mailbox:    m,
 		drafts:     drafts,
 		total:      storeDrafts.Total,
 		hasMore:    storeDrafts.HasMore,
-		nextCursor: nextCursor,
+		nextCursor: storeDrafts.NextCursor,
 	}, nil
 }
 
@@ -1438,9 +1435,10 @@ func (m *userMailbox) listWithOTel(ctx context.Context, folder string, opts stor
 	)
 	start := time.Now()
 	var listErr error
+	var resultCount int
 	defer func() {
 		endSpan(listErr)
-		m.service.otel.recordList(ctx, time.Since(start), folder, len(getFilters()))
+		m.service.otel.recordList(ctx, time.Since(start), folder, resultCount)
 	}()
 
 	filters := getFilters()
@@ -1449,7 +1447,7 @@ func (m *userMailbox) listWithOTel(ctx context.Context, folder string, opts stor
 		listErr = err
 		return nil, err
 	}
-
+	resultCount = len(storeList.Messages)
 
 	return wrapMessageList(storeList, m), nil
 }
