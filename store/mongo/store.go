@@ -11,10 +11,9 @@ import (
 	"time"
 
 	"github.com/rbaliyan/mailbox/store"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
-	mongoopts "go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	mongoopts "go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // regexMetaChars matches regex metacharacters that need escaping.
@@ -155,7 +154,7 @@ func (s *Store) GetDraft(ctx context.Context, id string) (store.DraftMessage, er
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := primitive.ObjectIDFromHex(id)
+	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
 		return nil, store.ErrInvalidID
 	}
@@ -214,12 +213,12 @@ func (s *Store) SaveDraft(ctx context.Context, draft store.DraftMessage) (store.
 			return nil, fmt.Errorf("insert draft: %w", err)
 		}
 
-		if oid, ok := result.InsertedID.(primitive.ObjectID); ok {
+		if oid, ok := result.InsertedID.(bson.ObjectID); ok {
 			msg.id = oid.Hex()
 		}
 	} else {
 		// Existing draft - update
-		oid, err := primitive.ObjectIDFromHex(msg.id)
+		oid, err := bson.ObjectIDFromHex(msg.id)
 		if err != nil {
 			return nil, store.ErrInvalidID
 		}
@@ -257,7 +256,7 @@ func (s *Store) DeleteDraft(ctx context.Context, id string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := primitive.ObjectIDFromHex(id)
+	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
 		return store.ErrInvalidID
 	}
@@ -344,7 +343,7 @@ func (s *Store) Get(ctx context.Context, id string) (store.Message, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := primitive.ObjectIDFromHex(id)
+	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
 		return nil, store.ErrInvalidID
 	}
@@ -392,7 +391,7 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 
 	// Cursor-based pagination: use keyset filtering when StartAfter is provided
 	if opts.StartAfter != "" {
-		cursorOID, cursorErr := primitive.ObjectIDFromHex(opts.StartAfter)
+		cursorOID, cursorErr := bson.ObjectIDFromHex(opts.StartAfter)
 		if cursorErr != nil {
 			return nil, store.ErrInvalidID
 		}
@@ -547,7 +546,7 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 	// Since the text search may already use $or, we wrap the cursor condition
 	// with $and to avoid conflicts.
 	if query.Options.StartAfter != "" {
-		cursorOID, cursorErr := primitive.ObjectIDFromHex(query.Options.StartAfter)
+		cursorOID, cursorErr := bson.ObjectIDFromHex(query.Options.StartAfter)
 		if cursorErr != nil {
 			return nil, store.ErrInvalidID
 		}
@@ -626,7 +625,7 @@ func (s *Store) MarkRead(ctx context.Context, id string, read bool) error {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := primitive.ObjectIDFromHex(id)
+	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
 		return store.ErrInvalidID
 	}
@@ -674,7 +673,7 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) er
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := primitive.ObjectIDFromHex(id)
+	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
 		return store.ErrInvalidID
 	}
@@ -711,7 +710,7 @@ func (s *Store) AddTag(ctx context.Context, id string, tagID string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := primitive.ObjectIDFromHex(id)
+	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
 		return store.ErrInvalidID
 	}
@@ -746,7 +745,7 @@ func (s *Store) RemoveTag(ctx context.Context, id string, tagID string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := primitive.ObjectIDFromHex(id)
+	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
 		return store.ErrInvalidID
 	}
@@ -781,7 +780,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := primitive.ObjectIDFromHex(id)
+	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
 		return store.ErrInvalidID
 	}
@@ -819,7 +818,7 @@ func (s *Store) HardDelete(ctx context.Context, id string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := primitive.ObjectIDFromHex(id)
+	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
 		return store.ErrInvalidID
 	}
@@ -851,7 +850,7 @@ func (s *Store) Restore(ctx context.Context, id string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := primitive.ObjectIDFromHex(id)
+	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
 		return store.ErrInvalidID
 	}
@@ -951,7 +950,7 @@ func (s *Store) CreateMessage(ctx context.Context, data store.MessageData) (stor
 		return nil, fmt.Errorf("insert message: %w", err)
 	}
 
-	if oid, ok := result.InsertedID.(primitive.ObjectID); ok {
+	if oid, ok := result.InsertedID.(bson.ObjectID); ok {
 		doc.ID = oid
 	}
 
@@ -1022,7 +1021,7 @@ func (s *Store) CreateMessages(ctx context.Context, data []store.MessageData) ([
 	defer session.EndSession(ctx)
 
 	var messages []store.Message
-	_, txErr := session.WithTransaction(ctx, func(sessCtx mongo.SessionContext) (any, error) {
+	_, txErr := session.WithTransaction(ctx, func(sessCtx context.Context) (any, error) {
 		result, insertErr := s.collection.InsertMany(sessCtx, docs)
 		if insertErr != nil {
 			return nil, fmt.Errorf("insert messages: %w", insertErr)
@@ -1030,7 +1029,7 @@ func (s *Store) CreateMessages(ctx context.Context, data []store.MessageData) ([
 
 		messages = make([]store.Message, len(result.InsertedIDs))
 		for i, insertedID := range result.InsertedIDs {
-			if oid, ok := insertedID.(primitive.ObjectID); ok {
+			if oid, ok := insertedID.(bson.ObjectID); ok {
 				docRefs[i].ID = oid
 			}
 			messages[i] = docToMessage(docRefs[i])
@@ -1058,7 +1057,7 @@ func (s *Store) insertManyFallback(ctx context.Context, docs []any, docRefs []*m
 
 	messages := make([]store.Message, len(result.InsertedIDs))
 	for i, insertedID := range result.InsertedIDs {
-		if oid, ok := insertedID.(primitive.ObjectID); ok {
+		if oid, ok := insertedID.(bson.ObjectID); ok {
 			docRefs[i].ID = oid
 		}
 		messages[i] = docToMessage(docRefs[i])
@@ -1201,7 +1200,7 @@ func (s *Store) DeleteExpiredTrash(ctx context.Context, cutoff time.Time) (int64
 
 // messageDoc is the MongoDB document representation.
 type messageDoc struct {
-	ID             primitive.ObjectID `bson:"_id,omitempty"`
+	ID             bson.ObjectID `bson:"_id,omitempty"`
 	OwnerID        string             `bson:"owner_id"`
 	SenderID       string             `bson:"sender_id"`
 	RecipientIDs   []string           `bson:"recipient_ids"`
@@ -1423,7 +1422,7 @@ func messageToDoc(msg *message) *messageDoc {
 	}
 
 	if msg.id != "" {
-		if oid, err := primitive.ObjectIDFromHex(msg.id); err == nil {
+		if oid, err := bson.ObjectIDFromHex(msg.id); err == nil {
 			doc.ID = oid
 		}
 	}
