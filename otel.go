@@ -35,16 +35,21 @@ type otelInstrumentation struct {
 	getErrors     metric.Int64Counter
 	listLatency   metric.Float64Histogram
 	listCount     metric.Int64Counter
+	listErrors    metric.Int64Counter
 	searchLatency metric.Float64Histogram
 	searchCount   metric.Int64Counter
+	searchErrors  metric.Int64Counter
 
 	// Message actions
 	updateLatency metric.Float64Histogram
 	updateCount   metric.Int64Counter
+	updateErrors  metric.Int64Counter
 	deleteLatency metric.Float64Histogram
 	deleteCount   metric.Int64Counter
+	deleteErrors  metric.Int64Counter
 	moveLatency   metric.Float64Histogram
 	moveCount     metric.Int64Counter
+	moveErrors    metric.Int64Counter
 }
 
 // newOtelInstrumentation creates new OTel instrumentation from options.
@@ -163,6 +168,14 @@ func (o *otelInstrumentation) initMetrics(mp metric.MeterProvider) error {
 		return err
 	}
 
+	o.listErrors, err = meter.Int64Counter(
+		"mailbox.list.errors",
+		metric.WithDescription("Number of list errors"),
+	)
+	if err != nil {
+		return err
+	}
+
 	// Search metrics
 	o.searchLatency, err = meter.Float64Histogram(
 		"mailbox.search.duration",
@@ -176,6 +189,14 @@ func (o *otelInstrumentation) initMetrics(mp metric.MeterProvider) error {
 	o.searchCount, err = meter.Int64Counter(
 		"mailbox.search.count",
 		metric.WithDescription("Number of search operations"),
+	)
+	if err != nil {
+		return err
+	}
+
+	o.searchErrors, err = meter.Int64Counter(
+		"mailbox.search.errors",
+		metric.WithDescription("Number of search errors"),
 	)
 	if err != nil {
 		return err
@@ -199,6 +220,14 @@ func (o *otelInstrumentation) initMetrics(mp metric.MeterProvider) error {
 		return err
 	}
 
+	o.updateErrors, err = meter.Int64Counter(
+		"mailbox.update.errors",
+		metric.WithDescription("Number of update errors"),
+	)
+	if err != nil {
+		return err
+	}
+
 	// Delete metrics
 	o.deleteLatency, err = meter.Float64Histogram(
 		"mailbox.delete.duration",
@@ -217,6 +246,14 @@ func (o *otelInstrumentation) initMetrics(mp metric.MeterProvider) error {
 		return err
 	}
 
+	o.deleteErrors, err = meter.Int64Counter(
+		"mailbox.delete.errors",
+		metric.WithDescription("Number of delete errors"),
+	)
+	if err != nil {
+		return err
+	}
+
 	// Move metrics
 	o.moveLatency, err = meter.Float64Histogram(
 		"mailbox.move.duration",
@@ -230,6 +267,14 @@ func (o *otelInstrumentation) initMetrics(mp metric.MeterProvider) error {
 	o.moveCount, err = meter.Int64Counter(
 		"mailbox.move.count",
 		metric.WithDescription("Number of move operations"),
+	)
+	if err != nil {
+		return err
+	}
+
+	o.moveErrors, err = meter.Int64Counter(
+		"mailbox.move.errors",
+		metric.WithDescription("Number of move errors"),
 	)
 	if err != nil {
 		return err
@@ -291,7 +336,7 @@ func (o *otelInstrumentation) recordGet(ctx context.Context, duration time.Durat
 }
 
 // recordList records list operation metrics.
-func (o *otelInstrumentation) recordList(ctx context.Context, duration time.Duration, folder string, resultCount int) {
+func (o *otelInstrumentation) recordList(ctx context.Context, duration time.Duration, folder string, resultCount int, err error) {
 	if !o.metricsEnabled {
 		return
 	}
@@ -303,10 +348,13 @@ func (o *otelInstrumentation) recordList(ctx context.Context, duration time.Dura
 
 	o.listLatency.Record(ctx, duration.Seconds(), attrs)
 	o.listCount.Add(ctx, 1, attrs)
+	if err != nil {
+		o.listErrors.Add(ctx, 1, attrs)
+	}
 }
 
 // recordSearch records search operation metrics.
-func (o *otelInstrumentation) recordSearch(ctx context.Context, duration time.Duration, resultCount int) {
+func (o *otelInstrumentation) recordSearch(ctx context.Context, duration time.Duration, resultCount int, err error) {
 	if !o.metricsEnabled {
 		return
 	}
@@ -317,10 +365,13 @@ func (o *otelInstrumentation) recordSearch(ctx context.Context, duration time.Du
 
 	o.searchLatency.Record(ctx, duration.Seconds(), attrs)
 	o.searchCount.Add(ctx, 1, attrs)
+	if err != nil {
+		o.searchErrors.Add(ctx, 1, attrs)
+	}
 }
 
 // recordUpdate records update operation metrics.
-func (o *otelInstrumentation) recordUpdate(ctx context.Context, duration time.Duration, operation string) {
+func (o *otelInstrumentation) recordUpdate(ctx context.Context, duration time.Duration, operation string, err error) {
 	if !o.metricsEnabled {
 		return
 	}
@@ -331,10 +382,13 @@ func (o *otelInstrumentation) recordUpdate(ctx context.Context, duration time.Du
 
 	o.updateLatency.Record(ctx, duration.Seconds(), attrs)
 	o.updateCount.Add(ctx, 1, attrs)
+	if err != nil {
+		o.updateErrors.Add(ctx, 1, attrs)
+	}
 }
 
 // recordDelete records delete operation metrics.
-func (o *otelInstrumentation) recordDelete(ctx context.Context, duration time.Duration, permanent bool) {
+func (o *otelInstrumentation) recordDelete(ctx context.Context, duration time.Duration, permanent bool, err error) {
 	if !o.metricsEnabled {
 		return
 	}
@@ -345,10 +399,13 @@ func (o *otelInstrumentation) recordDelete(ctx context.Context, duration time.Du
 
 	o.deleteLatency.Record(ctx, duration.Seconds(), attrs)
 	o.deleteCount.Add(ctx, 1, attrs)
+	if err != nil {
+		o.deleteErrors.Add(ctx, 1, attrs)
+	}
 }
 
 // recordMove records move operation metrics.
-func (o *otelInstrumentation) recordMove(ctx context.Context, duration time.Duration, toFolder string) {
+func (o *otelInstrumentation) recordMove(ctx context.Context, duration time.Duration, toFolder string, err error) {
 	if !o.metricsEnabled {
 		return
 	}
@@ -359,5 +416,8 @@ func (o *otelInstrumentation) recordMove(ctx context.Context, duration time.Dura
 
 	o.moveLatency.Record(ctx, duration.Seconds(), attrs)
 	o.moveCount.Add(ctx, 1, attrs)
+	if err != nil {
+		o.moveErrors.Add(ctx, 1, attrs)
+	}
 }
 

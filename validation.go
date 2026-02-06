@@ -16,6 +16,9 @@ const (
 	// Metadata limits
 	MaxMetadataKeyLength = 256 // Maximum length of a metadata key
 
+	// MaxTagIDLength is the maximum length for a tag ID.
+	MaxTagIDLength = 256
+
 	// MinSubjectLength is the minimum subject length (non-empty after trimming)
 	MinSubjectLength = 1
 )
