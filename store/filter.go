@@ -40,18 +40,13 @@ type Filter interface {
 	Operator() string
 }
 
-// Filters is a filter builder for a specific field.
-type Filters interface {
-	Equal(v any) (Filter, error)
-	NotEqual(v any) (Filter, error)
-	GreaterThan(v any) (Filter, error)
-	GreaterThanEqual(v any) (Filter, error)
-	LessThan(v any) (Filter, error)
-	LessThanEqual(v any) (Filter, error)
-	In(v ...any) (Filter, error)
-	NotIn(v ...any) (Filter, error)
-	Exists(v bool) (Filter, error)
-	Contains(v any) (Filter, error)
+// FilterBuilder builds filters for a specific message field.
+// Use MessageFilter() to create one, then chain a comparison method:
+//
+//	filter, err := store.MessageFilter("CreatedAt").GreaterThan(cutoff)
+type FilterBuilder struct {
+	key string
+	err error
 }
 
 // filter implements Filter.
@@ -94,12 +89,6 @@ func NewFilter(key, operator string, value any) (Filter, error) {
 	return &filter{key: storageKey, value: value, operator: operator}, nil
 }
 
-// filterBuilder implements Filters.
-type filterBuilder struct {
-	key string
-	err error
-}
-
 // FilterError represents an error in filter building.
 type FilterError struct {
 	Key string
@@ -114,31 +103,31 @@ func (e *FilterError) Unwrap() error {
 	return e.Err
 }
 
-func (b *filterBuilder) build(op string, v any) (Filter, error) {
+func (b *FilterBuilder) build(op string, v any) (Filter, error) {
 	if b.err != nil {
 		return nil, &FilterError{Key: b.key, Err: b.err}
 	}
 	return &filter{key: b.key, value: v, operator: op}, nil
 }
 
-func (b *filterBuilder) Equal(v any) (Filter, error)            { return b.build("eq", v) }
-func (b *filterBuilder) NotEqual(v any) (Filter, error)         { return b.build("ne", v) }
-func (b *filterBuilder) GreaterThan(v any) (Filter, error)      { return b.build("gt", v) }
-func (b *filterBuilder) GreaterThanEqual(v any) (Filter, error) { return b.build("gte", v) }
-func (b *filterBuilder) LessThan(v any) (Filter, error)         { return b.build("lt", v) }
-func (b *filterBuilder) LessThanEqual(v any) (Filter, error)    { return b.build("lte", v) }
-func (b *filterBuilder) In(v ...any) (Filter, error)            { return b.build("in", v) }
-func (b *filterBuilder) NotIn(v ...any) (Filter, error)         { return b.build("nin", v) }
-func (b *filterBuilder) Exists(v bool) (Filter, error)          { return b.build("exists", v) }
-func (b *filterBuilder) Contains(v any) (Filter, error)         { return b.build("contains", v) }
+func (b *FilterBuilder) Equal(v any) (Filter, error)            { return b.build("eq", v) }
+func (b *FilterBuilder) NotEqual(v any) (Filter, error)         { return b.build("ne", v) }
+func (b *FilterBuilder) GreaterThan(v any) (Filter, error)      { return b.build("gt", v) }
+func (b *FilterBuilder) GreaterThanEqual(v any) (Filter, error) { return b.build("gte", v) }
+func (b *FilterBuilder) LessThan(v any) (Filter, error)         { return b.build("lt", v) }
+func (b *FilterBuilder) LessThanEqual(v any) (Filter, error)    { return b.build("lte", v) }
+func (b *FilterBuilder) In(v ...any) (Filter, error)            { return b.build("in", v) }
+func (b *FilterBuilder) NotIn(v ...any) (Filter, error)         { return b.build("nin", v) }
+func (b *FilterBuilder) Exists(v bool) (Filter, error)          { return b.build("exists", v) }
+func (b *FilterBuilder) Contains(v any) (Filter, error)         { return b.build("contains", v) }
 
 // MessageFilter returns a filter builder for message fields.
-func MessageFilter(field string) Filters {
+func MessageFilter(field string) *FilterBuilder {
 	key, ok := MessageFieldKey(field)
 	if !ok {
-		return &filterBuilder{key: field, err: fmt.Errorf("unsupported field: %s", field)}
+		return &FilterBuilder{key: field, err: fmt.Errorf("unsupported field: %s", field)}
 	}
-	return &filterBuilder{key: key}
+	return &FilterBuilder{key: key}
 }
 
 // MessageFieldKey maps field names to storage keys.

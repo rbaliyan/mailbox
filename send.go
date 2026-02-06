@@ -135,6 +135,17 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 		}
 
 		deliveredTo = append(deliveredTo, recipientID)
+
+		// Publish per-recipient received event (best-effort, don't fail delivery)
+		if pubErr := m.service.events.MessageReceived.Publish(ctx, MessageReceivedEvent{
+			MessageID:   recipientCopy.GetID(),
+			RecipientID: recipientID,
+			SenderID:    m.userID,
+			Subject:     draft.GetSubject(),
+			ReceivedAt:  time.Now().UTC(),
+		}); pubErr != nil {
+			m.service.opts.safeEventPublishFailure("MessageReceived", pubErr)
+		}
 	}
 
 	return deliveredTo, failedRecipients
@@ -157,25 +168,33 @@ func (m *userMailbox) rollbackSenderMessage(ctx context.Context, senderCopy stor
 }
 
 // finalizeDelivery handles post-delivery tasks: move to sent, draft cleanup, event publishing.
-// Returns the message and any error. If event publishing fails with eventErrorsFatal=true,
-// returns both the message AND an EventPublishError so the caller knows the message was sent.
+// Returns the message and any error. The message is always returned when possible (even on
+// non-event errors) since the message was already created and delivered to recipients.
+// If event publishing fails with eventErrorsFatal=true, returns both the message AND an
+// EventPublishError so the caller knows the message was sent.
 func (m *userMailbox) finalizeDelivery(ctx context.Context, senderCopy store.Message, deliveredTo []string, draft store.DraftMessage, sentAt time.Time) (store.Message, error) {
 	// Move sender's copy to sent folder
 	if err := m.service.store.MoveToFolder(ctx, senderCopy.GetID(), store.FolderSent); err != nil {
-		return nil, fmt.Errorf("move message to sent folder: %w", err)
+		// Message was created and delivered but folder move failed.
+		// Return the sender copy so the caller still has a handle to it.
+		return senderCopy, fmt.Errorf("move message to sent folder: %w", err)
 	}
 
 	// Delete the draft if it was saved
 	if draft.GetID() != "" {
 		if err := m.service.store.DeleteDraft(ctx, draft.GetID()); err != nil {
-			return nil, fmt.Errorf("delete draft after send: %w", err)
+			// Message was sent successfully - log the draft cleanup failure
+			// but don't fail the operation. Orphaned draft is minor.
+			m.service.logger.Warn("failed to delete draft after send",
+				"error", err, "draft_id", draft.GetID())
 		}
 	}
 
 	// Re-fetch to get updated folder
 	updatedCopy, err := m.service.store.Get(ctx, senderCopy.GetID())
 	if err != nil {
-		return nil, fmt.Errorf("fetch updated sender copy: %w", err)
+		// Message was sent but re-fetch failed. Return original sender copy.
+		return senderCopy, fmt.Errorf("fetch updated sender copy: %w", err)
 	}
 
 	// Publish event - do this AFTER we have the updated copy so we can return it even on error

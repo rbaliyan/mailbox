@@ -388,6 +388,13 @@ func (s *service) CleanupTrash(ctx context.Context) (*CleanupTrashResult, error)
 	// A message may have been restored between step 1 and step 2. Verify each
 	// message no longer exists before releasing its attachment refs to prevent
 	// incorrect ref decrements that could cause premature attachment deletion.
+	//
+	// TOCTOU note: There is a small window between Get-check and RemoveRef where
+	// a message could theoretically be re-created with the same attachments, leading
+	// to a double-decrement. In practice this is extremely unlikely (requires exact
+	// same message ID reuse) and the worst case is an orphaned attachment file that
+	// gets cleaned up in the next cycle. True atomic "delete message + release refs"
+	// would require a store-level transaction spanning both stores.
 	if s.attachments != nil {
 		for msgID, attIDs := range messageAttachments {
 			// Verify message was actually deleted (not restored between scan and delete).

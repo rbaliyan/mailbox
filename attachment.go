@@ -99,14 +99,13 @@ func (m *attachmentManager) Upload(ctx context.Context, filename, contentType, h
 	}
 
 	// Create metadata
-	meta := m.metadata.NewAttachmentMetadata()
-	meta.SetFilename(filename)
-	meta.SetContentType(contentType)
-	meta.SetURI(uri)
-	meta.SetHash(hash)
-	meta.SetRefCount(0)
-
-	if err := m.metadata.Create(ctx, meta); err != nil {
+	meta, err := m.metadata.Create(ctx, store.AttachmentCreate{
+		Filename:    filename,
+		ContentType: contentType,
+		URI:         uri,
+		Hash:        hash,
+	})
+	if err != nil {
 		// Try to clean up uploaded file
 		_ = m.files.Delete(ctx, uri)
 		return nil, fmt.Errorf("create metadata: %w", err)
@@ -150,5 +149,62 @@ func (m *attachmentManager) RemoveRef(ctx context.Context, id string) error {
 		}
 	}
 
+	return nil
+}
+
+// addAttachmentRefs increments reference counts for all attachments in a message.
+// On failure, it rolls back any refs that were successfully added.
+func (m *userMailbox) addAttachmentRefs(ctx context.Context, msg store.Message) error {
+	if m.service.attachments == nil {
+		return nil
+	}
+
+	attachments := msg.GetAttachments()
+	added := make([]string, 0, len(attachments))
+
+	for _, a := range attachments {
+		if err := m.service.attachments.AddRef(ctx, a.GetID()); err != nil {
+			m.service.logger.Warn("failed to add attachment ref", "error", err, "attachment_id", a.GetID())
+			// Rollback: release refs for attachments we already added
+			var rollbackFailed map[string]error
+			for _, addedID := range added {
+				if releaseErr := m.service.attachments.RemoveRef(ctx, addedID); releaseErr != nil {
+					m.service.logger.Warn("failed to rollback attachment ref", "error", releaseErr, "attachment_id", addedID)
+					if rollbackFailed == nil {
+						rollbackFailed = make(map[string]error)
+					}
+					rollbackFailed[addedID] = releaseErr
+				}
+			}
+			return &AttachmentRefError{
+				Operation:      "add",
+				Failed:         map[string]error{a.GetID(): err},
+				RollbackFailed: rollbackFailed,
+			}
+		}
+		added = append(added, a.GetID())
+	}
+	return nil
+}
+
+// releaseAttachmentRefs decrements reference counts for all attachments in a message.
+// Returns an error if any ref releases fail (but continues processing all).
+func (m *userMailbox) releaseAttachmentRefs(ctx context.Context, msg store.Message) error {
+	if m.service.attachments == nil {
+		return nil
+	}
+	var failed map[string]error
+	for _, a := range msg.GetAttachments() {
+		if err := m.service.attachments.RemoveRef(ctx, a.GetID()); err != nil {
+			m.service.logger.Warn("failed to release attachment ref", "error", err, "attachment_id", a.GetID())
+			if failed == nil {
+				failed = make(map[string]error)
+			}
+			failed[a.GetID()] = err
+		}
+	}
+	if len(failed) > 0 {
+		return &AttachmentRefError{Operation: "release", Failed: failed}
+	}
 	return nil
 }

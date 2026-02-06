@@ -51,7 +51,9 @@ func (m *userMailbox) UpdateFlags(ctx context.Context, messageID string, flags F
 		}
 
 		// Publish move event
-		m.publishMessageMoved(ctx, messageID, m.userID, oldFolderID, folderID)
+		if err := m.publishMessageMoved(ctx, messageID, m.userID, oldFolderID, folderID); err != nil {
+			return err
+		}
 	}
 
 	// Apply read flag after archive (less severe failure mode if this fails)
@@ -61,12 +63,23 @@ func (m *userMailbox) UpdateFlags(ctx context.Context, messageID string, flags F
 		}
 	}
 
+	// Track the current folder ID for the read event.
+	// If the archive flag changed the folder above, use the new folder.
+	currentFolderID := msg.GetFolderID()
+	if flags.Archived != nil {
+		if *flags.Archived {
+			currentFolderID = store.FolderArchived
+		} else {
+			currentFolderID = defaultFolderForMessage(msg)
+		}
+	}
+
 	// Publish read event (only for marking as read, not unread)
 	if flags.Read != nil && *flags.Read {
 		if err := m.service.events.MessageRead.Publish(ctx, MessageReadEvent{
 			MessageID: messageID,
 			UserID:    m.userID,
-			FolderID:  msg.GetFolderID(),
+			FolderID:  currentFolderID,
 			ReadAt:    time.Now().UTC(),
 		}); err != nil {
 			if m.service.opts.eventErrorsFatal {
@@ -112,7 +125,9 @@ func (m *userMailbox) Delete(ctx context.Context, messageID string) (retErr erro
 	}
 
 	// Publish move event
-	m.publishMessageMoved(ctx, messageID, m.userID, oldFolderID, store.FolderTrash)
+	if err := m.publishMessageMoved(ctx, messageID, m.userID, oldFolderID, store.FolderTrash); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -146,7 +161,9 @@ func (m *userMailbox) Restore(ctx context.Context, messageID string) (retErr err
 	}
 
 	// Publish move event
-	m.publishMessageMoved(ctx, messageID, m.userID, store.FolderTrash, folderID)
+	if err := m.publishMessageMoved(ctx, messageID, m.userID, store.FolderTrash, folderID); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -239,7 +256,9 @@ func (m *userMailbox) MoveToFolder(ctx context.Context, messageID, folderID stri
 	}
 
 	// Publish move event
-	m.publishMessageMoved(ctx, messageID, m.userID, oldFolderID, folderID)
+	if err := m.publishMessageMoved(ctx, messageID, m.userID, oldFolderID, folderID); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -302,135 +321,18 @@ func (m *userMailbox) RemoveTag(ctx context.Context, messageID, tagID string) er
 	return nil
 }
 
-// BulkUpdateFlags updates flags on multiple messages by ID.
-func (m *userMailbox) BulkUpdateFlags(ctx context.Context, messageIDs []string, flags Flags) (*BulkResult, error) {
-	return m.bulkOp(ctx, messageIDs, func(id string) error {
-		return m.UpdateFlags(ctx, id, flags)
-	})
-}
-
-// BulkMove moves multiple messages to a folder by ID.
-func (m *userMailbox) BulkMove(ctx context.Context, messageIDs []string, folderID string) (*BulkResult, error) {
-	return m.bulkOp(ctx, messageIDs, func(id string) error {
-		return m.MoveToFolder(ctx, id, folderID)
-	})
-}
-
-// BulkDelete moves multiple messages to trash by ID.
-func (m *userMailbox) BulkDelete(ctx context.Context, messageIDs []string) (*BulkResult, error) {
-	return m.bulkOp(ctx, messageIDs, func(id string) error {
-		return m.Delete(ctx, id)
-	})
-}
-
-// BulkAddTag adds a tag to multiple messages by ID.
-func (m *userMailbox) BulkAddTag(ctx context.Context, messageIDs []string, tagID string) (*BulkResult, error) {
-	return m.bulkOp(ctx, messageIDs, func(id string) error {
-		return m.AddTag(ctx, id, tagID)
-	})
-}
-
-// BulkRemoveTag removes a tag from multiple messages by ID.
-func (m *userMailbox) BulkRemoveTag(ctx context.Context, messageIDs []string, tagID string) (*BulkResult, error) {
-	return m.bulkOp(ctx, messageIDs, func(id string) error {
-		return m.RemoveTag(ctx, id, tagID)
-	})
-}
-
-// bulkOp applies an operation to each message ID, collecting results.
-// Checks for context cancellation between iterations to support early termination.
-func (m *userMailbox) bulkOp(ctx context.Context, messageIDs []string, op func(id string) error) (*BulkResult, error) {
-	if err := m.checkAccess(); err != nil {
-		return nil, err
-	}
-
-	result := &BulkResult{Results: make([]OperationResult, 0, len(messageIDs))}
-	for i, id := range messageIDs {
-		if err := ctx.Err(); err != nil {
-			// Batch-append all remaining items as cancelled and break
-			for _, remaining := range messageIDs[i:] {
-				result.Results = append(result.Results, OperationResult{ID: remaining, Error: err})
-			}
-			break
-		}
-		res := OperationResult{ID: id}
-		if err := op(id); err != nil {
-			res.Error = err
-		} else {
-			res.Success = true
-		}
-		result.Results = append(result.Results, res)
-	}
-	return result, result.Err()
-}
-
 // Helper methods
 
 func (m *userMailbox) canAccess(msg store.Message) bool {
 	return msg.GetOwnerID() == m.userID
 }
 
-// addAttachmentRefs increments reference counts for all attachments in a message.
-// On failure, it rolls back any refs that were successfully added.
-func (m *userMailbox) addAttachmentRefs(ctx context.Context, msg store.Message) error {
-	if m.service.attachments == nil {
-		return nil
-	}
-
-	attachments := msg.GetAttachments()
-	added := make([]string, 0, len(attachments))
-
-	for _, a := range attachments {
-		if err := m.service.attachments.AddRef(ctx, a.GetID()); err != nil {
-			m.service.logger.Warn("failed to add attachment ref", "error", err, "attachment_id", a.GetID())
-			// Rollback: release refs for attachments we already added
-			var rollbackFailed map[string]error
-			for _, addedID := range added {
-				if releaseErr := m.service.attachments.RemoveRef(ctx, addedID); releaseErr != nil {
-					m.service.logger.Warn("failed to rollback attachment ref", "error", releaseErr, "attachment_id", addedID)
-					if rollbackFailed == nil {
-						rollbackFailed = make(map[string]error)
-					}
-					rollbackFailed[addedID] = releaseErr
-				}
-			}
-			return &AttachmentRefError{
-				Operation:      "add",
-				Failed:         map[string]error{a.GetID(): err},
-				RollbackFailed: rollbackFailed,
-			}
-		}
-		added = append(added, a.GetID())
-	}
-	return nil
-}
-
-// releaseAttachmentRefs decrements reference counts for all attachments in a message.
-// Returns an error if any ref releases fail (but continues processing all).
-func (m *userMailbox) releaseAttachmentRefs(ctx context.Context, msg store.Message) error {
-	if m.service.attachments == nil {
-		return nil
-	}
-	var failed map[string]error
-	for _, a := range msg.GetAttachments() {
-		if err := m.service.attachments.RemoveRef(ctx, a.GetID()); err != nil {
-			m.service.logger.Warn("failed to release attachment ref", "error", err, "attachment_id", a.GetID())
-			if failed == nil {
-				failed = make(map[string]error)
-			}
-			failed[a.GetID()] = err
-		}
-	}
-	if len(failed) > 0 {
-		return &AttachmentRefError{Operation: "release", Failed: failed}
-	}
-	return nil
-}
-
-// publishMessageMoved publishes a MessageMoved event, swallowing errors.
-func (m *userMailbox) publishMessageMoved(ctx context.Context, messageID, userID, fromFolderID, toFolderID string) {
+// publishMessageMoved publishes a MessageMoved event.
+// Returns an EventPublishError when eventErrorsFatal is true and publishing fails.
+// Otherwise, logs the failure and returns nil.
+func (m *userMailbox) publishMessageMoved(ctx context.Context, messageID, userID, fromFolderID, toFolderID string) error {
 	if fromFolderID == toFolderID {
-		return
+		return nil
 	}
 	if err := m.service.events.MessageMoved.Publish(ctx, MessageMovedEvent{
 		MessageID:    messageID,
@@ -440,9 +342,13 @@ func (m *userMailbox) publishMessageMoved(ctx context.Context, messageID, userID
 		MovedAt:      time.Now().UTC(),
 	}); err != nil {
 		if m.service.opts.eventErrorsFatal {
-			m.service.logger.Error("failed to publish MessageMoved event", "error", err, "message_id", messageID)
-		} else {
-			m.service.opts.safeEventPublishFailure("MessageMoved", err)
+			return &EventPublishError{
+				Event:     "MessageMoved",
+				MessageID: messageID,
+				Err:       err,
+			}
 		}
+		m.service.opts.safeEventPublishFailure("MessageMoved", err)
 	}
+	return nil
 }

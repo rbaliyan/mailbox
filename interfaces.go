@@ -21,19 +21,11 @@ const (
 	SortDesc = store.SortDesc
 )
 
-// ServiceHealth provides health and state information about the service.
-type ServiceHealth interface {
-	// IsConnected returns true if the service is connected and ready.
-	IsConnected() bool
-}
-
 // Service manages the mailbox system (server-side).
 // It handles connections to storage and creates mailbox clients.
-//
-// Composed of:
-//   - ServiceHealth: Health and state queries (IsConnected)
 type Service interface {
-	ServiceHealth
+	// IsConnected returns true if the service is connected and ready.
+	IsConnected() bool
 
 	// Connect establishes connections to storage backends.
 	Connect(ctx context.Context) error
@@ -126,7 +118,7 @@ type DraftListMutator interface {
 	// Send sends all drafts in this list.
 	// Returns results for each draft (success or failure).
 	// Use result.SentMessages() to access the sent messages.
-	Send(ctx context.Context) (*BulkResult, error)
+	Send(ctx context.Context) (*DraftSendResult, error)
 }
 
 // DraftList provides access to a paginated list of drafts with bulk operations.
@@ -273,5 +265,6 @@ type Mailbox interface {
 	MessageSender
 	BulkOperator
 	AttachmentResolver
-	StatsReader
+	// Stats returns aggregate statistics for this user's mailbox.
+	Stats(ctx context.Context) (*store.MailboxStats, error)
 }

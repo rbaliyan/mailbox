@@ -152,6 +152,8 @@ func newOptions(opts ...Option) *options {
 // Option configures a mailbox.
 type Option func(*options)
 
+// --- Core Options ---
+
 // WithStore sets the storage backend (required).
 func WithStore(s store.Store) Option {
 	return func(o *options) {
@@ -169,6 +171,8 @@ func WithLogger(l *slog.Logger) Option {
 		}
 	}
 }
+
+// --- Plugin/Extension Options ---
 
 // WithPlugin registers a plugin with the mailbox service.
 // Plugins can hook into message lifecycle events.
@@ -203,6 +207,8 @@ func WithAttachmentManager(m store.AttachmentManager) Option {
 	}
 }
 
+// --- Trash Options ---
+
 // WithTrashRetention sets how long messages stay in trash before cleanup.
 // Default is 30 days. Minimum is 1 day.
 func WithTrashRetention(d time.Duration) Option {
@@ -212,6 +218,8 @@ func WithTrashRetention(d time.Duration) Option {
 		}
 	}
 }
+
+// --- OTel Options ---
 
 // WithTracing enables or disables OpenTelemetry tracing.
 // When enabled, spans are created for all mailbox operations.
@@ -271,7 +279,7 @@ func WithMeterProvider(mp metric.MeterProvider) Option {
 	}
 }
 
-// Message limit options (only the critical ones that users commonly need to adjust)
+// --- Message Limit Options ---
 
 // WithMaxBodySize sets the maximum body size in bytes.
 // Default is 10 MB.
@@ -343,6 +351,8 @@ func WithMaxMetadataKeys(n int) Option {
 	}
 }
 
+// --- Query Limit Options ---
+
 // WithMaxQueryLimit sets the maximum number of messages per query.
 // Any query requesting more than this limit will be capped.
 // Default is 100.
@@ -365,6 +375,8 @@ func WithDefaultQueryLimit(n int) Option {
 		}
 	}
 }
+
+// --- Concurrency Options ---
 
 // WithMaxConcurrentSends sets the maximum number of concurrent send operations.
 // This prevents resource exhaustion when many messages are being sent simultaneously.
@@ -389,6 +401,8 @@ func WithShutdownTimeout(d time.Duration) Option {
 	}
 }
 
+// --- Stats Options ---
+
 // WithStatsRefreshInterval sets the TTL for cached mailbox stats.
 // After this duration, the next Stats() call will refresh from the store.
 // Event-driven incremental updates keep the cache approximately correct between refreshes.
@@ -400,6 +414,8 @@ func WithStatsRefreshInterval(d time.Duration) Option {
 		}
 	}
 }
+
+// --- Event Options ---
 
 // WithEventErrorsFatal configures whether event publishing failures should
 // cause the operation to fail. By default, event failures are logged but

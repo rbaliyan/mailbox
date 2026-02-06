@@ -350,7 +350,7 @@ func (s *Store) buildWhereClause(filters []store.Filter) (string, []any) {
 }
 
 func (s *Store) filterToCondition(f store.Filter, argIdx *int) (string, any) {
-	key, ok := s.mapFilterKey(f.Key())
+	key, ok := store.MessageFieldKey(f.Key())
 	if !ok {
 		return "", nil
 	}
@@ -410,37 +410,6 @@ func (s *Store) filterToCondition(f store.Filter, argIdx *int) (string, any) {
 		return fmt.Sprintf("(%s IS NULL OR %s = '')", key, key), nil
 	default:
 		return "", nil
-	}
-}
-
-func (s *Store) mapFilterKey(key string) (string, bool) {
-	switch key {
-	case "id":
-		return "id", true
-	case "OwnerID", "owner_id":
-		return "owner_id", true
-	case "SenderID", "sender_id":
-		return "sender_id", true
-	case "RecipientIDs", "recipient_ids":
-		return "recipient_ids", true
-	case "Status", "status":
-		return "status", true
-	case "FolderID", "folder_id":
-		return "folder_id", true
-	case "IsRead", "is_read":
-		return "is_read", true
-	case "Tags", "tags":
-		return "tags", true
-	case "CreatedAt", "created_at":
-		return "created_at", true
-	case "UpdatedAt", "updated_at":
-		return "updated_at", true
-	case "ThreadID", "thread_id":
-		return "thread_id", true
-	case "ReplyToID", "reply_to_id":
-		return "reply_to_id", true
-	default:
-		return "", false
 	}
 }
 

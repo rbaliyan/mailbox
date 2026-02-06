@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"io"
-	"time"
 )
 
 // AttachmentMetadata extends Attachment with reference tracking.
@@ -18,32 +17,28 @@ type AttachmentMetadata interface {
 	GetRefCount() int
 }
 
-// MutableAttachmentMetadata extends AttachmentMetadata with mutation methods.
-type MutableAttachmentMetadata interface {
-	AttachmentMetadata
-
-	SetID(id string)
-	SetFilename(filename string)
-	SetContentType(contentType string)
-	SetSize(size int64)
-	SetURI(uri string)
-	SetHash(hash string)
-	SetRefCount(count int)
-	SetCreatedAt(t time.Time)
+// AttachmentCreate holds data for creating new attachment metadata.
+type AttachmentCreate struct {
+	Filename    string
+	ContentType string
+	Size        int64
+	URI         string
+	Hash        string
 }
 
 // AttachmentMetadataStore manages attachment metadata with reference counting.
 // This enables safe deletion of attachment files when no messages reference them.
 type AttachmentMetadataStore interface {
 	// Create stores new attachment metadata with initial ref count of 0.
-	Create(ctx context.Context, meta MutableAttachmentMetadata) error
+	// Returns the created metadata with generated ID and timestamps.
+	Create(ctx context.Context, data AttachmentCreate) (AttachmentMetadata, error)
 
 	// Get retrieves attachment metadata by ID.
-	Get(ctx context.Context, id string) (MutableAttachmentMetadata, error)
+	Get(ctx context.Context, id string) (AttachmentMetadata, error)
 
 	// GetByHash finds attachment by content hash for deduplication.
 	// Returns ErrNotFound if no attachment with the hash exists.
-	GetByHash(ctx context.Context, hash string) (MutableAttachmentMetadata, error)
+	GetByHash(ctx context.Context, hash string) (AttachmentMetadata, error)
 
 	// IncrementRef atomically increments the reference count.
 	// Called when a message with this attachment is created.
@@ -69,9 +64,6 @@ type AttachmentMetadataStore interface {
 	// Delete removes attachment metadata.
 	// Should only be called when ref count is 0.
 	Delete(ctx context.Context, id string) error
-
-	// NewAttachmentMetadata creates a new mutable attachment metadata instance.
-	NewAttachmentMetadata() MutableAttachmentMetadata
 }
 
 // AttachmentFileStore handles the actual file storage operations.

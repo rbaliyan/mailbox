@@ -387,4 +387,9 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 }
 
 // Compile-time check that Store implements store.Store.
-var _ store.Store = (*Store)(nil)
+var (
+	_ store.Store           = (*Store)(nil)
+	_ store.FolderCounter   = (*Store)(nil)
+	_ store.FindWithCounter = (*Store)(nil)
+	_ store.FolderLister    = (*Store)(nil)
+)

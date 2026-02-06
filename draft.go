@@ -45,6 +45,11 @@ type DraftPreparer interface {
 	// It looks up the parent message to inherit the thread ID.
 	// Returns an error if the parent message cannot be found or accessed.
 	ReplyTo(ctx context.Context, messageID string) error
+
+	// Forward prepares this draft as a forward of another message.
+	// Copies subject (with "Fwd:" prefix), body, and attachments from the original.
+	// Returns an error if the original message cannot be found or accessed.
+	Forward(ctx context.Context, messageID string) error
 }
 
 // DraftPublisher provides lifecycle operations that transform or persist a draft.
@@ -238,6 +243,38 @@ func (d *draft) ReplyTo(ctx context.Context, messageID string) error {
 	return nil
 }
 
+// Forward prepares this draft as a forward of another message.
+// Copies subject (with "Fwd:" prefix), body, and attachments from the original.
+func (d *draft) Forward(ctx context.Context, messageID string) error {
+	if messageID == "" {
+		return &ValidationError{Field: "message_id", Message: "message ID is required for forward"}
+	}
+
+	original, err := d.mailbox.service.store.Get(ctx, messageID)
+	if err != nil {
+		return fmt.Errorf("get original message: %w", err)
+	}
+
+	if !d.mailbox.canAccess(original) {
+		return ErrUnauthorized
+	}
+
+	// Copy subject with "Fwd:" prefix (avoid double-prefixing)
+	subject := original.GetSubject()
+	if len(subject) < 4 || subject[:4] != "Fwd:" {
+		subject = "Fwd: " + subject
+	}
+	d.message.SetSubject(subject)
+	d.message.SetBody(original.GetBody())
+
+	// Copy attachments
+	for _, a := range original.GetAttachments() {
+		d.message.AddAttachment(a)
+	}
+
+	return nil
+}
+
 // ThreadID returns the thread ID if this is part of a thread.
 func (d *draft) ThreadID() string {
 	return d.threadID
@@ -314,7 +351,16 @@ func (l *draftList) IDs() []string {
 func (l *draftList) Delete(ctx context.Context) (*BulkResult, error) {
 	result := &BulkResult{Results: make([]OperationResult, 0, len(l.drafts))}
 
-	for _, draft := range l.drafts {
+	for i, draft := range l.drafts {
+		if err := ctx.Err(); err != nil {
+			// Batch-append all remaining items as cancelled and break
+			for _, remaining := range l.drafts[i:] {
+				if remaining.ID() != "" {
+					result.Results = append(result.Results, OperationResult{ID: remaining.ID(), Error: err})
+				}
+			}
+			break
+		}
 		if draft.ID() == "" {
 			continue // Skip unsaved drafts
 		}
@@ -331,10 +377,22 @@ func (l *draftList) Delete(ctx context.Context) (*BulkResult, error) {
 }
 
 // Send sends all drafts in this list.
-func (l *draftList) Send(ctx context.Context) (*BulkResult, error) {
+func (l *draftList) Send(ctx context.Context) (*DraftSendResult, error) {
 	result := &BulkResult{Results: make([]OperationResult, 0, len(l.drafts))}
+	var sentMessages []Message
 
-	for _, draft := range l.drafts {
+	for i, draft := range l.drafts {
+		if err := ctx.Err(); err != nil {
+			// Batch-append all remaining items as cancelled and break
+			for _, remaining := range l.drafts[i:] {
+				draftID := remaining.ID()
+				if draftID == "" {
+					draftID = "unsaved-draft"
+				}
+				result.Results = append(result.Results, OperationResult{ID: draftID, Error: err})
+			}
+			break
+		}
 		draftID := draft.ID()
 		if draftID == "" {
 			draftID = "unsaved-draft"
@@ -345,10 +403,10 @@ func (l *draftList) Send(ctx context.Context) (*BulkResult, error) {
 			res.Error = err
 		} else {
 			res.Success = true
-			res.Message = msg
+			sentMessages = append(sentMessages, msg)
 		}
 		result.Results = append(result.Results, res)
 	}
 
-	return result, result.Err()
+	return &DraftSendResult{BulkResult: result, sentMessages: sentMessages}, result.Err()
 }

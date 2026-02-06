@@ -11,10 +11,11 @@ import (
 
 // Event names for mailbox events.
 const (
-	EventNameMessageSent    = "mailbox.message.sent"
-	EventNameMessageRead    = "mailbox.message.read"
-	EventNameMessageDeleted = "mailbox.message.deleted"
-	EventNameMessageMoved   = "mailbox.message.moved"
+	EventNameMessageSent     = "mailbox.message.sent"
+	EventNameMessageReceived = "mailbox.message.received"
+	EventNameMessageRead     = "mailbox.message.read"
+	EventNameMessageDeleted  = "mailbox.message.deleted"
+	EventNameMessageMoved    = "mailbox.message.moved"
 )
 
 // MessageSentEvent is published when a message is sent.
@@ -25,6 +26,16 @@ type MessageSentEvent struct {
 	RecipientIDs []string  `json:"recipient_ids"`
 	Subject      string    `json:"subject"`
 	SentAt       time.Time `json:"sent_at"`
+}
+
+// MessageReceivedEvent is published when a message is delivered to a recipient.
+// One event is published per recipient. Use this for notifications and presence updates.
+type MessageReceivedEvent struct {
+	MessageID   string    `json:"message_id"`
+	RecipientID string    `json:"recipient_id"`
+	SenderID    string    `json:"sender_id"`
+	Subject     string    `json:"subject"`
+	ReceivedAt  time.Time `json:"received_at"`
 }
 
 // MessageReadEvent is published when a message is marked as read.
@@ -67,6 +78,10 @@ var (
 	// Deprecated: Use Service.Events().MessageSent instead.
 	EventMessageSent = event.New[MessageSentEvent](EventNameMessageSent)
 
+	// EventMessageReceived is published when a message is delivered to a recipient.
+	// Deprecated: Use Service.Events().MessageReceived instead.
+	EventMessageReceived = event.New[MessageReceivedEvent](EventNameMessageReceived)
+
 	// EventMessageRead is published when a message is marked as read.
 	// Deprecated: Use Service.Events().MessageRead instead.
 	EventMessageRead = event.New[MessageReadEvent](EventNameMessageRead)
@@ -93,6 +108,9 @@ type ServiceEvents struct {
 	// MessageSent is published when a message is sent.
 	MessageSent event.Event[MessageSentEvent]
 
+	// MessageReceived is published when a message is delivered to a recipient.
+	MessageReceived event.Event[MessageReceivedEvent]
+
 	// MessageRead is published when a message is marked as read.
 	MessageRead event.Event[MessageReadEvent]
 
@@ -106,10 +124,11 @@ type ServiceEvents struct {
 // newServiceEvents creates per-service event instances with a unique name prefix.
 func newServiceEvents(namePrefix string) *ServiceEvents {
 	return &ServiceEvents{
-		MessageSent:    event.New[MessageSentEvent](namePrefix + "." + EventNameMessageSent),
-		MessageRead:    event.New[MessageReadEvent](namePrefix + "." + EventNameMessageRead),
-		MessageDeleted: event.New[MessageDeletedEvent](namePrefix + "." + EventNameMessageDeleted),
-		MessageMoved:   event.New[MessageMovedEvent](namePrefix + "." + EventNameMessageMoved),
+		MessageSent:     event.New[MessageSentEvent](namePrefix + "." + EventNameMessageSent),
+		MessageReceived: event.New[MessageReceivedEvent](namePrefix + "." + EventNameMessageReceived),
+		MessageRead:     event.New[MessageReadEvent](namePrefix + "." + EventNameMessageRead),
+		MessageDeleted:  event.New[MessageDeletedEvent](namePrefix + "." + EventNameMessageDeleted),
+		MessageMoved:    event.New[MessageMovedEvent](namePrefix + "." + EventNameMessageMoved),
 	}
 }
 
@@ -117,6 +136,9 @@ func newServiceEvents(namePrefix string) *ServiceEvents {
 func registerServiceEvents(ctx context.Context, bus *event.Bus, events *ServiceEvents) error {
 	if err := event.Register(ctx, bus, events.MessageSent); err != nil {
 		return fmt.Errorf("register MessageSent: %w", err)
+	}
+	if err := event.Register(ctx, bus, events.MessageReceived); err != nil {
+		return fmt.Errorf("register MessageReceived: %w", err)
 	}
 	if err := event.Register(ctx, bus, events.MessageRead); err != nil {
 		return fmt.Errorf("register MessageRead: %w", err)
@@ -138,6 +160,7 @@ func registerServiceEvents(ctx context.Context, bus *event.Bus, events *ServiceE
 func registerEvents(ctx context.Context, bus *event.Bus) error {
 	events := []any{
 		EventMessageSent,
+		EventMessageReceived,
 		EventMessageRead,
 		EventMessageDeleted,
 		EventMessageMoved,
@@ -155,6 +178,8 @@ func registerEvents(ctx context.Context, bus *event.Bus) error {
 func registerEvent(ctx context.Context, bus *event.Bus, ev any) error {
 	switch v := ev.(type) {
 	case event.Event[MessageSentEvent]:
+		return tryRegister(ctx, bus, v)
+	case event.Event[MessageReceivedEvent]:
 		return tryRegister(ctx, bus, v)
 	case event.Event[MessageReadEvent]:
 		return tryRegister(ctx, bus, v)

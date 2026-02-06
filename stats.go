@@ -14,9 +14,6 @@ type StatsReader interface {
 	// Stats returns aggregate statistics for this user's mailbox.
 	// Results are cached with event-driven incremental updates and periodic TTL refresh.
 	Stats(ctx context.Context) (*store.MailboxStats, error)
-	// UnreadCount returns the total unread message count for this user's mailbox.
-	// This is a convenience method equivalent to calling Stats() and reading UnreadCount.
-	UnreadCount(ctx context.Context) (int64, error)
 }
 
 // statsEntry holds a cached stats snapshot for a single user.
@@ -181,14 +178,3 @@ func (m *userMailbox) Stats(ctx context.Context) (*store.MailboxStats, error) {
 	return m.service.getOrRefreshStats(ctx, m.userID)
 }
 
-// UnreadCount returns the total unread message count for this user's mailbox.
-func (m *userMailbox) UnreadCount(ctx context.Context) (int64, error) {
-	if err := m.checkAccess(); err != nil {
-		return 0, err
-	}
-	stats, err := m.service.getOrRefreshStats(ctx, m.userID)
-	if err != nil {
-		return 0, err
-	}
-	return stats.UnreadCount, nil
-}

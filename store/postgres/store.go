@@ -16,8 +16,13 @@ import (
 	"github.com/rbaliyan/mailbox/store"
 )
 
-// Compile-time check
-var _ store.Store = (*Store)(nil)
+// Compile-time checks
+var (
+	_ store.Store           = (*Store)(nil)
+	_ store.FolderCounter   = (*Store)(nil)
+	_ store.FindWithCounter = (*Store)(nil)
+	_ store.FolderLister    = (*Store)(nil)
+)
 
 // Store implements store.Store using PostgreSQL.
 type Store struct {

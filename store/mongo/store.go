@@ -15,8 +15,13 @@ import (
 	mongoopts "go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-// Compile-time check
-var _ store.Store = (*Store)(nil)
+// Compile-time checks
+var (
+	_ store.Store           = (*Store)(nil)
+	_ store.FolderCounter   = (*Store)(nil)
+	_ store.FindWithCounter = (*Store)(nil)
+	_ store.FolderLister    = (*Store)(nil)
+)
 
 // Store implements store.Store using MongoDB.
 type Store struct {
