@@ -1,19 +1,43 @@
 # Mailbox
 
-A Go library for email-like messaging with pluggable storage backends and real-time events.
+A Go library for persistent, addressable messaging between users or services. Every message has an owner, a lifecycle, and mutable state — making it suitable for user-to-user communication, service-to-service coordination, and async job delivery where sender and receiver don't need to be online at the same time.
+
+## Why Mailbox
+
+Most messaging infrastructure (Kafka, Redis Streams, NATS) treats messages as immutable records in a stream — consumed, acknowledged, and forgotten. Mailbox treats messages as **documents in an addressable namespace**: they persist until explicitly removed, carry mutable state (read/unread, folders, tags), and support rich queries. This makes it the right fit when:
+
+- Messages are **addressed to a specific entity** (user, service, worker) rather than broadcast to a topic
+- Recipients need to **query, filter, and manage** their messages — not just consume a stream
+- Sender and receiver may **not exist at the same time** — messages wait in the recipient's mailbox
+- Each message has a **lifecycle** beyond produce/consume — drafts, delivery, read receipts, archival, deletion
+- **Independent per-recipient state** matters — one recipient deletes their copy while others keep theirs
+
+## Use Cases
+
+**User-to-user messaging** — in-app messaging, support tickets, notifications with read tracking, threaded conversations, folder organization.
+
+**Async service coordination** — Service A sends a task to Service B's mailbox. Service B reads it when it starts, processes it, marks it read. If Service B crashes and restarts, unread messages are still in its inbox. Results go back to Service A's mailbox. Metadata carries structured payloads; tags categorize work; folders separate priorities.
+
+**Job delivery with persistence** — A job producer fans out work to worker mailboxes. Workers query their inbox for unprocessed (unread) jobs, process them, and mark them done. Failed jobs stay in the inbox. No message is lost because delivery is idempotent and storage is durable.
+
+**Audit-friendly communication** — Messages persist with user-controlled retention. Soft delete allows recovery. Every state change (send, read, delete) can publish events for downstream logging.
 
 ## Features
 
+- **Persistent Addressable Messaging** - Messages belong to owners, persist until removed
+- **Idempotent Delivery** - Per-recipient deduplication with safe retry after partial failure
+- **Mutable Message State** - Read/unread, folders, tags, metadata on every message
 - **Draft Composition** - Fluent API for composing messages
-- **Message Management** - Send, receive, read/unread, folders, tags
 - **Thread Support** - Conversation threading with replies
-- **Soft Delete** - Trash with restore and cleanup
+- **Fan-Out with Independent State** - Each recipient gets their own copy to manage
 - **Full-Text Search** - Search across subject, body, and metadata
-- **File Attachments** - S3 and GCS support
-- **Real-Time Events** - Event publishing for real-time notifications
+- **Stats with Event-Driven Cache** - Per-user aggregate counts with incremental updates
+- **File Attachments** - S3 and GCS with reference counting and deduplication
+- **Real-Time Events** - Publish message lifecycle events to Redis Streams, NATS, Kafka, or any transport
 - **Multiple Backends** - MongoDB, PostgreSQL, in-memory storage
-- **Plugin System** - Extensible hooks for custom logic
+- **Plugin System** - Extensible hooks for send-time validation and filtering
 - **OpenTelemetry** - Built-in tracing and metrics
+- **Soft Delete** - Trash with restore and configurable retention cleanup
 
 ## Installation
 
@@ -74,6 +98,31 @@ func main() {
     log.Printf("Sent message: %s", msg.GetID())
 }
 ```
+
+### Service-to-Service Example
+
+Services use mailboxes the same way users do. A service's identity is just a string.
+
+```go
+// Job producer: send work to the image-resizer service
+producer := svc.Client("api-gateway")
+_, err := producer.SendMessage(ctx, mailbox.SendRequest{
+    RecipientIDs: []string{"image-resizer"},
+    Subject:      "resize",
+    Body:         `{"url": "s3://bucket/photo.jpg", "width": 800}`,
+    Metadata:     map[string]any{"job_id": "j-9281", "priority": "high"},
+})
+
+// Job consumer: process pending work (possibly on a different host, started later)
+worker := svc.Client("image-resizer")
+inbox, _ := worker.Inbox(ctx, store.ListOptions{})
+for _, job := range inbox.All() {
+    process(job.GetBody(), job.GetMetadata())
+    worker.UpdateFlags(ctx, job.GetID(), mailbox.Flags{Read: boolPtr(true)})
+}
+```
+
+Messages wait in the recipient's inbox regardless of whether the consumer is running. Restarted consumers pick up where they left off by querying for unread messages.
 
 ## Storage Backends
 
@@ -504,26 +553,38 @@ saved, err := draft.Save(ctx)
 
 ## Architecture
 
+### Addressable, Not Topic-Based
+
+Unlike message brokers where you publish to topics and consumers subscribe, Mailbox delivers to named recipients. Each recipient gets an independent copy with its own state. This is the same model as email (IMAP/JMAP) — but as a library, without protocol overhead.
+
+```
+Producer ──send──> Mailbox Store ──query──> Consumer
+                   (persists)               (reads when ready)
+```
+
+Producers and consumers are temporally decoupled. Messages persist in the store and can be queried, filtered, and managed by the recipient at any point. This makes it natural for async workflows where the consumer may not be running when the message is sent.
+
 ### No Distributed Locks
 
-This library avoids distributed locks entirely. All concurrency is handled through:
+All concurrency is handled through database-native atomicity:
 
 1. **Atomic Database Operations** - MongoDB `findOneAndUpdate`, PostgreSQL `INSERT ON CONFLICT`
-2. **Optimistic Concurrency** - Version fields with retry on conflict
+2. **Idempotent Delivery** - Per-recipient deduplication keys prevent duplicates on retry
 3. **Transactional Batches** - Database transactions for multi-document atomicity
 
 ### Store Interface
 
-The store is composed of three sub-interfaces:
+The store is composed of four sub-interfaces:
 
 - **DraftStore** - Mutable draft operations
-- **MessageStore** - Read-only message operations with specific mutations
+- **MessageStore** - Message queries and state mutations
 - **MaintenanceStore** - Background maintenance operations
+- **StatsStore** - Aggregate mailbox statistics
 
 ### Service vs Client
 
-- **Service** - Manages connections, configuration, and shared resources
-- **Client** - User-specific mailbox operations (obtained via `svc.Client(userID)`)
+- **Service** - Singleton that manages connections, configuration, and shared resources
+- **Client** - Lightweight, per-identity handle (obtained via `svc.Client(id)`) — works for users and services alike
 
 ## License
 
