@@ -2,7 +2,6 @@ package mailbox
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/rbaliyan/mailbox/store"
 )
@@ -159,131 +158,6 @@ type MessageList interface {
 	MessageListMutator
 }
 
-// OperationResult contains the result of a single operation within a bulk operation.
-// Results are returned in the same order as the input items.
-type OperationResult struct {
-	// ID is the identifier of the item that was processed.
-	ID string
-	// Success indicates whether the operation succeeded.
-	Success bool
-	// Error contains the error if the operation failed (nil if successful).
-	Error error
-	// Message contains the sent message (only for DraftList.Send, only if successful).
-	Message Message
-}
-
-// BulkResult contains the result of a bulk operation.
-// Used consistently across MessageList and DraftList operations.
-//
-// Results are returned in order, matching the input order.
-// Use helper methods to check status and iterate results.
-type BulkResult struct {
-	// Results contains the outcome of each operation in input order.
-	Results []OperationResult
-}
-
-// SuccessCount returns the number of successful operations.
-func (r *BulkResult) SuccessCount() int {
-	count := 0
-	for _, res := range r.Results {
-		if res.Success {
-			count++
-		}
-	}
-	return count
-}
-
-// FailureCount returns the number of failed operations.
-func (r *BulkResult) FailureCount() int {
-	count := 0
-	for _, res := range r.Results {
-		if !res.Success {
-			count++
-		}
-	}
-	return count
-}
-
-// HasFailures returns true if any operations failed.
-func (r *BulkResult) HasFailures() bool {
-	for _, res := range r.Results {
-		if !res.Success {
-			return true
-		}
-	}
-	return false
-}
-
-// TotalCount returns the total number of items processed.
-func (r *BulkResult) TotalCount() int {
-	return len(r.Results)
-}
-
-// FailedIDs returns the IDs of items that failed.
-func (r *BulkResult) FailedIDs() []string {
-	var ids []string
-	for _, res := range r.Results {
-		if !res.Success {
-			ids = append(ids, res.ID)
-		}
-	}
-	return ids
-}
-
-// SuccessfulIDs returns the IDs of items that succeeded.
-func (r *BulkResult) SuccessfulIDs() []string {
-	var ids []string
-	for _, res := range r.Results {
-		if res.Success {
-			ids = append(ids, res.ID)
-		}
-	}
-	return ids
-}
-
-// SentMessages returns all successfully sent messages (for DraftList.Send operations).
-func (r *BulkResult) SentMessages() []Message {
-	var msgs []Message
-	for _, res := range r.Results {
-		if res.Success && res.Message != nil {
-			msgs = append(msgs, res.Message)
-		}
-	}
-	return msgs
-}
-
-// Err returns an error if there are failures, nil otherwise.
-func (r *BulkResult) Err() error {
-	if !r.HasFailures() {
-		return nil
-	}
-	return &BulkOperationError{Result: r}
-}
-
-// BulkOperationError is returned when a bulk operation has partial failures.
-// It wraps BulkResult to provide error interface while guaranteeing non-empty Error().
-type BulkOperationError struct {
-	Result *BulkResult
-}
-
-// Error implements the error interface.
-// Always returns a non-empty string describing the failure.
-func (e *BulkOperationError) Error() string {
-	return fmt.Sprintf("mailbox: bulk operation failed for %d of %d items",
-		e.Result.FailureCount(), e.Result.TotalCount())
-}
-
-// Unwrap returns the individual errors from failed operations.
-func (e *BulkOperationError) Unwrap() []error {
-	var errs []error
-	for _, r := range e.Result.Results {
-		if r.Error != nil {
-			errs = append(errs, r.Error)
-		}
-	}
-	return errs
-}
-
 // messageList is the internal implementation of MessageList.
 type messageList struct {
 	messages   []Message
@@ -362,10 +236,13 @@ func (l *messageList) bulkUpdateFlags(ctx context.Context, flags Flags) (*BulkRe
 // Checks for context cancellation between iterations to support early termination.
 func (l *messageList) forEachMessage(ctx context.Context, op func(Message) error) (*BulkResult, error) {
 	result := &BulkResult{Results: make([]OperationResult, 0, len(l.messages))}
-	for _, msg := range l.messages {
+	for i, msg := range l.messages {
 		if err := ctx.Err(); err != nil {
-			result.Results = append(result.Results, OperationResult{ID: msg.GetID(), Error: err})
-			continue
+			// Batch-append all remaining items as cancelled and break
+			for _, remaining := range l.messages[i:] {
+				result.Results = append(result.Results, OperationResult{ID: remaining.GetID(), Error: err})
+			}
+			break
 		}
 		res := OperationResult{ID: msg.GetID()}
 		if err := op(msg); err != nil {
@@ -380,3 +257,77 @@ func (l *messageList) forEachMessage(ctx context.Context, op func(Message) error
 
 // Compile-time check that messageList implements MessageList.
 var _ MessageList = (*messageList)(nil)
+
+// Pre-allocated boolean pointers for efficient Flags creation.
+// These avoid allocations when using MarkRead(), MarkUnread(), etc.
+var (
+	ptrTrue  = ptr(true)
+	ptrFalse = ptr(false)
+)
+
+func ptr(b bool) *bool { return &b }
+
+// Flags represents message flags that can be updated atomically.
+// Use nil values to indicate no change.
+type Flags struct {
+	Read     *bool // nil = no change, true = mark read, false = mark unread
+	Archived *bool // nil = no change, true = archive, false = unarchive
+}
+
+// Pre-allocated flag values for common operations.
+// These are more efficient than calling MarkRead(), etc. in hot paths.
+var (
+	// FlagsMarkRead marks a message as read.
+	FlagsMarkRead = Flags{Read: ptrTrue}
+	// FlagsMarkUnread marks a message as unread.
+	FlagsMarkUnread = Flags{Read: ptrFalse}
+	// FlagsMarkArchived archives a message.
+	FlagsMarkArchived = Flags{Archived: ptrTrue}
+	// FlagsMarkUnarchived unarchives a message.
+	FlagsMarkUnarchived = Flags{Archived: ptrFalse}
+)
+
+// NewFlags creates empty flags (no changes).
+func NewFlags() Flags {
+	return Flags{}
+}
+
+// WithRead returns flags with read status set.
+func (f Flags) WithRead(read bool) Flags {
+	if read {
+		f.Read = ptrTrue
+	} else {
+		f.Read = ptrFalse
+	}
+	return f
+}
+
+// WithArchived returns flags with archived status set.
+func (f Flags) WithArchived(archived bool) Flags {
+	if archived {
+		f.Archived = ptrTrue
+	} else {
+		f.Archived = ptrFalse
+	}
+	return f
+}
+
+// MarkRead returns flags to mark a message as read.
+func MarkRead() Flags {
+	return FlagsMarkRead
+}
+
+// MarkUnread returns flags to mark a message as unread.
+func MarkUnread() Flags {
+	return FlagsMarkUnread
+}
+
+// MarkArchived returns flags to archive a message.
+func MarkArchived() Flags {
+	return FlagsMarkArchived
+}
+
+// MarkUnarchived returns flags to unarchive a message.
+func MarkUnarchived() Flags {
+	return FlagsMarkUnarchived
+}

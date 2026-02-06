@@ -14,6 +14,9 @@ type StatsReader interface {
 	// Stats returns aggregate statistics for this user's mailbox.
 	// Results are cached with event-driven incremental updates and periodic TTL refresh.
 	Stats(ctx context.Context) (*store.MailboxStats, error)
+	// UnreadCount returns the total unread message count for this user's mailbox.
+	// This is a convenience method equivalent to calling Stats() and reading UnreadCount.
+	UnreadCount(ctx context.Context) (int64, error)
 }
 
 // statsEntry holds a cached stats snapshot for a single user.
@@ -150,10 +153,42 @@ func (s *service) onMessageDeleted(_ context.Context, _ event.Event[MessageDelet
 	return nil
 }
 
+// onMessageMoved handles the MessageMoved event for stats cache updates.
+// Decrements the source folder total and increments the destination folder total.
+func (s *service) onMessageMoved(_ context.Context, _ event.Event[MessageMovedEvent], data MessageMovedEvent) error {
+	s.updateCachedStats(data.UserID, func(stats *store.MailboxStats) {
+		if data.FromFolderID != "" {
+			c := stats.Folders[data.FromFolderID]
+			if c.Total > 0 {
+				c.Total--
+			}
+			stats.Folders[data.FromFolderID] = c
+		}
+		if data.ToFolderID != "" {
+			c := stats.Folders[data.ToFolderID]
+			c.Total++
+			stats.Folders[data.ToFolderID] = c
+		}
+	})
+	return nil
+}
+
 // Stats returns aggregate statistics for this user's mailbox.
 func (m *userMailbox) Stats(ctx context.Context) (*store.MailboxStats, error) {
 	if err := m.checkAccess(); err != nil {
 		return nil, err
 	}
 	return m.service.getOrRefreshStats(ctx, m.userID)
+}
+
+// UnreadCount returns the total unread message count for this user's mailbox.
+func (m *userMailbox) UnreadCount(ctx context.Context) (int64, error) {
+	if err := m.checkAccess(); err != nil {
+		return 0, err
+	}
+	stats, err := m.service.getOrRefreshStats(ctx, m.userID)
+	if err != nil {
+		return 0, err
+	}
+	return stats.UnreadCount, nil
 }

@@ -8,6 +8,43 @@ import (
 	"github.com/rbaliyan/mailbox/store"
 )
 
+// LoadAttachment loads attachment content by message and attachment ID.
+func (m *userMailbox) LoadAttachment(ctx context.Context, messageID, attachmentID string) (io.ReadCloser, error) {
+	if err := m.checkAccess(); err != nil {
+		return nil, err
+	}
+
+	if m.service.attachments == nil {
+		return nil, ErrAttachmentStoreNotConfigured
+	}
+
+	// Get the message to verify access and find attachment
+	msg, err := m.service.store.Get(ctx, messageID)
+	if err != nil {
+		return nil, fmt.Errorf("get message: %w", err)
+	}
+
+	if !m.canAccess(msg) {
+		return nil, ErrUnauthorized
+	}
+
+	// Verify the attachment belongs to this message
+	attachments := msg.GetAttachments()
+	var found bool
+	for _, a := range attachments {
+		if a.GetID() == attachmentID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, ErrAttachmentNotFound
+	}
+
+	// Load content from attachment manager
+	return m.service.attachments.Load(ctx, attachmentID)
+}
+
 // AttachmentStore is an alias for store.AttachmentFileStore.
 // Deprecated: Use store.AttachmentFileStore directly.
 type AttachmentStore = store.AttachmentFileStore

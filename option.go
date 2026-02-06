@@ -92,6 +92,9 @@ type EventPublishFailureFunc func(eventName string, err error)
 // safeEventPublishFailure calls the event failure callback with panic recovery.
 // If the callback panics, the panic is logged and suppressed to prevent cascading failures.
 func (o *options) safeEventPublishFailure(eventName string, err error) {
+	if o.onEventPublishFailure == nil {
+		return
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			o.logger.Error("panic in event publish failure handler",

@@ -3,7 +3,6 @@ package mailbox
 import (
 	"context"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/rbaliyan/mailbox/store"
@@ -392,104 +391,6 @@ func (m *userMailbox) GetReplies(ctx context.Context, messageID string, opts sto
 	}
 
 	return wrapMessageList(storeList, m), nil
-}
-
-// LoadAttachment loads attachment content by message and attachment ID.
-func (m *userMailbox) LoadAttachment(ctx context.Context, messageID, attachmentID string) (io.ReadCloser, error) {
-	if err := m.checkAccess(); err != nil {
-		return nil, err
-	}
-
-	if m.service.attachments == nil {
-		return nil, ErrAttachmentStoreNotConfigured
-	}
-
-	// Get the message to verify access and find attachment
-	msg, err := m.service.store.Get(ctx, messageID)
-	if err != nil {
-		return nil, fmt.Errorf("get message: %w", err)
-	}
-
-	if !m.canAccess(msg) {
-		return nil, ErrUnauthorized
-	}
-
-	// Verify the attachment belongs to this message
-	attachments := msg.GetAttachments()
-	var found bool
-	for _, a := range attachments {
-		if a.GetID() == attachmentID {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return nil, ErrAttachmentNotFound
-	}
-
-	// Load content from attachment manager
-	return m.service.attachments.Load(ctx, attachmentID)
-}
-
-// SendMessage sends a message directly without going through the draft flow.
-// If AttachmentIDs are provided, they are resolved via ResolveAttachments
-// and merged with any Attachments already in the request.
-func (m *userMailbox) SendMessage(ctx context.Context, req SendRequest) (Message, error) {
-	if err := m.checkAccess(); err != nil {
-		return nil, err
-	}
-
-	// Resolve attachment IDs if any
-	allAttachments := req.Attachments
-	if len(req.AttachmentIDs) > 0 {
-		resolved, err := m.ResolveAttachments(ctx, req.AttachmentIDs)
-		if err != nil {
-			return nil, fmt.Errorf("resolve attachments: %w", err)
-		}
-		allAttachments = append(allAttachments, resolved...)
-	}
-
-	// Build a transient draft
-	draft := m.service.store.NewDraft(m.userID)
-	draft.SetRecipients(req.RecipientIDs...)
-	draft.SetSubject(req.Subject)
-	draft.SetBody(req.Body)
-	for k, v := range req.Metadata {
-		draft.SetMetadata(k, v)
-	}
-	for _, a := range allAttachments {
-		draft.AddAttachment(a)
-	}
-
-	// Send via existing flow — return message even on partial delivery or event error
-	msg, err := m.sendDraft(ctx, draft, req.ThreadID, req.ReplyToID)
-	if msg != nil {
-		return newMessage(msg, m), err
-	}
-	return nil, err
-}
-
-// ResolveAttachments resolves attachment metadata by IDs.
-// Returns attachment metadata for each ID in order.
-func (m *userMailbox) ResolveAttachments(ctx context.Context, attachmentIDs []string) ([]store.Attachment, error) {
-	if err := m.checkAccess(); err != nil {
-		return nil, err
-	}
-
-	if m.service.attachments == nil {
-		return nil, ErrAttachmentStoreNotConfigured
-	}
-
-	attachments := make([]store.Attachment, 0, len(attachmentIDs))
-	for _, id := range attachmentIDs {
-		meta, err := m.service.attachments.GetMetadata(ctx, id)
-		if err != nil {
-			return nil, fmt.Errorf("resolve attachment %s: %w", id, err)
-		}
-		attachments = append(attachments, meta)
-	}
-
-	return attachments, nil
 }
 
 // listMessages is a shared helper for listing messages with query limit enforcement

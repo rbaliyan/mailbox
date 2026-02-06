@@ -298,6 +298,67 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 	return updatedSenderCopy, nil
 }
 
+// SendMessage sends a message directly without going through the draft flow.
+// If AttachmentIDs are provided, they are resolved via ResolveAttachments
+// and merged with any Attachments already in the request.
+func (m *userMailbox) SendMessage(ctx context.Context, req SendRequest) (Message, error) {
+	if err := m.checkAccess(); err != nil {
+		return nil, err
+	}
+
+	// Resolve attachment IDs if any
+	allAttachments := req.Attachments
+	if len(req.AttachmentIDs) > 0 {
+		resolved, err := m.ResolveAttachments(ctx, req.AttachmentIDs)
+		if err != nil {
+			return nil, fmt.Errorf("resolve attachments: %w", err)
+		}
+		allAttachments = append(allAttachments, resolved...)
+	}
+
+	// Build a transient draft
+	draft := m.service.store.NewDraft(m.userID)
+	draft.SetRecipients(req.RecipientIDs...)
+	draft.SetSubject(req.Subject)
+	draft.SetBody(req.Body)
+	for k, v := range req.Metadata {
+		draft.SetMetadata(k, v)
+	}
+	for _, a := range allAttachments {
+		draft.AddAttachment(a)
+	}
+
+	// Send via existing flow — return message even on partial delivery or event error
+	msg, err := m.sendDraft(ctx, draft, req.ThreadID, req.ReplyToID)
+	if msg != nil {
+		return newMessage(msg, m), err
+	}
+	return nil, err
+}
+
+// ResolveAttachments resolves attachment metadata by IDs.
+// Returns attachment metadata for each ID in order.
+func (m *userMailbox) ResolveAttachments(ctx context.Context, attachmentIDs []string) ([]store.Attachment, error) {
+	if err := m.checkAccess(); err != nil {
+		return nil, err
+	}
+
+	if m.service.attachments == nil {
+		return nil, ErrAttachmentStoreNotConfigured
+	}
+
+	attachments := make([]store.Attachment, 0, len(attachmentIDs))
+	for _, id := range attachmentIDs {
+		meta, err := m.service.attachments.GetMetadata(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("resolve attachment %s: %w", id, err)
+		}
+		attachments = append(attachments, meta)
+	}
+
+	return attachments, nil
+}
+
 // saveDraft saves a draft without sending.
 func (m *userMailbox) saveDraft(ctx context.Context, draft store.DraftMessage) (store.DraftMessage, error) {
 	if err := m.checkAccess(); err != nil {

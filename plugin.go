@@ -61,9 +61,17 @@ func (r *pluginRegistry) register(p Plugin) {
 }
 
 // initAll initializes all plugins.
+// On failure, already-initialized plugins are closed in reverse order.
 func (r *pluginRegistry) initAll(ctx context.Context) error {
-	for _, p := range r.all {
+	for i, p := range r.all {
 		if err := p.Init(ctx); err != nil {
+			// Close already-initialized plugins in reverse order
+			for j := i - 1; j >= 0; j-- {
+				if closeErr := r.all[j].Close(ctx); closeErr != nil {
+					r.logger.Error("failed to close plugin during init rollback",
+						"plugin", r.all[j].Name(), "error", closeErr)
+				}
+			}
 			return &PluginError{Plugin: p.Name(), Op: "init", Err: err}
 		}
 	}
