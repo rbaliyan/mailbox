@@ -193,6 +193,11 @@ type MailboxMutator interface {
 	PermanentlyDelete(ctx context.Context, messageID string) error
 	AddTag(ctx context.Context, messageID string, tagID string) error
 	RemoveTag(ctx context.Context, messageID string, tagID string) error
+	// MarkAllRead marks all unread messages in a folder as read.
+	// Uses store.BulkReadMarker for a single database operation when available,
+	// falling back to individual MarkRead calls otherwise.
+	// Returns the number of messages that were marked as read.
+	MarkAllRead(ctx context.Context, folderID string) (int64, error)
 }
 
 // SendRequest contains the data needed to send a message directly,
@@ -262,4 +267,7 @@ type Mailbox interface {
 	AttachmentResolver
 	// Stats returns aggregate statistics for this user's mailbox.
 	Stats(ctx context.Context) (*store.MailboxStats, error)
+	// UnreadCount returns the total unread message count for this user.
+	// This is a convenience method equivalent to calling Stats() and reading UnreadCount.
+	UnreadCount(ctx context.Context) (int64, error)
 }

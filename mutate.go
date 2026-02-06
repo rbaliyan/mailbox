@@ -26,13 +26,9 @@ func (m *userMailbox) UpdateFlags(ctx context.Context, messageID string, flags F
 	start := time.Now()
 	defer func() { m.service.otel.recordUpdate(ctx, time.Since(start), "update_flags", retErr) }()
 
-	msg, err := m.service.store.Get(ctx, messageID)
+	msg, err := m.getAndVerify(ctx, messageID)
 	if err != nil {
-		return fmt.Errorf("get message: %w", err)
-	}
-
-	if !m.canAccess(msg) {
-		return ErrUnauthorized
+		return err
 	}
 
 	// Apply archived flag first (moves to/from archived folder).
@@ -106,13 +102,9 @@ func (m *userMailbox) Delete(ctx context.Context, messageID string) (retErr erro
 	start := time.Now()
 	defer func() { m.service.otel.recordDelete(ctx, time.Since(start), false, retErr) }()
 
-	msg, err := m.service.store.Get(ctx, messageID)
+	msg, err := m.getAndVerify(ctx, messageID)
 	if err != nil {
-		return fmt.Errorf("get message: %w", err)
-	}
-
-	if !m.canAccess(msg) {
-		return ErrUnauthorized
+		return err
 	}
 
 	if msg.GetFolderID() == store.FolderTrash {
@@ -141,13 +133,9 @@ func (m *userMailbox) Restore(ctx context.Context, messageID string) (retErr err
 	start := time.Now()
 	defer func() { m.service.otel.recordUpdate(ctx, time.Since(start), "restore", retErr) }()
 
-	msg, err := m.service.store.Get(ctx, messageID)
+	msg, err := m.getAndVerify(ctx, messageID)
 	if err != nil {
-		return fmt.Errorf("get message: %w", err)
-	}
-
-	if !m.canAccess(msg) {
-		return ErrUnauthorized
+		return err
 	}
 
 	if msg.GetFolderID() != store.FolderTrash {
@@ -177,13 +165,9 @@ func (m *userMailbox) PermanentlyDelete(ctx context.Context, messageID string) (
 	start := time.Now()
 	defer func() { m.service.otel.recordDelete(ctx, time.Since(start), true, retErr) }()
 
-	msg, err := m.service.store.Get(ctx, messageID)
+	msg, err := m.getAndVerify(ctx, messageID)
 	if err != nil {
-		return fmt.Errorf("get message: %w", err)
-	}
-
-	if !m.canAccess(msg) {
-		return ErrUnauthorized
+		return err
 	}
 
 	if msg.GetFolderID() != store.FolderTrash {
@@ -241,13 +225,9 @@ func (m *userMailbox) MoveToFolder(ctx context.Context, messageID, folderID stri
 		return fmt.Errorf("%w: %s", ErrInvalidFolderID, folderID)
 	}
 
-	msg, err := m.service.store.Get(ctx, messageID)
+	msg, err := m.getAndVerify(ctx, messageID)
 	if err != nil {
-		return fmt.Errorf("get message: %w", err)
-	}
-
-	if !m.canAccess(msg) {
-		return ErrUnauthorized
+		return err
 	}
 
 	oldFolderID := msg.GetFolderID()
@@ -276,13 +256,8 @@ func (m *userMailbox) AddTag(ctx context.Context, messageID, tagID string) error
 		return fmt.Errorf("%w: tag ID exceeds maximum length of %d", ErrInvalidID, MaxTagIDLength)
 	}
 
-	msg, err := m.service.store.Get(ctx, messageID)
-	if err != nil {
-		return fmt.Errorf("get message: %w", err)
-	}
-
-	if !m.canAccess(msg) {
-		return ErrUnauthorized
+	if _, err := m.getAndVerify(ctx, messageID); err != nil {
+		return err
 	}
 
 	if err := m.service.store.AddTag(ctx, messageID, tagID); err != nil {
@@ -305,13 +280,8 @@ func (m *userMailbox) RemoveTag(ctx context.Context, messageID, tagID string) er
 		return fmt.Errorf("%w: tag ID exceeds maximum length of %d", ErrInvalidID, MaxTagIDLength)
 	}
 
-	msg, err := m.service.store.Get(ctx, messageID)
-	if err != nil {
-		return fmt.Errorf("get message: %w", err)
-	}
-
-	if !m.canAccess(msg) {
-		return ErrUnauthorized
+	if _, err := m.getAndVerify(ctx, messageID); err != nil {
+		return err
 	}
 
 	if err := m.service.store.RemoveTag(ctx, messageID, tagID); err != nil {
@@ -321,10 +291,81 @@ func (m *userMailbox) RemoveTag(ctx context.Context, messageID, tagID string) er
 	return nil
 }
 
+// MarkAllRead marks all unread messages in a folder as read.
+// Uses store.BulkReadMarker for a single database operation when available,
+// falling back to individual MarkRead calls otherwise.
+func (m *userMailbox) MarkAllRead(ctx context.Context, folderID string) (_ int64, retErr error) {
+	if err := m.checkAccess(); err != nil {
+		return 0, err
+	}
+
+	start := time.Now()
+	defer func() { m.service.otel.recordUpdate(ctx, time.Since(start), "mark_all_read", retErr) }()
+
+	var count int64
+
+	// Fast path: use BulkReadMarker if the store supports it.
+	if brm, ok := m.service.store.(store.BulkReadMarker); ok {
+		var err error
+		count, err = brm.MarkAllRead(ctx, m.userID, folderID)
+		if err != nil {
+			return 0, fmt.Errorf("mark all read: %w", err)
+		}
+	} else {
+		// Slow path: individual MarkRead calls.
+		list, err := m.service.store.Find(ctx, []store.Filter{
+			store.OwnerIs(m.userID),
+			store.InFolder(folderID),
+			store.IsReadFilter(false),
+		}, store.ListOptions{Limit: m.service.opts.maxQueryLimit})
+		if err != nil {
+			return 0, fmt.Errorf("find unread: %w", err)
+		}
+		for _, msg := range list.Messages {
+			if err := m.service.store.MarkRead(ctx, msg.GetID(), true); err == nil {
+				count++
+			}
+		}
+	}
+
+	// Update stats cache directly — skip per-message events for bulk path.
+	if count > 0 {
+		m.service.updateCachedStats(m.userID, func(stats *store.MailboxStats) {
+			if stats.UnreadCount >= count {
+				stats.UnreadCount -= count
+			} else {
+				stats.UnreadCount = 0
+			}
+			c := stats.Folders[folderID]
+			if c.Unread >= count {
+				c.Unread -= count
+			} else {
+				c.Unread = 0
+			}
+			stats.Folders[folderID] = c
+		})
+	}
+
+	return count, nil
+}
+
 // Helper methods
 
 func (m *userMailbox) canAccess(msg store.Message) bool {
 	return msg.GetOwnerID() == m.userID
+}
+
+// getAndVerify retrieves a message and verifies the current user owns it.
+// This centralizes the get-check-authorize pattern used by all mutation methods.
+func (m *userMailbox) getAndVerify(ctx context.Context, messageID string) (store.Message, error) {
+	msg, err := m.service.store.Get(ctx, messageID)
+	if err != nil {
+		return nil, fmt.Errorf("get message: %w", err)
+	}
+	if !m.canAccess(msg) {
+		return nil, ErrUnauthorized
+	}
+	return msg, nil
 }
 
 // publishMessageMoved publishes a MessageMoved event.

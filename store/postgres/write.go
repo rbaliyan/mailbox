@@ -164,6 +164,28 @@ func (s *Store) RemoveTag(ctx context.Context, id string, tagID string) error {
 	return nil
 }
 
+// MarkAllRead marks all unread non-draft messages in a folder as read.
+// Uses a single UPDATE for efficiency.
+func (s *Store) MarkAllRead(ctx context.Context, ownerID, folderID string) (int64, error) {
+	if err := s.checkConnected(); err != nil {
+		return 0, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	now := time.Now().UTC()
+	query := fmt.Sprintf(`UPDATE %s SET is_read = true, read_at = $1, updated_at = $1
+		WHERE owner_id = $2 AND folder_id = $3 AND is_read = false AND is_draft = false`, s.opts.table)
+
+	result, err := s.db.ExecContext(ctx, query, now, ownerID, folderID)
+	if err != nil {
+		return 0, fmt.Errorf("mark all read: %w", err)
+	}
+
+	return result.RowsAffected()
+}
+
 func (s *Store) Delete(ctx context.Context, id string) error {
 	if err := s.checkConnected(); err != nil {
 		return err

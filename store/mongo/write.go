@@ -236,6 +236,39 @@ func (s *Store) HardDelete(ctx context.Context, id string) error {
 	return nil
 }
 
+// MarkAllRead marks all unread non-draft messages in a folder as read.
+// Uses a single UpdateMany for efficiency.
+func (s *Store) MarkAllRead(ctx context.Context, ownerID, folderID string) (int64, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return 0, store.ErrNotConnected
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	now := time.Now().UTC()
+	filter := bson.M{
+		"owner_id":   ownerID,
+		"folder_id":  folderID,
+		"is_read":    false,
+		"__is_draft": bson.M{"$ne": true},
+	}
+	update := bson.M{
+		"$set": bson.M{
+			"is_read":    true,
+			"read_at":    now,
+			"updated_at": now,
+		},
+	}
+
+	result, err := s.collection.UpdateMany(ctx, filter, update)
+	if err != nil {
+		return 0, fmt.Errorf("mark all read: %w", err)
+	}
+
+	return result.ModifiedCount, nil
+}
+
 // Restore restores a soft-deleted message.
 // Determines the correct folder based on ownership (sent vs inbox).
 func (s *Store) Restore(ctx context.Context, id string) error {

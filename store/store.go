@@ -244,6 +244,15 @@ type FolderLister interface {
 	ListDistinctFolders(ctx context.Context, ownerID string) ([]string, error)
 }
 
+// BulkReadMarker is an optional interface for efficient bulk read marking.
+// When implemented, MarkAllRead uses a single database operation instead of
+// N individual MarkRead calls. All three built-in backends implement this.
+type BulkReadMarker interface {
+	// MarkAllRead marks all unread non-draft messages in a folder as read.
+	// Returns the number of messages that were marked as read.
+	MarkAllRead(ctx context.Context, ownerID string, folderID string) (int64, error)
+}
+
 // MaintenanceStore provides operations for background maintenance tasks.
 // These operations are designed to be safely called concurrently from
 // multiple service instances without requiring distributed coordination.

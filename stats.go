@@ -185,3 +185,15 @@ func (m *userMailbox) Stats(ctx context.Context) (*store.MailboxStats, error) {
 	return m.service.getOrRefreshStats(ctx, m.userID)
 }
 
+// UnreadCount returns the total unread message count for this user.
+func (m *userMailbox) UnreadCount(ctx context.Context) (int64, error) {
+	if err := m.checkAccess(); err != nil {
+		return 0, err
+	}
+	stats, err := m.service.getOrRefreshStats(ctx, m.userID)
+	if err != nil {
+		return 0, err
+	}
+	return stats.UnreadCount, nil
+}
+
