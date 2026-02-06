@@ -40,7 +40,7 @@ func (s *Store) CountByFolders(ctx context.Context, ownerID string, folderIDs []
 	if err != nil {
 		return nil, fmt.Errorf("count by folders: %w", err)
 	}
-	defer cursor.Close(ctx)
+	defer func() { _ = cursor.Close(ctx) }()
 
 	var results []struct {
 		FolderID string `bson:"_id"`
@@ -130,7 +130,7 @@ func (s *Store) MailboxStats(ctx context.Context, ownerID string) (*store.Mailbo
 	if err != nil {
 		return nil, fmt.Errorf("aggregate mailbox stats: %w", err)
 	}
-	defer cursor.Close(ctx)
+	defer func() { _ = cursor.Close(ctx) }()
 
 	var results []struct {
 		Messages []struct {

@@ -30,7 +30,7 @@ func (s *Store) CountByFolders(ctx context.Context, ownerID string, folderIDs []
 	if err != nil {
 		return nil, fmt.Errorf("count by folders: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	counts := make(map[string]store.FolderCounts, len(folderIDs))
 	for rows.Next() {
@@ -80,7 +80,7 @@ func (s *Store) ListDistinctFolders(ctx context.Context, ownerID string) ([]stri
 	if err != nil {
 		return nil, fmt.Errorf("list distinct folders: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var folders []string
 	for rows.Next() {
@@ -138,7 +138,7 @@ func (s *Store) MailboxStats(ctx context.Context, ownerID string) (*store.Mailbo
 	if err != nil {
 		return nil, fmt.Errorf("query mailbox stats: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	first := true
 	for rows.Next() {

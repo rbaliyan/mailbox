@@ -109,11 +109,11 @@ type Draft interface {
 
 // draft is the internal implementation of Draft.
 type draft struct {
-	mailbox  *userMailbox
-	message  store.DraftMessage
-	saved    bool
-	threadID string
-	replyToID    string
+	mailbox   *userMailbox
+	message   store.DraftMessage
+	saved     bool
+	threadID  string
+	replyToID string
 }
 
 // newDraft creates a new draft for the given mailbox.

@@ -12,6 +12,14 @@ build:
 test:
     go test ./...
 
+# Run tests with verbose output
+test-v:
+    go test -v ./...
+
+# Run tests with race detector
+test-race:
+    go test -race ./...
+
 # Run tests with coverage
 test-coverage:
     go test -coverprofile=coverage.out ./...
@@ -27,7 +35,7 @@ fmt:
 
 # Lint code
 lint:
-    go vet ./...
+    golangci-lint run ./...
 
 # Run vulnerability check
 vulncheck:

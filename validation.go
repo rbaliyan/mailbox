@@ -291,15 +291,15 @@ func matchMIMEType(contentType, pattern string) bool {
 // DefaultBlockedMIMETypes returns MIME types that are commonly blocked for security.
 func DefaultBlockedMIMETypes() []string {
 	return []string{
-		"application/x-msdownload",      // Windows executable
-		"application/x-executable",      // Generic executable
-		"application/x-msdos-program",   // DOS executable
-		"application/x-sh",              // Shell script
-		"application/x-shellscript",     // Shell script
-		"application/x-bat",             // Batch file
-		"application/x-msi",             // Windows installer
+		"application/x-msdownload",                      // Windows executable
+		"application/x-executable",                      // Generic executable
+		"application/x-msdos-program",                   // DOS executable
+		"application/x-sh",                              // Shell script
+		"application/x-shellscript",                     // Shell script
+		"application/x-bat",                             // Batch file
+		"application/x-msi",                             // Windows installer
 		"application/vnd.microsoft.portable-executable", // PE executable
-		"application/x-dosexec",         // DOS executable
+		"application/x-dosexec",                         // DOS executable
 	}
 }
 

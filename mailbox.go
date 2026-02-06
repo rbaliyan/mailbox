@@ -24,18 +24,18 @@ const (
 
 // service is the default implementation of Service.
 type service struct {
-	store       store.Store
-	attachments store.AttachmentManager
-	logger      *slog.Logger
-	opts        *options
-	state       int32 // stateDisconnected, stateConnecting, or stateConnected
-	plugins     *pluginRegistry
-	otel        *otelInstrumentation
-	sendSem     *semaphore.Weighted // Limits concurrent sends to prevent resource exhaustion
-	eventBus         *event.Bus     // Event bus for publishing events
-	events           *ServiceEvents // Per-service event instances
-	statsCache       sync.Map      // map[ownerID string]*statsEntry
-	statsCacheEnabled bool         // true when event transport is configured
+	store             store.Store
+	attachments       store.AttachmentManager
+	logger            *slog.Logger
+	opts              *options
+	state             int32 // stateDisconnected, stateConnecting, or stateConnected
+	plugins           *pluginRegistry
+	otel              *otelInstrumentation
+	sendSem           *semaphore.Weighted // Limits concurrent sends to prevent resource exhaustion
+	eventBus          *event.Bus          // Event bus for publishing events
+	events            *ServiceEvents      // Per-service event instances
+	statsCache        sync.Map            // map[ownerID string]*statsEntry
+	statsCacheEnabled bool                // true when event transport is configured
 }
 
 // NewService creates a new mailbox service.
@@ -111,14 +111,14 @@ func (s *service) Connect(ctx context.Context) error {
 
 	// Initialize event bus with appropriate transport
 	if err := s.initEventBus(ctx); err != nil {
-		s.store.Close(ctx)
+		_ = s.store.Close(ctx)
 		return fmt.Errorf("init event bus: %w", err)
 	}
 
 	// Initialize plugins
 	if err := s.plugins.initAll(ctx); err != nil {
-		s.eventBus.Close(ctx)
-		s.store.Close(ctx)
+		_ = s.eventBus.Close(ctx)
+		_ = s.store.Close(ctx)
 		return fmt.Errorf("init plugins: %w", err)
 	}
 
@@ -174,32 +174,32 @@ func (s *service) initEventBus(ctx context.Context) error {
 
 	// Register per-service events (unique per service instance).
 	if err := registerServiceEvents(ctx, bus, events); err != nil {
-		bus.Close(ctx)
+		_ = bus.Close(ctx)
 		return fmt.Errorf("register service events: %w", err)
 	}
 
 	// Also register global events for backward compatibility.
 	// Global events use "first registration wins" - subsequent calls are no-ops.
 	if err := registerEvents(ctx, bus); err != nil {
-		bus.Close(ctx)
+		_ = bus.Close(ctx)
 		return fmt.Errorf("register events: %w", err)
 	}
 
 	// Subscribe internal handlers for stats cache updates.
 	if err := events.MessageSent.Subscribe(ctx, s.onMessageSent); err != nil {
-		bus.Close(ctx)
+		_ = bus.Close(ctx)
 		return fmt.Errorf("subscribe stats MessageSent: %w", err)
 	}
 	if err := events.MessageRead.Subscribe(ctx, s.onMessageRead); err != nil {
-		bus.Close(ctx)
+		_ = bus.Close(ctx)
 		return fmt.Errorf("subscribe stats MessageRead: %w", err)
 	}
 	if err := events.MessageDeleted.Subscribe(ctx, s.onMessageDeleted); err != nil {
-		bus.Close(ctx)
+		_ = bus.Close(ctx)
 		return fmt.Errorf("subscribe stats MessageDeleted: %w", err)
 	}
 	if err := events.MessageMoved.Subscribe(ctx, s.onMessageMoved); err != nil {
-		bus.Close(ctx)
+		_ = bus.Close(ctx)
 		return fmt.Errorf("subscribe stats MessageMoved: %w", err)
 	}
 

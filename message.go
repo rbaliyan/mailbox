@@ -180,10 +180,10 @@ func wrapMessageList(list *store.MessageList, m *userMailbox) MessageList {
 
 // Data access methods
 
-func (l *messageList) All() []Message       { return l.messages }
-func (l *messageList) Total() int64         { return l.total }
-func (l *messageList) HasMore() bool        { return l.hasMore }
-func (l *messageList) NextCursor() string   { return l.nextCursor }
+func (l *messageList) All() []Message     { return l.messages }
+func (l *messageList) Total() int64       { return l.total }
+func (l *messageList) HasMore() bool      { return l.hasMore }
+func (l *messageList) NextCursor() string { return l.nextCursor }
 
 func (l *messageList) IDs() []string {
 	ids := make([]string, len(l.messages))
@@ -253,4 +253,3 @@ func (l *messageList) forEachMessage(ctx context.Context, op func(Message) error
 
 // Compile-time check that messageList implements MessageList.
 var _ MessageList = (*messageList)(nil)
-

@@ -310,7 +310,7 @@ func (s *Store) ListDrafts(ctx context.Context, ownerID string, opts store.ListO
 	if err != nil {
 		return nil, fmt.Errorf("find drafts: %w", err)
 	}
-	defer cursor.Close(ctx)
+	defer func() { _ = cursor.Close(ctx) }()
 
 	var docs []messageDoc
 	if err := cursor.All(ctx, &docs); err != nil {

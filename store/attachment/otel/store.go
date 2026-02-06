@@ -28,17 +28,17 @@ type Store struct {
 	tracer trace.Tracer
 
 	// Metrics
-	uploadLatency   metric.Float64Histogram
-	uploadCount     metric.Int64Counter
-	uploadBytes     metric.Int64Counter
-	uploadErrors    metric.Int64Counter
-	loadLatency     metric.Float64Histogram
-	loadCount       metric.Int64Counter
-	loadBytes       metric.Int64Counter
-	loadErrors      metric.Int64Counter
-	deleteLatency   metric.Float64Histogram
-	deleteCount     metric.Int64Counter
-	deleteErrors    metric.Int64Counter
+	uploadLatency metric.Float64Histogram
+	uploadCount   metric.Int64Counter
+	uploadBytes   metric.Int64Counter
+	uploadErrors  metric.Int64Counter
+	loadLatency   metric.Float64Histogram
+	loadCount     metric.Int64Counter
+	loadBytes     metric.Int64Counter
+	loadErrors    metric.Int64Counter
+	deleteLatency metric.Float64Histogram
+	deleteCount   metric.Int64Counter
+	deleteErrors  metric.Int64Counter
 }
 
 // Ensure Store implements AttachmentFileStore.

@@ -8,24 +8,24 @@ import (
 
 // message is the internal representation for both drafts and messages.
 type message struct {
-	id               string
-	ownerID          string
-	senderID         string
-	recipientIDs     []string
-	subject          string
-	body             string
-	metadata         map[string]any
-	status           store.MessageStatus
-	isRead           bool
-	readAt           *time.Time
-	folderID         string
-	tags             []string
-	attachments      []store.Attachment
-	createdAt        time.Time
-	updatedAt        time.Time
-	isDraft          bool // true for drafts, false for sent messages
-	threadID         string
-	replyToID        string
+	id           string
+	ownerID      string
+	senderID     string
+	recipientIDs []string
+	subject      string
+	body         string
+	metadata     map[string]any
+	status       store.MessageStatus
+	isRead       bool
+	readAt       *time.Time
+	folderID     string
+	tags         []string
+	attachments  []store.Attachment
+	createdAt    time.Time
+	updatedAt    time.Time
+	isDraft      bool // true for drafts, false for sent messages
+	threadID     string
+	replyToID    string
 }
 
 // clone creates a deep copy of the message.
@@ -72,23 +72,24 @@ func (m *message) clone() *message {
 }
 
 // Message getters (implements store.Message)
-func (m *message) GetID() string                             { return m.id }
-func (m *message) GetOwnerID() string                        { return m.ownerID }
-func (m *message) GetSenderID() string                       { return m.senderID }
-func (m *message) GetRecipientIDs() []string                 { return m.recipientIDs }
-func (m *message) GetSubject() string                        { return m.subject }
-func (m *message) GetBody() string                           { return m.body }
-func (m *message) GetMetadata() map[string]any               { return m.metadata }
-func (m *message) GetStatus() store.MessageStatus            { return m.status }
-func (m *message) GetIsRead() bool                           { return m.isRead }
-func (m *message) GetReadAt() *time.Time                     { return m.readAt }
-func (m *message) GetFolderID() string                       { return m.folderID }
-func (m *message) GetTags() []string                         { return m.tags }
-func (m *message) GetAttachments() []store.Attachment        { return m.attachments }
-func (m *message) GetCreatedAt() time.Time                   { return m.createdAt }
-func (m *message) GetUpdatedAt() time.Time                   { return m.updatedAt }
-func (m *message) GetThreadID() string                       { return m.threadID }
-func (m *message) GetReplyToID() string                      { return m.replyToID }
+func (m *message) GetID() string                      { return m.id }
+func (m *message) GetOwnerID() string                 { return m.ownerID }
+func (m *message) GetSenderID() string                { return m.senderID }
+func (m *message) GetRecipientIDs() []string          { return m.recipientIDs }
+func (m *message) GetSubject() string                 { return m.subject }
+func (m *message) GetBody() string                    { return m.body }
+func (m *message) GetMetadata() map[string]any        { return m.metadata }
+func (m *message) GetStatus() store.MessageStatus     { return m.status }
+func (m *message) GetIsRead() bool                    { return m.isRead }
+func (m *message) GetReadAt() *time.Time              { return m.readAt }
+func (m *message) GetFolderID() string                { return m.folderID }
+func (m *message) GetTags() []string                  { return m.tags }
+func (m *message) GetAttachments() []store.Attachment { return m.attachments }
+func (m *message) GetCreatedAt() time.Time            { return m.createdAt }
+func (m *message) GetUpdatedAt() time.Time            { return m.updatedAt }
+func (m *message) GetThreadID() string                { return m.threadID }
+func (m *message) GetReplyToID() string               { return m.replyToID }
+
 // Draft setters (implements store.DraftMessage fluent API)
 func (m *message) SetSubject(subject string) store.DraftMessage {
 	m.subject = subject

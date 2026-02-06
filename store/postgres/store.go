@@ -359,7 +359,7 @@ func (s *Store) ListDrafts(ctx context.Context, ownerID string, opts store.ListO
 	if err != nil {
 		return nil, fmt.Errorf("query drafts: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var drafts []store.DraftMessage
 	for rows.Next() {

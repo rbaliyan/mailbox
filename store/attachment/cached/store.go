@@ -92,7 +92,7 @@ func (s *Store) Load(ctx context.Context, uri string) (io.ReadCloser, error) {
 			}
 		} else {
 			// Expired, remove it
-			os.Remove(cachePath)
+			_ = os.Remove(cachePath)
 			s.updateCacheSize(-info.Size())
 		}
 	}
@@ -114,7 +114,7 @@ func (s *Store) Delete(ctx context.Context, uri string) error {
 	cacheKey := s.cacheKey(uri)
 	cachePath := filepath.Join(s.cacheDir, cacheKey)
 	if info, err := os.Stat(cachePath); err == nil {
-		os.Remove(cachePath)
+		_ = os.Remove(cachePath)
 		s.updateCacheSize(-info.Size())
 	}
 
@@ -134,7 +134,7 @@ func (s *Store) ClearCache() error {
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
-			os.Remove(filepath.Join(s.cacheDir, entry.Name()))
+			_ = os.Remove(filepath.Join(s.cacheDir, entry.Name()))
 		}
 	}
 
@@ -199,7 +199,7 @@ func (r *cachingReader) Close() error {
 
 	// Close temp file
 	if err := r.tmpFile.Close(); err != nil {
-		os.Remove(r.tmpFile.Name())
+		_ = os.Remove(r.tmpFile.Name())
 		return sourceErr
 	}
 
@@ -207,7 +207,7 @@ func (r *cachingReader) Close() error {
 	if r.store.hasSpace(r.size) {
 		// Rename temp file to cache path
 		if err := os.Rename(r.tmpFile.Name(), r.cachePath); err != nil {
-			os.Remove(r.tmpFile.Name())
+			_ = os.Remove(r.tmpFile.Name())
 			r.store.logger.Warn("failed to move temp file to cache", "error", err)
 		} else {
 			r.store.updateCacheSize(r.size)
@@ -215,7 +215,7 @@ func (r *cachingReader) Close() error {
 		}
 	} else {
 		// No space, remove temp file
-		os.Remove(r.tmpFile.Name())
+		_ = os.Remove(r.tmpFile.Name())
 		r.store.logger.Debug("cache full, not caching", "size", r.size)
 	}
 

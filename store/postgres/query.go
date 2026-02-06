@@ -123,7 +123,7 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 	if err != nil {
 		return nil, fmt.Errorf("query messages: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var messages []store.Message
 	for rows.Next() {
@@ -285,7 +285,7 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 	if err != nil {
 		return nil, fmt.Errorf("search query: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var messages []store.Message
 	for rows.Next() {

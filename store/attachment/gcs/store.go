@@ -120,7 +120,7 @@ func (s *Store) Upload(ctx context.Context, filename, contentType string, conten
 	w.ContentType = contentType
 
 	if _, err := io.Copy(w, content); err != nil {
-		w.Close()
+		_ = w.Close()
 		return "", fmt.Errorf("copy content to gcs: %w", err)
 	}
 

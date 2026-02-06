@@ -14,25 +14,25 @@ var _ store.Attachment = (*attachment)(nil)
 
 // messageDoc is the MongoDB document representation.
 type messageDoc struct {
-	ID             bson.ObjectID  `bson:"_id,omitempty"`
-	OwnerID        string         `bson:"owner_id"`
-	SenderID       string         `bson:"sender_id"`
-	RecipientIDs   []string       `bson:"recipient_ids"`
-	Subject        string         `bson:"subject"`
-	Body           string         `bson:"body"`
-	Metadata       map[string]any `bson:"metadata,omitempty"`
-	Status         string         `bson:"status"`
-	IsRead         bool           `bson:"is_read"`
-	ReadAt         *time.Time     `bson:"read_at,omitempty"`
-	FolderID       string         `bson:"folder_id"`
-	Tags           []string       `bson:"tags,omitempty"`
+	ID             bson.ObjectID   `bson:"_id,omitempty"`
+	OwnerID        string          `bson:"owner_id"`
+	SenderID       string          `bson:"sender_id"`
+	RecipientIDs   []string        `bson:"recipient_ids"`
+	Subject        string          `bson:"subject"`
+	Body           string          `bson:"body"`
+	Metadata       map[string]any  `bson:"metadata,omitempty"`
+	Status         string          `bson:"status"`
+	IsRead         bool            `bson:"is_read"`
+	ReadAt         *time.Time      `bson:"read_at,omitempty"`
+	FolderID       string          `bson:"folder_id"`
+	Tags           []string        `bson:"tags,omitempty"`
 	Attachments    []attachmentDoc `bson:"attachments,omitempty"`
-	CreatedAt      time.Time      `bson:"created_at"`
-	UpdatedAt      time.Time      `bson:"updated_at"`
-	IsDraft        bool           `bson:"__is_draft,omitempty"`
-	IdempotencyKey string         `bson:"idempotency_key,omitempty"` // For atomic idempotent creates
-	ThreadID       string         `bson:"thread_id,omitempty"`
-	ReplyToID      string         `bson:"reply_to_id,omitempty"`
+	CreatedAt      time.Time       `bson:"created_at"`
+	UpdatedAt      time.Time       `bson:"updated_at"`
+	IsDraft        bool            `bson:"__is_draft,omitempty"`
+	IdempotencyKey string          `bson:"idempotency_key,omitempty"` // For atomic idempotent creates
+	ThreadID       string          `bson:"thread_id,omitempty"`
+	ReplyToID      string          `bson:"reply_to_id,omitempty"`
 }
 
 // attachmentDoc is the MongoDB document for attachments.

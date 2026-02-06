@@ -199,4 +199,3 @@ func (m *userMailbox) UnreadCount(ctx context.Context) (int64, error) {
 	}
 	return stats.UnreadCount, nil
 }
-

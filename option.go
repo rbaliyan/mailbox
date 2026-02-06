@@ -19,13 +19,13 @@ const (
 	MinShutdownTimeout     = 1 * time.Second     // minimum shutdown timeout
 
 	// Default message limits
-	DefaultMaxSubjectLength   = 998               // RFC 5322 max line length
-	DefaultMaxBodySize        = 10 * 1024 * 1024  // 10 MB
-	DefaultMaxAttachmentSize  = 25 * 1024 * 1024  // 25 MB per attachment
-	DefaultMaxAttachmentCount = 20                // max attachments per message
-	DefaultMaxRecipientCount  = 100               // max recipients per message
-	DefaultMaxMetadataSize    = 64 * 1024         // 64 KB total metadata
-	DefaultMaxMetadataKeys    = 100               // max metadata keys
+	DefaultMaxSubjectLength   = 998              // RFC 5322 max line length
+	DefaultMaxBodySize        = 10 * 1024 * 1024 // 10 MB
+	DefaultMaxAttachmentSize  = 25 * 1024 * 1024 // 25 MB per attachment
+	DefaultMaxAttachmentCount = 20               // max attachments per message
+	DefaultMaxRecipientCount  = 100              // max recipients per message
+	DefaultMaxMetadataSize    = 64 * 1024        // 64 KB total metadata
+	DefaultMaxMetadataKeys    = 100              // max metadata keys
 
 	// Query limits
 	DefaultMaxQueryLimit = 100 // max messages per query
@@ -79,10 +79,10 @@ type options struct {
 	statsRefreshInterval time.Duration // TTL for cached stats
 
 	// Event handling
-	eventErrorsFatal       bool                    // If true, event publishing failures cause operation to fail
-	eventTransport         transport.Transport     // Event transport (optional, uses noop if nil)
-	redisClient            redis.UniversalClient   // Redis client for event transport (optional, uses noop if nil)
-	onEventPublishFailure  EventPublishFailureFunc // Callback for event publish failures (always set)
+	eventErrorsFatal      bool                    // If true, event publishing failures cause operation to fail
+	eventTransport        transport.Transport     // Event transport (optional, uses noop if nil)
+	redisClient           redis.UniversalClient   // Redis client for event transport (optional, uses noop if nil)
+	onEventPublishFailure EventPublishFailureFunc // Callback for event publish failures (always set)
 }
 
 // EventPublishFailureFunc is called when an event fails to publish.
@@ -110,7 +110,7 @@ func (o *options) safeEventPublishFailure(eventName string, err error) {
 // newOptions creates options with defaults and applies provided options.
 func newOptions(opts ...Option) *options {
 	o := &options{
-		logger: slog.Default(),
+		logger:         slog.Default(),
 		trashRetention: DefaultTrashRetention,
 		// Message limits defaults
 		maxSubjectLength:   DefaultMaxSubjectLength,

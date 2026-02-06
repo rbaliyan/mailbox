@@ -44,7 +44,7 @@ type textCodec struct {
 	ct string
 }
 
-func (c textCodec) ContentType() string              { return c.ct }
+func (c textCodec) ContentType() string                { return c.ct }
 func (c textCodec) Encode(data []byte) (string, error) { return string(data), nil }
 func (c textCodec) Decode(body string) ([]byte, error) { return []byte(body), nil }
 

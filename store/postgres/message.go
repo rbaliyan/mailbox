@@ -55,7 +55,7 @@ func (m *message) GetIsRead() bool                    { return m.isRead }
 func (m *message) GetReadAt() *time.Time              { return m.readAt }
 func (m *message) GetFolderID() string                { return m.folderID }
 func (m *message) GetTags() []string                  { return m.tags }
-func (m *message) GetAttachments() []store.Attachment  { return m.attachments }
+func (m *message) GetAttachments() []store.Attachment { return m.attachments }
 func (m *message) GetCreatedAt() time.Time            { return m.createdAt }
 func (m *message) GetUpdatedAt() time.Time            { return m.updatedAt }
 func (m *message) GetThreadID() string                { return m.threadID }

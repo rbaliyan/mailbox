@@ -256,4 +256,3 @@ func HasThread() Filter {
 	f, _ := MessageFilter("ThreadID").Exists(true)
 	return f
 }
-

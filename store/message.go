@@ -130,18 +130,18 @@ type DraftMessage interface {
 // MessageData contains data for creating a new message.
 // Used internally when sending a draft to create message copies.
 type MessageData struct {
-	OwnerID          string
-	SenderID         string
-	RecipientIDs     []string
-	Subject          string
-	Body             string
-	Metadata         map[string]any
-	Status           MessageStatus
-	FolderID         string
-	Attachments      []Attachment
-	Tags             []string
-	ThreadID         string
-	ReplyToID        string
+	OwnerID      string
+	SenderID     string
+	RecipientIDs []string
+	Subject      string
+	Body         string
+	Metadata     map[string]any
+	Status       MessageStatus
+	FolderID     string
+	Attachments  []Attachment
+	Tags         []string
+	ThreadID     string
+	ReplyToID    string
 }
 
 // MessageList represents a paginated list of messages.

@@ -17,16 +17,16 @@ type mockMessage struct {
 	metadata map[string]any
 }
 
-func (m *mockMessage) GetID() string                    { return "" }
-func (m *mockMessage) GetOwnerID() string                { return "" }
-func (m *mockMessage) GetSenderID() string               { return "" }
-func (m *mockMessage) GetSubject() string                { return "" }
-func (m *mockMessage) GetBody() string                   { return m.body }
-func (m *mockMessage) GetRecipientIDs() []string         { return nil }
-func (m *mockMessage) GetMetadata() map[string]any       { return m.metadata }
+func (m *mockMessage) GetID() string                      { return "" }
+func (m *mockMessage) GetOwnerID() string                 { return "" }
+func (m *mockMessage) GetSenderID() string                { return "" }
+func (m *mockMessage) GetSubject() string                 { return "" }
+func (m *mockMessage) GetBody() string                    { return m.body }
+func (m *mockMessage) GetRecipientIDs() []string          { return nil }
+func (m *mockMessage) GetMetadata() map[string]any        { return m.metadata }
 func (m *mockMessage) GetAttachments() []store.Attachment { return nil }
-func (m *mockMessage) GetCreatedAt() time.Time           { return time.Time{} }
-func (m *mockMessage) GetUpdatedAt() time.Time           { return time.Time{} }
+func (m *mockMessage) GetCreatedAt() time.Time            { return time.Time{} }
+func (m *mockMessage) GetUpdatedAt() time.Time            { return time.Time{} }
 
 var _ store.MessageReader = (*mockMessage)(nil)
 

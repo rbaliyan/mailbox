@@ -14,9 +14,9 @@ type options struct {
 	endpoint string
 
 	// Credentials options (mutually exclusive)
-	credentialsJSON []byte  // Service account JSON key
-	credentialsFile string  // Path to service account JSON file
-	apiKey          string  // API key (not recommended)
+	credentialsJSON []byte // Service account JSON key
+	credentialsFile string // Path to service account JSON file
+	apiKey          string // API key (not recommended)
 
 	// Logger
 	logger *slog.Logger

@@ -279,7 +279,7 @@ func TestOptionsGetLimits(t *testing.T) {
 // mockPlugin implements Plugin for testing
 type mockPlugin struct{}
 
-func (p *mockPlugin) Name() string                       { return "mock" }
-func (p *mockPlugin) Init(ctx context.Context) error     { return nil }
-func (p *mockPlugin) Close(ctx context.Context) error    { return nil }
-func (p *mockPlugin) Priority() int                      { return 0 }
+func (p *mockPlugin) Name() string                    { return "mock" }
+func (p *mockPlugin) Init(ctx context.Context) error  { return nil }
+func (p *mockPlugin) Close(ctx context.Context) error { return nil }
+func (p *mockPlugin) Priority() int                   { return 0 }

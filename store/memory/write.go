@@ -301,4 +301,3 @@ func (s *Store) Restore(ctx context.Context, id string) error {
 	s.messages.Store(id, m)
 	return nil
 }
-
