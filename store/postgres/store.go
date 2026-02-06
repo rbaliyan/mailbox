@@ -1217,8 +1217,8 @@ func (s *Store) DeleteExpiredTrash(ctx context.Context, cutoff time.Time) (int64
 // Stats Operations
 // =============================================================================
 
-// MailboxStats returns aggregate statistics for a user's mailbox using
-// conditional aggregation in two queries: one for totals, one for per-folder breakdown.
+// MailboxStats returns aggregate statistics for a user's mailbox using a single
+// query with a CTE for consistent point-in-time results.
 func (s *Store) MailboxStats(ctx context.Context, ownerID string) (*store.MailboxStats, error) {
 	if err := s.checkConnected(); err != nil {
 		return nil, err
@@ -1231,47 +1231,55 @@ func (s *Store) MailboxStats(ctx context.Context, ownerID string) (*store.Mailbo
 		Folders: make(map[string]store.FolderCounts),
 	}
 
-	// Query 1: aggregate totals
-	totalsQuery := fmt.Sprintf(`
-		SELECT
+	// Single query: returns totals row (folder_id='') followed by per-folder rows.
+	// The CTE ensures both aggregations see the same snapshot.
+	query := fmt.Sprintf(`
+		WITH msgs AS (
+			SELECT is_draft, is_read, folder_id
+			FROM %s
+			WHERE owner_id = $1
+		)
+		SELECT '' AS folder_id,
 			COALESCE(SUM(CASE WHEN NOT is_draft THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN NOT is_draft AND NOT is_read THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN is_draft THEN 1 ELSE 0 END), 0)
-		FROM %s WHERE owner_id = $1
-	`, s.opts.table)
-
-	if err := s.db.QueryRowContext(ctx, totalsQuery, ownerID).Scan(
-		&stats.TotalMessages,
-		&stats.UnreadCount,
-		&stats.DraftCount,
-	); err != nil {
-		return nil, fmt.Errorf("query mailbox stats totals: %w", err)
-	}
-
-	// Query 2: per-folder breakdown (non-draft messages only)
-	foldersQuery := fmt.Sprintf(`
-		SELECT folder_id, COUNT(*), COALESCE(SUM(CASE WHEN NOT is_read THEN 1 ELSE 0 END), 0)
-		FROM %s
-		WHERE owner_id = $1 AND NOT is_draft
+		FROM msgs
+		UNION ALL
+		SELECT folder_id,
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN NOT is_read THEN 1 ELSE 0 END), 0),
+			0
+		FROM msgs
+		WHERE NOT is_draft
 		GROUP BY folder_id
 	`, s.opts.table)
 
-	rows, err := s.db.QueryContext(ctx, foldersQuery, ownerID)
+	rows, err := s.db.QueryContext(ctx, query, ownerID)
 	if err != nil {
-		return nil, fmt.Errorf("query mailbox stats folders: %w", err)
+		return nil, fmt.Errorf("query mailbox stats: %w", err)
 	}
 	defer rows.Close()
 
+	first := true
 	for rows.Next() {
 		var folderID string
-		var total, unread int64
-		if err := rows.Scan(&folderID, &total, &unread); err != nil {
-			return nil, fmt.Errorf("scan folder stats: %w", err)
+		var col1, col2, col3 int64
+		if err := rows.Scan(&folderID, &col1, &col2, &col3); err != nil {
+			return nil, fmt.Errorf("scan mailbox stats: %w", err)
 		}
-		stats.Folders[folderID] = store.FolderCounts{Total: total, Unread: unread}
+		if first {
+			// First row is the totals row
+			stats.TotalMessages = col1
+			stats.UnreadCount = col2
+			stats.DraftCount = col3
+			first = false
+		} else {
+			// Subsequent rows are per-folder breakdowns
+			stats.Folders[folderID] = store.FolderCounts{Total: col1, Unread: col2}
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate folder stats: %w", err)
+		return nil, fmt.Errorf("iterate mailbox stats: %w", err)
 	}
 
 	return stats, nil

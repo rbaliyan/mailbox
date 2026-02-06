@@ -31,6 +31,7 @@ type MessageSentEvent struct {
 type MessageReadEvent struct {
 	MessageID string    `json:"message_id"`
 	UserID    string    `json:"user_id"`
+	FolderID  string    `json:"folder_id"`
 	ReadAt    time.Time `json:"read_at"`
 }
 
@@ -39,6 +40,8 @@ type MessageReadEvent struct {
 type MessageDeletedEvent struct {
 	MessageID string    `json:"message_id"`
 	UserID    string    `json:"user_id"`
+	FolderID  string    `json:"folder_id"`
+	WasUnread bool      `json:"was_unread"`
 	DeletedAt time.Time `json:"deleted_at"`
 }
 

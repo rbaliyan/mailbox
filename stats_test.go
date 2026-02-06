@@ -11,12 +11,12 @@ import (
 	"github.com/rbaliyan/mailbox/store/memory"
 )
 
-// setupStatsService creates a service with a short TTL so Stats() always refreshes from store.
+// setupStatsService creates a service without event transport.
+// Stats cache is disabled, so Stats() always fetches from store.
 func setupStatsService(t *testing.T) Service {
 	t.Helper()
 	svc, err := NewService(
 		WithStore(memory.New()),
-		WithStatsRefreshInterval(1*time.Millisecond),
 	)
 	if err != nil {
 		t.Fatalf("create service: %v", err)
@@ -77,9 +77,6 @@ func TestStats(t *testing.T) {
 			t.Fatalf("send failed: %v", err)
 		}
 
-		// Wait for TTL to expire so Stats refreshes from store
-		time.Sleep(5 * time.Millisecond)
-
 		bobStats, err := bob.Stats(ctx)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -118,8 +115,6 @@ func TestStats(t *testing.T) {
 			t.Fatalf("save draft: %v", err)
 		}
 
-		time.Sleep(5 * time.Millisecond)
-
 		stats, err := mb.Stats(ctx)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -130,6 +125,50 @@ func TestStats(t *testing.T) {
 	})
 }
 
+func TestStatsCacheDisabledWithoutTransport(t *testing.T) {
+	ctx := context.Background()
+
+	// Service without event transport: cache is disabled.
+	svc, err := NewService(WithStore(memory.New()))
+	if err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+	if err := svc.Connect(ctx); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer svc.Close(ctx)
+
+	mb := svc.Client("user1")
+
+	// First call
+	stats1, err := mb.Stats(ctx)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats1.TotalMessages != 0 {
+		t.Fatalf("expected 0, got %d", stats1.TotalMessages)
+	}
+
+	// Add message directly to store (bypassing events)
+	s := svc.(*service)
+	s.store.CreateMessage(ctx, store.MessageData{
+		OwnerID:  "user1",
+		SenderID: "other",
+		Subject:  "Test",
+		FolderID: store.FolderInbox,
+		Status:   store.MessageStatusDelivered,
+	})
+
+	// Without cache, the second call should see the new message immediately
+	stats2, err := mb.Stats(ctx)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats2.TotalMessages != 1 {
+		t.Errorf("expected total=1 (no cache), got %d", stats2.TotalMessages)
+	}
+}
+
 func TestStatsCaching(t *testing.T) {
 	ctx := context.Background()
 
@@ -137,6 +176,7 @@ func TestStatsCaching(t *testing.T) {
 		svc, err := NewService(
 			WithStore(memory.New()),
 			WithStatsRefreshInterval(1*time.Hour),
+			WithEventTransport(channel.New()),
 		)
 		if err != nil {
 			t.Fatalf("create service: %v", err)
@@ -181,6 +221,7 @@ func TestStatsCaching(t *testing.T) {
 		svc, err := NewService(
 			WithStore(memory.New()),
 			WithStatsRefreshInterval(1*time.Millisecond),
+			WithEventTransport(channel.New()),
 		)
 		if err != nil {
 			t.Fatalf("create service: %v", err)
@@ -284,6 +325,11 @@ func TestStatsEventUpdates(t *testing.T) {
 		if bobStats.UnreadCount != 0 {
 			t.Errorf("expected bob unread=0, got %d", bobStats.UnreadCount)
 		}
+		// Verify per-folder unread also decremented
+		inboxCounts := bobStats.Folders[store.FolderInbox]
+		if inboxCounts.Unread != 0 {
+			t.Errorf("expected inbox unread=0, got %d", inboxCounts.Unread)
+		}
 	})
 
 	t.Run("permanent delete decrements total", func(t *testing.T) {
@@ -331,6 +377,7 @@ func TestStatsConcurrency(t *testing.T) {
 	svc, err := NewService(
 		WithStore(memory.New()),
 		WithStatsRefreshInterval(1*time.Millisecond),
+		WithEventTransport(channel.New()),
 	)
 	if err != nil {
 		t.Fatalf("create service: %v", err)

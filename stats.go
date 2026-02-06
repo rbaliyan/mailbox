@@ -24,32 +24,42 @@ type statsEntry struct {
 }
 
 // getOrRefreshStats returns cached stats if within TTL, otherwise refreshes from the store.
+// When no event transport is configured (statsCacheEnabled=false), always fetches directly
+// from the store since incremental event updates won't keep the cache accurate.
 func (s *service) getOrRefreshStats(ctx context.Context, ownerID string) (*store.MailboxStats, error) {
-	now := time.Now()
-
-	// Fast path: return cached entry if within TTL.
-	if val, ok := s.statsCache.Load(ownerID); ok {
-		entry := val.(*statsEntry)
-		entry.mu.Lock()
-		if entry.stats != nil && now.Sub(entry.updatedAt) < s.opts.statsRefreshInterval {
-			clone := entry.stats.Clone()
-			entry.mu.Unlock()
-			return clone, nil
-		}
-		entry.mu.Unlock()
+	// Without an event transport, the cache won't receive incremental updates
+	// and would serve stale data. Always fetch from the store.
+	if !s.statsCacheEnabled {
+		return s.store.MailboxStats(ctx, ownerID)
 	}
 
-	// Slow path: fetch from store and cache.
+	now := time.Now()
+
+	// LoadOrStore ensures we always work with a single entry per ownerID.
+	// This prevents the race where two goroutines both see a stale/missing entry
+	// and both fetch from the store, with the second overwriting event updates
+	// applied to the first.
+	val, _ := s.statsCache.LoadOrStore(ownerID, &statsEntry{})
+	entry := val.(*statsEntry)
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	// Fast path: return cached entry if within TTL.
+	if entry.stats != nil && now.Sub(entry.updatedAt) < s.opts.statsRefreshInterval {
+		return entry.stats.Clone(), nil
+	}
+
+	// Slow path: fetch from store while holding the lock.
+	// This serializes store fetches for the same ownerID and ensures
+	// event-driven updates aren't lost between fetch and cache store.
 	stats, err := s.store.MailboxStats(ctx, ownerID)
 	if err != nil {
 		return nil, err
 	}
 
-	entry := &statsEntry{
-		stats:     stats,
-		updatedAt: now,
-	}
-	s.statsCache.Store(ownerID, entry)
+	entry.stats = stats
+	entry.updatedAt = now
 
 	return stats.Clone(), nil
 }
@@ -65,6 +75,9 @@ func (s *service) updateCachedStats(ownerID string, fn func(stats *store.Mailbox
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	if entry.stats != nil {
+		if entry.stats.Folders == nil {
+			entry.stats.Folders = make(map[string]store.FolderCounts)
+		}
 		fn(entry.stats)
 	}
 }
@@ -96,22 +109,42 @@ func (s *service) onMessageSent(_ context.Context, _ event.Event[MessageSentEven
 }
 
 // onMessageRead handles the MessageRead event for stats cache updates.
-// Decrements the global unread count. Folder-level unread is corrected at next TTL refresh.
+// Decrements global and per-folder unread counts.
 func (s *service) onMessageRead(_ context.Context, _ event.Event[MessageReadEvent], data MessageReadEvent) error {
 	s.updateCachedStats(data.UserID, func(stats *store.MailboxStats) {
 		if stats.UnreadCount > 0 {
 			stats.UnreadCount--
+		}
+		if data.FolderID != "" {
+			c := stats.Folders[data.FolderID]
+			if c.Unread > 0 {
+				c.Unread--
+				stats.Folders[data.FolderID] = c
+			}
 		}
 	})
 	return nil
 }
 
 // onMessageDeleted handles the MessageDeleted event for stats cache updates.
-// Decrements total count. Folder-level counts are corrected at next TTL refresh.
+// Decrements total, per-folder total, and unread counts as appropriate.
 func (s *service) onMessageDeleted(_ context.Context, _ event.Event[MessageDeletedEvent], data MessageDeletedEvent) error {
 	s.updateCachedStats(data.UserID, func(stats *store.MailboxStats) {
 		if stats.TotalMessages > 0 {
 			stats.TotalMessages--
+		}
+		if data.WasUnread && stats.UnreadCount > 0 {
+			stats.UnreadCount--
+		}
+		if data.FolderID != "" {
+			c := stats.Folders[data.FolderID]
+			if c.Total > 0 {
+				c.Total--
+			}
+			if data.WasUnread && c.Unread > 0 {
+				c.Unread--
+			}
+			stats.Folders[data.FolderID] = c
 		}
 	})
 	return nil

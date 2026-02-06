@@ -302,9 +302,10 @@ type service struct {
 	plugins     *pluginRegistry
 	otel        *otelInstrumentation
 	sendSem     *semaphore.Weighted // Limits concurrent sends to prevent resource exhaustion
-	eventBus    *event.Bus          // Event bus for publishing events
-	events      *ServiceEvents      // Per-service event instances
-	statsCache  sync.Map            // map[ownerID string]*statsEntry
+	eventBus         *event.Bus     // Event bus for publishing events
+	events           *ServiceEvents // Per-service event instances
+	statsCache       sync.Map      // map[ownerID string]*statsEntry
+	statsCacheEnabled bool         // true when event transport is configured
 }
 
 // NewService creates a new mailbox service.
@@ -417,6 +418,7 @@ func (s *service) initEventBus(ctx context.Context) error {
 	case s.opts.eventTransport != nil:
 		s.logger.Info("initializing event bus with custom transport")
 		bus, err = event.NewBus(busName, event.WithTransport(s.opts.eventTransport))
+		s.statsCacheEnabled = true
 	case s.opts.redisClient != nil:
 		s.logger.Info("initializing event bus with Redis transport")
 		t, transportErr := eventredis.New(s.opts.redisClient)
@@ -424,9 +426,11 @@ func (s *service) initEventBus(ctx context.Context) error {
 			return fmt.Errorf("create redis transport: %w", transportErr)
 		}
 		bus, err = event.NewBus(busName, event.WithTransport(t))
+		s.statsCacheEnabled = true
 	default:
-		s.logger.Debug("initializing event bus with noop transport")
+		s.logger.Debug("initializing event bus with noop transport (stats cache disabled)")
 		bus, err = event.NewBus(busName, event.WithTransport(noop.New()))
+		s.statsCacheEnabled = false
 	}
 
 	if err != nil {
@@ -1068,6 +1072,7 @@ func (m *userMailbox) UpdateFlags(ctx context.Context, messageID string, flags F
 		if err := m.service.events.MessageRead.Publish(ctx, MessageReadEvent{
 			MessageID: messageID,
 			UserID:    m.userID,
+			FolderID:  msg.GetFolderID(),
 			ReadAt:    time.Now().UTC(),
 		}); err != nil {
 			if m.service.opts.eventErrorsFatal {
@@ -1183,6 +1188,8 @@ func (m *userMailbox) PermanentlyDelete(ctx context.Context, messageID string) e
 	if err := m.service.events.MessageDeleted.Publish(ctx, MessageDeletedEvent{
 		MessageID: messageID,
 		UserID:    m.userID,
+		FolderID:  msg.GetFolderID(),
+		WasUnread: !msg.GetIsRead(),
 		DeletedAt: time.Now().UTC(),
 	}); err != nil {
 		if m.service.opts.eventErrorsFatal {

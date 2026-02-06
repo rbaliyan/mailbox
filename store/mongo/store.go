@@ -1216,7 +1216,7 @@ func (s *Store) MailboxStats(ctx context.Context, ownerID string) (*store.Mailbo
 				bson.M{"$group": bson.M{
 					"_id":    "$folder_id",
 					"total":  bson.M{"$sum": 1},
-					"unread": bson.M{"$sum": bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$is_read", false}}, 1, 0}}},
+					"unread": bson.M{"$sum": bson.M{"$cond": bson.A{bson.M{"$ne": bson.A{"$is_read", true}}, 1, 0}}},
 				}},
 			},
 			"drafts": bson.A{
