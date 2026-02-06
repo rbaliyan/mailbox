@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"sync/atomic"
 	"time"
 
 	"github.com/rbaliyan/mailbox/store"
@@ -11,8 +10,8 @@ import (
 // MarkRead sets the read status of a message.
 // Uses per-message locking to prevent concurrent mutation races.
 func (s *Store) MarkRead(ctx context.Context, id string, read bool) error {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return err
 	}
 	if id == "" {
 		return store.ErrInvalidID
@@ -51,8 +50,8 @@ func (s *Store) MarkRead(ctx context.Context, id string, read bool) error {
 // MarkAllRead marks all unread non-draft messages in a folder as read.
 // Uses per-message locking for each update to prevent concurrent mutation races.
 func (s *Store) MarkAllRead(ctx context.Context, ownerID, folderID string) (int64, error) {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return 0, store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return 0, err
 	}
 
 	var count int64
@@ -88,8 +87,8 @@ func (s *Store) MarkAllRead(ctx context.Context, ownerID, folderID string) (int6
 // MoveToFolder moves a message to a different folder.
 // Uses per-message locking to prevent concurrent mutation races.
 func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) error {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return err
 	}
 	if id == "" {
 		return store.ErrInvalidID
@@ -121,8 +120,8 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) er
 // AddTag adds a tag to a message.
 // Uses per-message locking to prevent concurrent mutation races.
 func (s *Store) AddTag(ctx context.Context, id string, tagID string) error {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return err
 	}
 	if id == "" {
 		return store.ErrInvalidID
@@ -161,8 +160,8 @@ func (s *Store) AddTag(ctx context.Context, id string, tagID string) error {
 // RemoveTag removes a tag from a message.
 // Uses per-message locking to prevent concurrent mutation races.
 func (s *Store) RemoveTag(ctx context.Context, id string, tagID string) error {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return err
 	}
 	if id == "" {
 		return store.ErrInvalidID
@@ -206,8 +205,8 @@ func (s *Store) RemoveTag(ctx context.Context, id string, tagID string) error {
 // Delete soft-deletes a message.
 // Uses per-message locking to prevent concurrent mutation races.
 func (s *Store) Delete(ctx context.Context, id string) error {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return err
 	}
 	if id == "" {
 		return store.ErrInvalidID
@@ -237,13 +236,19 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 }
 
 // HardDelete permanently removes a message.
+// Uses per-message locking to prevent concurrent mutation races.
 func (s *Store) HardDelete(ctx context.Context, id string) error {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return err
 	}
 	if id == "" {
 		return store.ErrInvalidID
 	}
+
+	// Acquire per-message lock to prevent concurrent mutation races
+	lock := s.getMsgLock(id)
+	lock.Lock()
+	defer lock.Unlock()
 
 	v, ok := s.messages.Load(id)
 	if !ok {
@@ -262,8 +267,8 @@ func (s *Store) HardDelete(ctx context.Context, id string) error {
 // Restore restores a soft-deleted message from trash.
 // Uses per-message locking to prevent concurrent mutation races.
 func (s *Store) Restore(ctx context.Context, id string) error {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return err
 	}
 	if id == "" {
 		return store.ErrInvalidID

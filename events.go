@@ -16,6 +16,7 @@ const (
 	EventNameMessageRead     = "mailbox.message.read"
 	EventNameMessageDeleted  = "mailbox.message.deleted"
 	EventNameMessageMoved    = "mailbox.message.moved"
+	EventNameMarkAllRead     = "mailbox.mark_all_read"
 )
 
 // MessageSentEvent is published when a message is sent.
@@ -68,6 +69,15 @@ type MessageMovedEvent struct {
 	MovedAt      time.Time `json:"moved_at"`
 }
 
+// MarkAllReadEvent is published when all messages in a folder are marked as read.
+// Use this for bulk read receipt tracking and cache invalidation.
+type MarkAllReadEvent struct {
+	UserID   string    `json:"user_id"`
+	FolderID string    `json:"folder_id"`
+	Count    int64     `json:"count"`
+	MarkedAt time.Time `json:"marked_at"`
+}
+
 // Global event instances.
 //
 // Deprecated: These global events use "first registration wins" semantics,
@@ -94,6 +104,10 @@ var (
 	// EventMessageMoved is published when a message is moved between folders.
 	// Deprecated: Use Service.Events().MessageMoved instead.
 	EventMessageMoved = event.New[MessageMovedEvent](EventNameMessageMoved)
+
+	// EventMarkAllRead is published when all messages in a folder are marked as read.
+	// Deprecated: Use Service.Events().MarkAllRead instead.
+	EventMarkAllRead = event.New[MarkAllReadEvent](EventNameMarkAllRead)
 )
 
 // ServiceEvents provides access to per-service event instances.
@@ -120,6 +134,9 @@ type ServiceEvents struct {
 
 	// MessageMoved is published when a message is moved between folders.
 	MessageMoved event.Event[MessageMovedEvent]
+
+	// MarkAllRead is published when all messages in a folder are marked as read.
+	MarkAllRead event.Event[MarkAllReadEvent]
 }
 
 // newServiceEvents creates per-service event instances with a unique name prefix.
@@ -130,6 +147,7 @@ func newServiceEvents(namePrefix string) *ServiceEvents {
 		MessageRead:     event.New[MessageReadEvent](namePrefix + "." + EventNameMessageRead),
 		MessageDeleted:  event.New[MessageDeletedEvent](namePrefix + "." + EventNameMessageDeleted),
 		MessageMoved:    event.New[MessageMovedEvent](namePrefix + "." + EventNameMessageMoved),
+		MarkAllRead:     event.New[MarkAllReadEvent](namePrefix + "." + EventNameMarkAllRead),
 	}
 }
 
@@ -150,6 +168,9 @@ func registerServiceEvents(ctx context.Context, bus *event.Bus, events *ServiceE
 	if err := event.Register(ctx, bus, events.MessageMoved); err != nil {
 		return fmt.Errorf("register MessageMoved: %w", err)
 	}
+	if err := event.Register(ctx, bus, events.MarkAllRead); err != nil {
+		return fmt.Errorf("register MarkAllRead: %w", err)
+	}
 	return nil
 }
 
@@ -165,6 +186,7 @@ func registerEvents(ctx context.Context, bus *event.Bus) error {
 		EventMessageRead,
 		EventMessageDeleted,
 		EventMessageMoved,
+		EventMarkAllRead,
 	}
 
 	for _, ev := range events {
@@ -187,6 +209,8 @@ func registerEvent(ctx context.Context, bus *event.Bus, ev any) error {
 	case event.Event[MessageDeletedEvent]:
 		return tryRegister(ctx, bus, v)
 	case event.Event[MessageMovedEvent]:
+		return tryRegister(ctx, bus, v)
+	case event.Event[MarkAllReadEvent]:
 		return tryRegister(ctx, bus, v)
 	default:
 		return fmt.Errorf("mailbox: unknown event type %T - update registerEvent switch", ev)

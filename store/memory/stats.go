@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"sync/atomic"
 
 	"github.com/rbaliyan/mailbox/store"
 )
@@ -10,8 +9,8 @@ import (
 // CountByFolders returns message counts and unread counts for the given folders.
 // Implements store.FolderCounter for optimized batch counting.
 func (s *Store) CountByFolders(ctx context.Context, ownerID string, folderIDs []string) (map[string]store.FolderCounts, error) {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return nil, store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return nil, err
 	}
 
 	folderSet := make(map[string]bool, len(folderIDs))
@@ -57,8 +56,8 @@ func (s *Store) FindWithCount(ctx context.Context, filters []store.Filter, opts 
 // ListDistinctFolders returns all distinct folder IDs for a user's non-deleted messages.
 // Implements store.FolderLister for custom folder discovery.
 func (s *Store) ListDistinctFolders(ctx context.Context, ownerID string) ([]string, error) {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return nil, store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return nil, err
 	}
 
 	seen := make(map[string]bool)
@@ -80,8 +79,8 @@ func (s *Store) ListDistinctFolders(ctx context.Context, ownerID string) ([]stri
 
 // MailboxStats returns aggregate statistics for a user's mailbox in a single pass.
 func (s *Store) MailboxStats(ctx context.Context, ownerID string) (*store.MailboxStats, error) {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return nil, store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return nil, err
 	}
 
 	stats := &store.MailboxStats{

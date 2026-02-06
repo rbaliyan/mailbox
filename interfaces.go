@@ -243,6 +243,7 @@ type BulkOperator interface {
 //   - MessageSender: Direct message sending without drafts (SendMessage)
 //   - BulkOperator: Bulk mutations by message IDs (BulkUpdateFlags, BulkMove, etc.)
 //   - AttachmentResolver: Resolve attachment metadata by ID
+//   - StatsReader: Aggregate statistics (Stats, UnreadCount)
 //
 // For applications needing only a subset of functionality, use the focused
 // interfaces directly (MessageClient, DraftClient, StorageClient).
@@ -265,9 +266,5 @@ type Mailbox interface {
 	MessageSender
 	BulkOperator
 	AttachmentResolver
-	// Stats returns aggregate statistics for this user's mailbox.
-	Stats(ctx context.Context) (*store.MailboxStats, error)
-	// UnreadCount returns the total unread message count for this user.
-	// This is a convenience method equivalent to calling Stats() and reading UnreadCount.
-	UnreadCount(ctx context.Context) (int64, error)
+	StatsReader
 }

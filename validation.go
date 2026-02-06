@@ -330,6 +330,17 @@ func SafeAttachmentMIMETypes() []string {
 	}
 }
 
+// isValidTagID checks if a tag ID contains only safe characters.
+// Rejects control characters, slashes, and colons to prevent injection issues.
+func isValidTagID(tagID string) bool {
+	for _, c := range tagID {
+		if c < 32 || c == 127 || c == '/' || c == '\\' || c == ':' {
+			return false
+		}
+	}
+	return true
+}
+
 // validateMessageReader validates recipients, content, metadata, and attachments
 // for any type that implements store.MessageReader.
 func validateMessageReader(r store.MessageReader, limits MessageLimits) error {

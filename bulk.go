@@ -123,6 +123,9 @@ type BulkOperationError struct {
 // Error implements the error interface.
 // Always returns a non-empty string describing the failure.
 func (e *BulkOperationError) Error() string {
+	if e.Result == nil {
+		return "mailbox: bulk operation failed"
+	}
 	return fmt.Sprintf("mailbox: bulk operation failed for %d of %d items",
 		e.Result.FailureCount(), e.Result.TotalCount())
 }

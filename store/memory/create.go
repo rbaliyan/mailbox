@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,8 +49,8 @@ func newMessageFromData(data store.MessageData, id string, now time.Time) *messa
 
 // CreateMessage creates a new message from the given data.
 func (s *Store) CreateMessage(ctx context.Context, data store.MessageData) (store.Message, error) {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return nil, store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return nil, err
 	}
 
 	now := time.Now().UTC()
@@ -66,8 +65,8 @@ func (s *Store) CreateMessage(ctx context.Context, data store.MessageData) (stor
 // are already atomic per-key. In production stores, this should use
 // database transactions for true atomicity.
 func (s *Store) CreateMessages(ctx context.Context, data []store.MessageData) ([]store.Message, error) {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return nil, store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return nil, err
 	}
 
 	// Create all messages - memory store doesn't have true transactions,
@@ -93,8 +92,8 @@ func (s *Store) CreateMessages(ctx context.Context, data []store.MessageData) ([
 //
 // The idempotency index maps "ownerID:idempotencyKey" to message ID.
 func (s *Store) CreateMessageIdempotent(ctx context.Context, data store.MessageData, idempotencyKey string) (store.Message, bool, error) {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return nil, false, store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return nil, false, err
 	}
 	if idempotencyKey == "" {
 		return nil, false, store.ErrInvalidIdempotencyKey
@@ -146,8 +145,8 @@ func (s *Store) CreateMessageIdempotent(ctx context.Context, data store.MessageD
 // Safe to call concurrently - each message is deleted exactly once.
 // Uses sync.Map.Range + Delete which is safe for concurrent access.
 func (s *Store) DeleteExpiredTrash(ctx context.Context, cutoff time.Time) (int64, error) {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return 0, store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return 0, err
 	}
 
 	var deleted int64

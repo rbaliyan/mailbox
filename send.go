@@ -93,10 +93,12 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 	failedRecipients := make(map[string]error)
 
 	// Create message for each recipient with idempotency
-	for _, recipientID := range draft.GetRecipientIDs() {
+	for i, recipientID := range draft.GetRecipientIDs() {
 		if err := ctx.Err(); err != nil {
-			failedRecipients[recipientID] = err
-			continue
+			for _, remaining := range draft.GetRecipientIDs()[i:] {
+				failedRecipients[remaining] = err
+			}
+			break
 		}
 
 		data := store.MessageData{

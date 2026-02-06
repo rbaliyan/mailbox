@@ -4,7 +4,6 @@ package memory
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,6 +26,14 @@ type Store struct {
 func (s *Store) getMsgLock(id string) *sync.Mutex {
 	lock, _ := s.msgLocks.LoadOrStore(id, &sync.Mutex{})
 	return lock.(*sync.Mutex)
+}
+
+// checkConnected returns ErrNotConnected if the store is not connected.
+func (s *Store) checkConnected() error {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return store.ErrNotConnected
+	}
+	return nil
 }
 
 // New creates a new in-memory store.
@@ -68,8 +75,8 @@ func (s *Store) NewDraft(ownerID string) store.DraftMessage {
 
 // GetDraft retrieves a draft by ID.
 func (s *Store) GetDraft(ctx context.Context, id string) (store.DraftMessage, error) {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return nil, store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return nil, err
 	}
 	if id == "" {
 		return nil, store.ErrInvalidID
@@ -90,8 +97,8 @@ func (s *Store) GetDraft(ctx context.Context, id string) (store.DraftMessage, er
 
 // SaveDraft persists a draft.
 func (s *Store) SaveDraft(ctx context.Context, draft store.DraftMessage) (store.DraftMessage, error) {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return nil, store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return nil, err
 	}
 
 	// Fast path: draft created by this store.
@@ -139,8 +146,8 @@ func (s *Store) SaveDraft(ctx context.Context, draft store.DraftMessage) (store.
 
 // DeleteDraft permanently removes a draft.
 func (s *Store) DeleteDraft(ctx context.Context, id string) error {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return err
 	}
 	if id == "" {
 		return store.ErrInvalidID
@@ -162,8 +169,8 @@ func (s *Store) DeleteDraft(ctx context.Context, id string) error {
 
 // ListDrafts returns all drafts for a user.
 func (s *Store) ListDrafts(ctx context.Context, ownerID string, opts store.ListOptions) (*store.DraftList, error) {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return nil, store.ErrNotConnected
+	if err := s.checkConnected(); err != nil {
+		return nil, err
 	}
 
 	var drafts []*message
@@ -202,187 +209,6 @@ func (s *Store) ListDrafts(ctx context.Context, ownerID string, opts store.ListO
 		Drafts:  draftList,
 		Total:   total,
 		HasMore: end < len(drafts),
-	}, nil
-}
-
-// =============================================================================
-// Message Operations
-// =============================================================================
-
-// Get retrieves a message by ID.
-func (s *Store) Get(ctx context.Context, id string) (store.Message, error) {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return nil, store.ErrNotConnected
-	}
-	if id == "" {
-		return nil, store.ErrInvalidID
-	}
-
-	v, ok := s.messages.Load(id)
-	if !ok {
-		return nil, store.ErrNotFound
-	}
-
-	m := v.(*message)
-	if m.isDraft {
-		return nil, store.ErrNotFound // drafts are not messages
-	}
-
-	return m.clone(), nil
-}
-
-// Find retrieves messages matching the filters.
-func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.ListOptions) (*store.MessageList, error) {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return nil, store.ErrNotConnected
-	}
-
-	var all []*message
-	s.messages.Range(func(_, v any) bool {
-		m := v.(*message)
-		if !m.isDraft && matchesFilters(m, filters) {
-			all = append(all, m)
-		}
-		return true
-	})
-
-	// Sort
-	sortBy := opts.SortBy
-	if sortBy == "" {
-		sortBy = "created_at"
-	}
-	sortMessages(all, sortBy, opts.SortOrder)
-
-	total := int64(len(all))
-
-	// Apply cursor-based pagination using StartAfter
-	start := 0
-	if opts.StartAfter != "" {
-		found := false
-		for i, m := range all {
-			if m.id == opts.StartAfter {
-				start = i + 1 // Start after this message
-				found = true
-				break
-			}
-		}
-		if !found {
-			// Cursor not found (deleted). Return empty results since the page
-			// boundary is unknown. Callers should re-query without a cursor.
-			return &store.MessageList{Total: total}, nil
-		}
-	}
-
-	end := start + opts.Limit
-	if opts.Limit == 0 {
-		end = len(all)
-	}
-	if end > len(all) {
-		end = len(all)
-	}
-
-	result := all[start:end]
-	messages := make([]store.Message, len(result))
-	for i, m := range result {
-		messages[i] = m.clone()
-	}
-
-	return &store.MessageList{
-		Messages: messages,
-		Total:    total,
-		HasMore:  end < len(all),
-	}, nil
-}
-
-// Count returns the count of messages matching the filters.
-func (s *Store) Count(ctx context.Context, filters []store.Filter) (int64, error) {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return 0, store.ErrNotConnected
-	}
-
-	var count int64
-	s.messages.Range(func(_, v any) bool {
-		m := v.(*message)
-		if !m.isDraft && matchesFilters(m, filters) {
-			count++
-		}
-		return true
-	})
-	return count, nil
-}
-
-// Search performs full-text search on messages.
-func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.MessageList, error) {
-	if atomic.LoadInt32(&s.connected) == 0 {
-		return nil, store.ErrNotConnected
-	}
-
-	var all []*message
-	searchTerm := strings.ToLower(query.Query)
-
-	s.messages.Range(func(_, v any) bool {
-		m := v.(*message)
-		if m.isDraft {
-			return true
-		}
-		if query.OwnerID != "" && m.ownerID != query.OwnerID {
-			return true
-		}
-		if !matchesFilters(m, query.Filters) {
-			return true
-		}
-		if len(query.Tags) > 0 && !hasAllTags(m, query.Tags) {
-			return true
-		}
-		if searchTerm != "" {
-			if !strings.Contains(strings.ToLower(m.subject), searchTerm) &&
-				!strings.Contains(strings.ToLower(m.body), searchTerm) {
-				return true
-			}
-		}
-		all = append(all, m)
-		return true
-	})
-
-	// Sort and paginate
-	sortMessages(all, query.Options.SortBy, query.Options.SortOrder)
-
-	total := int64(len(all))
-
-	// Apply cursor-based pagination using StartAfter
-	start := 0
-	if query.Options.StartAfter != "" {
-		found := false
-		for i, m := range all {
-			if m.id == query.Options.StartAfter {
-				start = i + 1
-				found = true
-				break
-			}
-		}
-		if !found {
-			return &store.MessageList{Total: total}, nil
-		}
-	}
-
-	end := start + query.Options.Limit
-	if query.Options.Limit == 0 {
-		end = len(all)
-	}
-	if end > len(all) {
-		end = len(all)
-	}
-
-	result := all[start:end]
-	messages := make([]store.Message, len(result))
-	for i, m := range result {
-		messages[i] = m.clone()
-	}
-
-	return &store.MessageList{
-		Messages: messages,
-		Total:    total,
-		HasMore:  end < len(all),
 	}, nil
 }
 

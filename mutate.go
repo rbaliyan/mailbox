@@ -252,6 +252,9 @@ func (m *userMailbox) AddTag(ctx context.Context, messageID, tagID string) error
 	if tagID == "" {
 		return fmt.Errorf("%w: empty tag ID", ErrInvalidID)
 	}
+	if !isValidTagID(tagID) {
+		return fmt.Errorf("%w: tag ID contains invalid characters", ErrInvalidID)
+	}
 	if len(tagID) > MaxTagIDLength {
 		return fmt.Errorf("%w: tag ID exceeds maximum length of %d", ErrInvalidID, MaxTagIDLength)
 	}
@@ -275,6 +278,9 @@ func (m *userMailbox) RemoveTag(ctx context.Context, messageID, tagID string) er
 
 	if tagID == "" {
 		return fmt.Errorf("%w: empty tag ID", ErrInvalidID)
+	}
+	if !isValidTagID(tagID) {
+		return fmt.Errorf("%w: tag ID contains invalid characters", ErrInvalidID)
 	}
 	if len(tagID) > MaxTagIDLength {
 		return fmt.Errorf("%w: tag ID exceeds maximum length of %d", ErrInvalidID, MaxTagIDLength)
@@ -322,7 +328,10 @@ func (m *userMailbox) MarkAllRead(ctx context.Context, folderID string) (_ int64
 			return 0, fmt.Errorf("find unread: %w", err)
 		}
 		for _, msg := range list.Messages {
-			if err := m.service.store.MarkRead(ctx, msg.GetID(), true); err == nil {
+			if err := m.service.store.MarkRead(ctx, msg.GetID(), true); err != nil {
+				m.service.logger.Warn("mark read failed in bulk operation",
+					"error", err, "message_id", msg.GetID())
+			} else {
 				count++
 			}
 		}
@@ -344,6 +353,23 @@ func (m *userMailbox) MarkAllRead(ctx context.Context, folderID string) (_ int64
 			}
 			stats.Folders[folderID] = c
 		})
+
+		// Publish MarkAllRead event
+		if err := m.service.events.MarkAllRead.Publish(ctx, MarkAllReadEvent{
+			UserID:   m.userID,
+			FolderID: folderID,
+			Count:    count,
+			MarkedAt: time.Now().UTC(),
+		}); err != nil {
+			if m.service.opts.eventErrorsFatal {
+				return count, &EventPublishError{
+					Event:     "MarkAllRead",
+					MessageID: folderID,
+					Err:       err,
+				}
+			}
+			m.service.opts.safeEventPublishFailure("MarkAllRead", err)
+		}
 	}
 
 	return count, nil
