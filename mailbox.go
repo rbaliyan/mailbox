@@ -52,6 +52,8 @@ type Service interface {
 	Close(ctx context.Context) error
 	// Client returns a mailbox client for the given user.
 	// The returned client shares the service's connections.
+	// Connection state is checked lazily on each operation; if the service
+	// is not connected, operations will return ErrNotConnected.
 	Client(userID string) Mailbox
 	// CleanupTrash permanently deletes messages that have been in trash
 	// longer than the configured retention period. Call this periodically
@@ -436,11 +438,14 @@ func (s *service) initEventBus(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create event bus: %w", err)
 	}
-	s.eventBus = bus
 
-	// Create and register per-service events (unique per service instance).
-	s.events = newServiceEvents(busName)
-	if err := registerServiceEvents(ctx, bus, s.events); err != nil {
+	// Don't assign bus to s.eventBus until all setup succeeds.
+	// On failure, bus.Close() is called and s.eventBus remains nil,
+	// preventing later code from seeing a partially-initialized closed bus.
+	events := newServiceEvents(busName)
+
+	// Register per-service events (unique per service instance).
+	if err := registerServiceEvents(ctx, bus, events); err != nil {
 		bus.Close(ctx)
 		return fmt.Errorf("register service events: %w", err)
 	}
@@ -453,19 +458,22 @@ func (s *service) initEventBus(ctx context.Context) error {
 	}
 
 	// Subscribe internal handlers for stats cache updates.
-	if err := s.events.MessageSent.Subscribe(ctx, s.onMessageSent); err != nil {
+	if err := events.MessageSent.Subscribe(ctx, s.onMessageSent); err != nil {
 		bus.Close(ctx)
 		return fmt.Errorf("subscribe stats MessageSent: %w", err)
 	}
-	if err := s.events.MessageRead.Subscribe(ctx, s.onMessageRead); err != nil {
+	if err := events.MessageRead.Subscribe(ctx, s.onMessageRead); err != nil {
 		bus.Close(ctx)
 		return fmt.Errorf("subscribe stats MessageRead: %w", err)
 	}
-	if err := s.events.MessageDeleted.Subscribe(ctx, s.onMessageDeleted); err != nil {
+	if err := events.MessageDeleted.Subscribe(ctx, s.onMessageDeleted); err != nil {
 		bus.Close(ctx)
 		return fmt.Errorf("subscribe stats MessageDeleted: %w", err)
 	}
 
+	// All setup succeeded - commit to service state.
+	s.eventBus = bus
+	s.events = events
 	return nil
 }
 
@@ -515,6 +523,9 @@ func (s *service) Close(ctx context.Context) error {
 }
 
 // Client returns a mailbox client for the given user.
+// Connection state is checked lazily on each operation, not at creation time.
+// If the service is not connected, operations on the returned client will
+// return ErrNotConnected.
 func (s *service) Client(userID string) Mailbox {
 	return &userMailbox{
 		userID:      userID,
@@ -583,13 +594,12 @@ func (s *service) CleanupTrash(ctx context.Context) (*CleanupTrashResult, error)
 	result := &CleanupTrashResult{}
 	cutoff := time.Now().UTC().Add(-s.opts.trashRetention)
 
-	// Step 1: Collect ALL attachment IDs from expired trash by paging through results.
+	// Step 1: Collect message IDs and their attachment IDs from expired trash.
 	// This must happen before deletion so we know which attachment refs to release.
-	// Note: There is a small race window between this scan and the delete in Step 2.
-	// Messages restored or newly trashed between steps may cause attachment orphans.
-	// This is acceptable: orphaned attachments are harmless (wasted storage) while
-	// prematurely deleted attachments would cause data loss.
-	var attachmentIDs []string
+	// We track per-message attachment IDs so we can verify each message was actually
+	// deleted before releasing its refs (prevents incorrect ref decrements if a
+	// message is restored between the scan and delete steps).
+	messageAttachments := make(map[string][]string) // messageID → []attachmentID
 	if s.attachments != nil {
 		updatedBeforeFilter, err := store.MessageFilter("UpdatedAt").LessThan(cutoff)
 		if err != nil {
@@ -615,8 +625,12 @@ func (s *service) CleanupTrash(ctx context.Context) (*CleanupTrashResult, error)
 			}
 
 			for _, msg := range list.Messages {
+				var ids []string
 				for _, a := range msg.GetAttachments() {
-					attachmentIDs = append(attachmentIDs, a.GetID())
+					ids = append(ids, a.GetID())
+				}
+				if len(ids) > 0 {
+					messageAttachments[msg.GetID()] = ids
 				}
 			}
 
@@ -637,13 +651,25 @@ func (s *service) CleanupTrash(ctx context.Context) (*CleanupTrashResult, error)
 		s.logger.Debug("deleted expired trash messages", "count", deleted)
 	}
 
-	// Step 3: Release attachment references after successful deletion.
-	// If this fails, we have orphaned attachments (better than missing attachments).
+	// Step 3: Release attachment references only for messages confirmed deleted.
+	// A message may have been restored between step 1 and step 2. Verify each
+	// message no longer exists before releasing its attachment refs to prevent
+	// incorrect ref decrements that could cause premature attachment deletion.
 	if s.attachments != nil {
-		for _, attachmentID := range attachmentIDs {
-			if err := s.attachments.RemoveRef(ctx, attachmentID); err != nil {
-				s.logger.Warn("failed to release attachment ref during cleanup",
-					"error", err, "attachment_id", attachmentID)
+		for msgID, attIDs := range messageAttachments {
+			// Verify message was actually deleted (not restored between scan and delete).
+			if _, getErr := s.store.Get(ctx, msgID); getErr == nil {
+				// Message still exists (was restored) - skip releasing its refs.
+				s.logger.Debug("skipping attachment ref release for restored message",
+					"message_id", msgID)
+				continue
+			}
+
+			for _, attachmentID := range attIDs {
+				if err := s.attachments.RemoveRef(ctx, attachmentID); err != nil {
+					s.logger.Warn("failed to release attachment ref during cleanup",
+						"error", err, "attachment_id", attachmentID, "message_id", msgID)
+				}
 			}
 		}
 	}
@@ -791,7 +817,11 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 		if created {
 			if refErr := m.addAttachmentRefs(ctx, recipientCopy); refErr != nil {
 				// Attachment ref failure means the message won't be fully functional.
-				// Delete the message and mark as failed to maintain consistency.
+				// Release any partial refs, then delete the message to maintain consistency.
+				if releaseErr := m.releaseAttachmentRefs(ctx, recipientCopy); releaseErr != nil {
+					m.service.logger.Error("failed to release partial attachment refs during rollback",
+						"error", releaseErr, "message_id", recipientCopy.GetID(), "recipient", recipientID)
+				}
 				if deleteErr := m.service.store.HardDelete(ctx, recipientCopy.GetID()); deleteErr != nil {
 					m.service.logger.Error("failed to rollback recipient message after attachment ref failure",
 						"error", deleteErr, "message_id", recipientCopy.GetID(), "recipient", recipientID)
@@ -857,7 +887,7 @@ func (m *userMailbox) finalizeDelivery(ctx context.Context, senderCopy store.Mes
 			// Return the message WITH an error - message was sent but event failed
 			return updatedCopy, &EventPublishError{
 				Event:     "MessageSent",
-				MessageID: senderCopy.GetID(),
+				MessageID: updatedCopy.GetID(),
 				Err:       err,
 			}
 		}
@@ -882,6 +912,13 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 	// Step 2: Validate the draft (before acquiring semaphore to avoid wasting slots)
 	if err := ValidateDraft(draft, m.service.opts.getLimits()); err != nil {
 		return nil, err
+	}
+
+	// Step 2b: Fail early if draft has attachments but no attachment manager is configured.
+	// Without a manager, attachment refs won't be tracked and attachments may be orphaned
+	// or prematurely deleted.
+	if len(draft.GetAttachments()) > 0 && m.service.attachments == nil {
+		return nil, ErrAttachmentStoreNotConfigured
 	}
 
 	// Setup tracing
@@ -934,9 +971,9 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 	updatedSenderCopy, eventErr := m.finalizeDelivery(ctx, senderCopy, deliveredTo, draft, now)
 	if eventErr != nil {
 		sendErr = eventErr
-		// Return the sender copy even on finalization failure since the message
-		// was already created and delivered to recipients.
-		return senderCopy, sendErr
+		// Return the updated sender copy (moved to Sent folder) even on event
+		// publish failure since the message was already created and delivered.
+		return updatedSenderCopy, sendErr
 	}
 
 	// Step 9: Handle partial delivery
