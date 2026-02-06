@@ -15,7 +15,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.6
 	github.com/google/uuid v1.6.0
 	github.com/jmoiron/sqlx v1.4.0
-	github.com/lib/pq v1.10.9
+	github.com/lib/pq v1.11.1
 	github.com/rbaliyan/event/v3 v3.7.0
 	github.com/redis/go-redis/v9 v9.17.2
 	go.mongodb.org/mongo-driver/v2 v2.2.0
