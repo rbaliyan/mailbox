@@ -3,6 +3,9 @@
 [![CI](https://github.com/rbaliyan/mailbox/actions/workflows/ci.yml/badge.svg)](https://github.com/rbaliyan/mailbox/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/rbaliyan/mailbox.svg)](https://pkg.go.dev/github.com/rbaliyan/mailbox)
 [![Go Report Card](https://goreportcard.com/badge/github.com/rbaliyan/mailbox)](https://goreportcard.com/report/github.com/rbaliyan/mailbox)
+[![Release](https://img.shields.io/github/v/release/rbaliyan/mailbox)](https://github.com/rbaliyan/mailbox/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/rbaliyan/mailbox/badge)](https://scorecard.dev/viewer/?uri=github.com/rbaliyan/mailbox)
 
 A Go library for persistent, addressable messaging between users or services. Every message has an owner, a lifecycle, and mutable state — making it suitable for user-to-user communication, service-to-service coordination, and async job delivery where sender and receiver don't need to be online at the same time.
 
