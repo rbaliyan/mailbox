@@ -94,6 +94,11 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 
 	// Create message for each recipient with idempotency
 	for _, recipientID := range draft.GetRecipientIDs() {
+		if err := ctx.Err(); err != nil {
+			failedRecipients[recipientID] = err
+			continue
+		}
+
 		data := store.MessageData{
 			OwnerID:      recipientID,
 			SenderID:     m.userID,
@@ -298,19 +303,19 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 		return updatedSenderCopy, sendErr
 	}
 
-	// Step 9: Handle partial delivery
+	// Step 9: Plugin AfterSend hook (runs even on partial delivery since message was sent)
+	if err := m.service.plugins.afterSend(ctx, m.userID, updatedSenderCopy); err != nil {
+		sendErr = err
+		return updatedSenderCopy, sendErr
+	}
+
+	// Step 10: Handle partial delivery
 	if len(failedRecipients) > 0 {
 		sendErr = &PartialDeliveryError{
 			MessageID:        updatedSenderCopy.GetID(),
 			DeliveredTo:      deliveredTo,
 			FailedRecipients: failedRecipients,
 		}
-		return updatedSenderCopy, sendErr
-	}
-
-	// Step 10: Plugin AfterSend hook
-	if err := m.service.plugins.afterSend(ctx, m.userID, updatedSenderCopy); err != nil {
-		sendErr = err
 		return updatedSenderCopy, sendErr
 	}
 

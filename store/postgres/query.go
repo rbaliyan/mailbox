@@ -11,6 +11,12 @@ import (
 	"github.com/rbaliyan/mailbox/store"
 )
 
+// messageColumns is the canonical SELECT column list for scanning messages.
+// It must match the field order expected by scanMessage / scanMessageFromRows.
+const messageColumns = `id, owner_id, sender_id, subject, body, metadata, status, folder_id,
+       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
+       idempotency_key, thread_id, reply_to_id, created_at, updated_at`
+
 func (s *Store) Get(ctx context.Context, id string) (store.Message, error) {
 	if err := s.checkConnected(); err != nil {
 		return nil, err
@@ -24,13 +30,10 @@ func (s *Store) Get(ctx context.Context, id string) (store.Message, error) {
 	defer cancel()
 
 	query := fmt.Sprintf(`
-		SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
-		       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
-		       idempotency_key, thread_id, reply_to_id,
-		       created_at, updated_at
+		SELECT %s
 		FROM %s
 		WHERE id = $1 AND is_draft = false
-	`, s.opts.table)
+	`, messageColumns, s.opts.table)
 
 	msg, err := s.scanMessage(s.db.QueryRowContext(ctx, query, id))
 	if err != nil {
@@ -97,28 +100,22 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 	if opts.StartAfter != "" {
 		// Cursor-based: no OFFSET needed
 		query = fmt.Sprintf(`
-			SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
-			       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
-			       idempotency_key, thread_id, reply_to_id,
-			       created_at, updated_at
+			SELECT %s
 			FROM %s
 			WHERE %s
 			ORDER BY %s %s
 			LIMIT $%d
-		`, s.opts.table, where, sortField, sortOrder, len(args)+1)
+		`, messageColumns, s.opts.table, where, sortField, sortOrder, len(args)+1)
 		args = append(args, opts.Limit+1)
 	} else {
 		// Offset-based
 		query = fmt.Sprintf(`
-			SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
-			       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
-			       idempotency_key, thread_id, reply_to_id,
-			       created_at, updated_at
+			SELECT %s
 			FROM %s
 			WHERE %s
 			ORDER BY %s %s
 			LIMIT $%d OFFSET $%d
-		`, s.opts.table, where, sortField, sortOrder, len(args)+1, len(args)+2)
+		`, messageColumns, s.opts.table, where, sortField, sortOrder, len(args)+1, len(args)+2)
 		args = append(args, opts.Limit+1, opts.Offset)
 	}
 
@@ -266,27 +263,21 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 	var sqlQuery string
 	if query.Options.StartAfter != "" {
 		sqlQuery = fmt.Sprintf(`
-			SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
-			       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
-			       idempotency_key, thread_id, reply_to_id,
-			       created_at, updated_at
+			SELECT %s
 			FROM %s
 			WHERE %s
 			ORDER BY created_at DESC
 			LIMIT $%d
-		`, s.opts.table, where, argIdx)
+		`, messageColumns, s.opts.table, where, argIdx)
 		args = append(args, query.Options.Limit+1)
 	} else {
 		sqlQuery = fmt.Sprintf(`
-			SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
-			       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
-			       idempotency_key, thread_id, reply_to_id,
-			       created_at, updated_at
+			SELECT %s
 			FROM %s
 			WHERE %s
 			ORDER BY created_at DESC
 			LIMIT $%d OFFSET $%d
-		`, s.opts.table, where, argIdx, argIdx+1)
+		`, messageColumns, s.opts.table, where, argIdx, argIdx+1)
 		args = append(args, query.Options.Limit+1, query.Options.Offset)
 	}
 

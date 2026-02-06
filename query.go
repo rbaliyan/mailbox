@@ -41,49 +41,6 @@ func (m *userMailbox) Get(ctx context.Context, messageID string) (Message, error
 	return newMessage(msg, m), nil
 }
 
-// Inbox returns messages in the user's inbox (received messages, not archived or trashed).
-func (m *userMailbox) Inbox(ctx context.Context, opts store.ListOptions) (MessageList, error) {
-	return m.listWithOTel(ctx, "inbox", opts, func() []store.Filter {
-		return []store.Filter{
-			store.OwnerIs(m.userID),
-			store.InFolder(store.FolderInbox),
-			store.NotDeleted(),
-		}
-	})
-}
-
-// Sent returns messages sent by the user.
-func (m *userMailbox) Sent(ctx context.Context, opts store.ListOptions) (MessageList, error) {
-	return m.listWithOTel(ctx, "sent", opts, func() []store.Filter {
-		return []store.Filter{
-			store.OwnerIs(m.userID),
-			store.InFolder(store.FolderSent),
-			store.NotDeleted(),
-		}
-	})
-}
-
-// Archived returns archived messages for the current user.
-func (m *userMailbox) Archived(ctx context.Context, opts store.ListOptions) (MessageList, error) {
-	return m.listWithOTel(ctx, "archived", opts, func() []store.Filter {
-		return []store.Filter{
-			store.OwnerIs(m.userID),
-			store.InFolder(store.FolderArchived),
-			store.NotDeleted(),
-		}
-	})
-}
-
-// Trash returns messages in trash for the current user.
-func (m *userMailbox) Trash(ctx context.Context, opts store.ListOptions) (MessageList, error) {
-	return m.listWithOTel(ctx, "trash", opts, func() []store.Filter {
-		return []store.Filter{
-			store.OwnerIs(m.userID),
-			store.InFolder(store.FolderTrash),
-		}
-	})
-}
-
 // Drafts returns draft messages for the current user.
 func (m *userMailbox) Drafts(ctx context.Context, opts store.ListOptions) (DraftList, error) {
 	if err := m.checkAccess(); err != nil {
@@ -119,7 +76,6 @@ func (m *userMailbox) Folder(ctx context.Context, folderID string, opts store.Li
 		return []store.Filter{
 			store.OwnerIs(m.userID),
 			store.InFolder(folderID),
-			store.NotDeleted(),
 		}
 	})
 }

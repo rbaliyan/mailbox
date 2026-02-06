@@ -115,7 +115,7 @@ _, err := producer.SendMessage(ctx, mailbox.SendRequest{
 
 // Job consumer: process pending work (possibly on a different host, started later)
 worker := svc.Client("image-resizer")
-inbox, _ := worker.Inbox(ctx, store.ListOptions{})
+inbox, _ := worker.Folder(ctx, store.FolderInbox, store.ListOptions{})
 for _, job := range inbox.All() {
     process(job.GetBody(), job.GetMetadata())
     worker.UpdateFlags(ctx, job.GetID(), mailbox.Flags{Read: boolPtr(true)})
@@ -235,7 +235,7 @@ Perform operations on multiple messages at once:
 
 ```go
 // Get inbox messages
-inbox, _ := mb.Inbox(ctx, store.ListOptions{Limit: 50})
+inbox, _ := mb.Folder(ctx, store.FolderInbox, store.ListOptions{Limit: 50})
 
 // Mark all as read
 result, _ := inbox.MarkRead(ctx)
@@ -249,8 +249,8 @@ result, _ := inbox.Move(ctx, "important")
 // Delete all
 result, _ := inbox.Delete(ctx)
 
-// Archive all
-result, _ := inbox.Archive(ctx)
+// Archive all (move to archive folder)
+result, _ := inbox.Move(ctx, store.FolderArchived)
 
 // Add tag to all
 result, _ := inbox.AddTag(ctx, "processed")

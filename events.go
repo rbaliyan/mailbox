@@ -64,6 +64,7 @@ type MessageMovedEvent struct {
 	UserID       string    `json:"user_id"`
 	FromFolderID string    `json:"from_folder_id"`
 	ToFolderID   string    `json:"to_folder_id"`
+	WasUnread    bool      `json:"was_unread"`
 	MovedAt      time.Time `json:"moved_at"`
 }
 

@@ -152,6 +152,7 @@ func (s *service) onMessageDeleted(_ context.Context, _ event.Event[MessageDelet
 
 // onMessageMoved handles the MessageMoved event for stats cache updates.
 // Decrements the source folder total and increments the destination folder total.
+// Also adjusts unread counts when moving unread messages.
 func (s *service) onMessageMoved(_ context.Context, _ event.Event[MessageMovedEvent], data MessageMovedEvent) error {
 	s.updateCachedStats(data.UserID, func(stats *store.MailboxStats) {
 		if data.FromFolderID != "" {
@@ -159,11 +160,17 @@ func (s *service) onMessageMoved(_ context.Context, _ event.Event[MessageMovedEv
 			if c.Total > 0 {
 				c.Total--
 			}
+			if data.WasUnread && c.Unread > 0 {
+				c.Unread--
+			}
 			stats.Folders[data.FromFolderID] = c
 		}
 		if data.ToFolderID != "" {
 			c := stats.Folders[data.ToFolderID]
 			c.Total++
+			if data.WasUnread {
+				c.Unread++
+			}
 			stats.Folders[data.ToFolderID] = c
 		}
 	})

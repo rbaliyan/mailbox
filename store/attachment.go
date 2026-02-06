@@ -44,11 +44,6 @@ type AttachmentMetadataStore interface {
 	// Called when a message with this attachment is created.
 	IncrementRef(ctx context.Context, id string) error
 
-	// DecrementRef atomically decrements the reference count.
-	// Returns the new count. Called when a message is permanently deleted.
-	// Deprecated: Use DecrementRefAndDeleteIfZero for atomic release.
-	DecrementRef(ctx context.Context, id string) (newCount int, err error)
-
 	// DecrementRefAndDeleteIfZero atomically decrements the reference count
 	// and deletes the metadata if the count reaches zero.
 	// Returns (true, uri) if deleted, (false, "") if not deleted.

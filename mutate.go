@@ -51,7 +51,7 @@ func (m *userMailbox) UpdateFlags(ctx context.Context, messageID string, flags F
 		}
 
 		// Publish move event
-		if err := m.publishMessageMoved(ctx, messageID, m.userID, oldFolderID, folderID); err != nil {
+		if err := m.publishMessageMoved(ctx, messageID, m.userID, oldFolderID, folderID, !msg.GetIsRead()); err != nil {
 			return err
 		}
 	}
@@ -125,7 +125,7 @@ func (m *userMailbox) Delete(ctx context.Context, messageID string) (retErr erro
 	}
 
 	// Publish move event
-	if err := m.publishMessageMoved(ctx, messageID, m.userID, oldFolderID, store.FolderTrash); err != nil {
+	if err := m.publishMessageMoved(ctx, messageID, m.userID, oldFolderID, store.FolderTrash, !msg.GetIsRead()); err != nil {
 		return err
 	}
 
@@ -161,7 +161,7 @@ func (m *userMailbox) Restore(ctx context.Context, messageID string) (retErr err
 	}
 
 	// Publish move event
-	if err := m.publishMessageMoved(ctx, messageID, m.userID, store.FolderTrash, folderID); err != nil {
+	if err := m.publishMessageMoved(ctx, messageID, m.userID, store.FolderTrash, folderID, !msg.GetIsRead()); err != nil {
 		return err
 	}
 
@@ -256,7 +256,7 @@ func (m *userMailbox) MoveToFolder(ctx context.Context, messageID, folderID stri
 	}
 
 	// Publish move event
-	if err := m.publishMessageMoved(ctx, messageID, m.userID, oldFolderID, folderID); err != nil {
+	if err := m.publishMessageMoved(ctx, messageID, m.userID, oldFolderID, folderID, !msg.GetIsRead()); err != nil {
 		return err
 	}
 
@@ -330,7 +330,7 @@ func (m *userMailbox) canAccess(msg store.Message) bool {
 // publishMessageMoved publishes a MessageMoved event.
 // Returns an EventPublishError when eventErrorsFatal is true and publishing fails.
 // Otherwise, logs the failure and returns nil.
-func (m *userMailbox) publishMessageMoved(ctx context.Context, messageID, userID, fromFolderID, toFolderID string) error {
+func (m *userMailbox) publishMessageMoved(ctx context.Context, messageID, userID, fromFolderID, toFolderID string, wasUnread bool) error {
 	if fromFolderID == toFolderID {
 		return nil
 	}
@@ -339,6 +339,7 @@ func (m *userMailbox) publishMessageMoved(ctx context.Context, messageID, userID
 		UserID:       userID,
 		FromFolderID: fromFolderID,
 		ToFolderID:   toFolderID,
+		WasUnread:    wasUnread,
 		MovedAt:      time.Now().UTC(),
 	}); err != nil {
 		if m.service.opts.eventErrorsFatal {

@@ -35,7 +35,7 @@ import (
 //	}
 //
 //	// List: loads page into memory, supports bulk ops
-//	list, _ := mb.Inbox(ctx, store.ListOptions{Limit: 50})
+//	list, _ := mb.Folder(ctx, store.FolderInbox, store.ListOptions{Limit: 50})
 //	list.MarkRead(ctx)  // bulk operation on all 50 messages
 //	fmt.Printf("Showing %d of %d total", len(list.All()), list.Total())
 //

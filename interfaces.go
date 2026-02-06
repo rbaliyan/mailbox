@@ -53,10 +53,6 @@ type MessageReader interface {
 
 // MessageLister provides message listing by folder.
 type MessageLister interface {
-	Inbox(ctx context.Context, opts store.ListOptions) (MessageList, error)
-	Sent(ctx context.Context, opts store.ListOptions) (MessageList, error)
-	Archived(ctx context.Context, opts store.ListOptions) (MessageList, error)
-	Trash(ctx context.Context, opts store.ListOptions) (MessageList, error)
 	Folder(ctx context.Context, folderID string, opts store.ListOptions) (MessageList, error)
 }
 
@@ -107,8 +103,6 @@ type DraftListReader interface {
 	HasMore() bool
 	// NextCursor returns the cursor for fetching the next page.
 	NextCursor() string
-	// IDs returns the IDs of all drafts in this list.
-	IDs() []string
 }
 
 // DraftListMutator provides bulk mutation operations on a list of drafts.
@@ -124,7 +118,7 @@ type DraftListMutator interface {
 // DraftList provides access to a paginated list of drafts with bulk operations.
 //
 // Composed of:
-//   - DraftListReader: Read-only access (All, Total, HasMore, NextCursor, IDs)
+//   - DraftListReader: Read-only access (All, Total, HasMore, NextCursor)
 //   - DraftListMutator: Bulk mutations (Delete, Send)
 type DraftList interface {
 	DraftListReader
@@ -228,6 +222,7 @@ type BulkOperator interface {
 	BulkUpdateFlags(ctx context.Context, messageIDs []string, flags Flags) (*BulkResult, error)
 	BulkMove(ctx context.Context, messageIDs []string, folderID string) (*BulkResult, error)
 	BulkDelete(ctx context.Context, messageIDs []string) (*BulkResult, error)
+	BulkPermanentlyDelete(ctx context.Context, messageIDs []string) (*BulkResult, error)
 	BulkAddTag(ctx context.Context, messageIDs []string, tagID string) (*BulkResult, error)
 	BulkRemoveTag(ctx context.Context, messageIDs []string, tagID string) (*BulkResult, error)
 }
@@ -252,7 +247,7 @@ type BulkOperator interface {
 //
 // For bulk operations on listed messages, use the methods on MessageList:
 //
-//	inbox, _ := mailbox.Inbox(ctx, opts)
+//	inbox, _ := mailbox.Folder(ctx, store.FolderInbox, opts)
 //	inbox.MarkRead(ctx)           // mark all as read
 //	inbox.Move(ctx, "archive")    // move all to archive
 //	inbox.Delete(ctx)             // delete all

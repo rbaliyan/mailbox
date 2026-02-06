@@ -193,13 +193,10 @@ func (s *Store) GetDraft(ctx context.Context, id string) (store.DraftMessage, er
 	defer cancel()
 
 	query := fmt.Sprintf(`
-		SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
-		       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
-		       idempotency_key, thread_id, reply_to_id,
-		       created_at, updated_at
+		SELECT %s
 		FROM %s
 		WHERE id = $1 AND is_draft = true
-	`, s.opts.table)
+	`, messageColumns, s.opts.table)
 
 	msg, err := s.scanMessage(s.db.QueryRowContext(ctx, query, id))
 	if err != nil {
@@ -351,15 +348,12 @@ func (s *Store) ListDrafts(ctx context.Context, ownerID string, opts store.ListO
 
 	// Query drafts
 	query := fmt.Sprintf(`
-		SELECT id, owner_id, sender_id, subject, body, metadata, status, folder_id,
-		       is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
-		       idempotency_key, thread_id, reply_to_id,
-		       created_at, updated_at
+		SELECT %s
 		FROM %s
 		WHERE owner_id = $1 AND is_draft = true
 		ORDER BY created_at DESC
 		LIMIT $2 OFFSET $3
-	`, s.opts.table)
+	`, messageColumns, s.opts.table)
 
 	rows, err := s.db.QueryContext(ctx, query, ownerID, opts.Limit+1, opts.Offset)
 	if err != nil {

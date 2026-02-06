@@ -306,7 +306,7 @@ func TestStatsEventUpdates(t *testing.T) {
 	})
 
 	t.Run("read decrements unread", func(t *testing.T) {
-		inbox, err := bob.Inbox(ctx, store.ListOptions{})
+		inbox, err := bob.Folder(ctx, store.FolderInbox, store.ListOptions{})
 		if err != nil {
 			t.Fatalf("inbox: %v", err)
 		}
@@ -345,7 +345,7 @@ func TestStatsEventUpdates(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 
-		inbox, _ := bob.Inbox(ctx, store.ListOptions{})
+		inbox, _ := bob.Folder(ctx, store.FolderInbox, store.ListOptions{})
 		msgs := inbox.All()
 		if len(msgs) == 0 {
 			t.Fatal("expected messages")

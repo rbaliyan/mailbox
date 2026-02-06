@@ -399,11 +399,16 @@ func (l *draftList) Send(ctx context.Context) (*DraftSendResult, error) {
 		}
 		res := OperationResult{ID: draftID}
 		msg, err := draft.Send(ctx)
+		if msg != nil {
+			// Message was created (even on partial delivery or event errors)
+			sentMessages = append(sentMessages, msg)
+			res.Success = true
+		}
 		if err != nil {
 			res.Error = err
-		} else {
-			res.Success = true
-			sentMessages = append(sentMessages, msg)
+			if msg == nil {
+				res.Success = false
+			}
 		}
 		result.Results = append(result.Results, res)
 	}

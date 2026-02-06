@@ -175,6 +175,13 @@ func (m *userMailbox) BulkDelete(ctx context.Context, messageIDs []string) (*Bul
 	})
 }
 
+// BulkPermanentlyDelete permanently deletes multiple messages from trash by ID.
+func (m *userMailbox) BulkPermanentlyDelete(ctx context.Context, messageIDs []string) (*BulkResult, error) {
+	return m.bulkOp(ctx, messageIDs, func(id string) error {
+		return m.PermanentlyDelete(ctx, id)
+	})
+}
+
 // BulkAddTag adds a tag to multiple messages by ID.
 func (m *userMailbox) BulkAddTag(ctx context.Context, messageIDs []string, tagID string) (*BulkResult, error) {
 	return m.bulkOp(ctx, messageIDs, func(id string) error {

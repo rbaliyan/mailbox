@@ -319,7 +319,7 @@ func buildFilter(filters []store.Filter) bson.M {
 
 	result := bson.M{}
 	for _, f := range filters {
-		if f == nil {
+		if f.Key() == "" {
 			continue
 		}
 		key := mapKey(f.Key())

@@ -102,7 +102,7 @@ func TestConcurrentReads(t *testing.T) {
 			defer wg.Done()
 
 			// Read inbox
-			inbox, err := reader.Inbox(ctx, store.ListOptions{Limit: 10})
+			inbox, err := reader.Folder(ctx, store.FolderInbox, store.ListOptions{Limit: 10})
 			if err != nil {
 				errors <- err
 				return
@@ -156,7 +156,7 @@ func TestConcurrentMarkRead(t *testing.T) {
 	}
 
 	reader := svc.Client("reader")
-	inbox, err := reader.Inbox(ctx, store.ListOptions{Limit: 1})
+	inbox, err := reader.Folder(ctx, store.FolderInbox, store.ListOptions{Limit: 1})
 	if err != nil {
 		t.Fatalf("failed to get inbox: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestConcurrentServiceAccess(t *testing.T) {
 			}
 
 			// Read sent
-			_, err = client.Sent(ctx, store.ListOptions{Limit: 10})
+			_, err = client.Folder(ctx, store.FolderSent, store.ListOptions{Limit: 10})
 			if err != nil {
 				errors <- err
 			}
@@ -347,7 +347,7 @@ func TestConcurrentFolderMoves(t *testing.T) {
 		}
 	}
 
-	inbox, err := reader.Inbox(ctx, store.ListOptions{Limit: 10})
+	inbox, err := reader.Folder(ctx, store.FolderInbox, store.ListOptions{Limit: 10})
 	if err != nil {
 		t.Fatalf("failed to get inbox: %v", err)
 	}

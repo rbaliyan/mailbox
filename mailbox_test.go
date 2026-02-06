@@ -92,7 +92,7 @@ func TestUserMailbox(t *testing.T) {
 			t.Errorf("expected ErrNotConnected, got %v", err)
 		}
 
-		_, err = mb.Inbox(ctx, store.ListOptions{})
+		_, err = mb.Folder(ctx, store.FolderInbox, store.ListOptions{})
 		if !errors.Is(err, ErrNotConnected) {
 			t.Errorf("expected ErrNotConnected, got %v", err)
 		}
@@ -137,7 +137,7 @@ func TestComposeSendMessage(t *testing.T) {
 		}
 
 		// Verify sender has message in sent folder
-		sent, err := sender.Sent(ctx, store.ListOptions{})
+		sent, err := sender.Folder(ctx, store.FolderSent, store.ListOptions{})
 		if err != nil {
 			t.Fatalf("list sent failed: %v", err)
 		}
@@ -146,7 +146,7 @@ func TestComposeSendMessage(t *testing.T) {
 		}
 
 		// Verify recipient has message in inbox
-		inbox, err := recipient.Inbox(ctx, store.ListOptions{})
+		inbox, err := recipient.Folder(ctx, store.FolderInbox, store.ListOptions{})
 		if err != nil {
 			t.Fatalf("list inbox failed: %v", err)
 		}
@@ -170,8 +170,8 @@ func TestComposeSendMessage(t *testing.T) {
 		}
 
 		// Both should have it
-		inbox1, _ := r1.Inbox(ctx, store.ListOptions{})
-		inbox2, _ := r2.Inbox(ctx, store.ListOptions{})
+		inbox1, _ := r1.Folder(ctx, store.FolderInbox, store.ListOptions{})
+		inbox2, _ := r2.Folder(ctx, store.FolderInbox, store.ListOptions{})
 
 		if len(inbox1.All()) != 1 {
 			t.Errorf("r1 expected 1 message, got %d", len(inbox1.All()))
@@ -297,7 +297,7 @@ func TestMessageOperations(t *testing.T) {
 	_, _ = draft.Send(ctx)
 
 	// Get recipient's inbox
-	inbox, _ := recipient.Inbox(ctx, store.ListOptions{})
+	inbox, _ := recipient.Folder(ctx, store.FolderInbox, store.ListOptions{})
 	if len(inbox.All()) == 0 {
 		t.Fatal("expected message in inbox")
 	}
@@ -335,7 +335,7 @@ func TestMessageOperations(t *testing.T) {
 		}
 
 		// Should be in archived folder
-		archived, _ := recipient.Archived(ctx, store.ListOptions{})
+		archived, _ := recipient.Folder(ctx, store.FolderArchived, store.ListOptions{})
 		found := false
 		for _, m := range archived.All() {
 			if m.GetID() == msg.GetID() {
@@ -358,7 +358,7 @@ func TestMessageOperations(t *testing.T) {
 		}
 
 		// Should be in trash
-		trash, _ := recipient.Trash(ctx, store.ListOptions{})
+		trash, _ := recipient.Folder(ctx, store.FolderTrash, store.ListOptions{})
 		found := false
 		for _, m := range trash.All() {
 			if m.GetID() == msg.GetID() {
@@ -378,7 +378,7 @@ func TestMessageOperations(t *testing.T) {
 		}
 
 		// Should not be in trash anymore
-		trash, _ = recipient.Trash(ctx, store.ListOptions{})
+		trash, _ = recipient.Folder(ctx, store.FolderTrash, store.ListOptions{})
 		if len(trash.All()) > 0 {
 			t.Error("trash should be empty after restore")
 		}
@@ -446,7 +446,7 @@ func TestTags(t *testing.T) {
 		SetRecipients("recipient")
 	_, _ = draft.Send(ctx)
 
-	inbox, _ := recipient.Inbox(ctx, store.ListOptions{})
+	inbox, _ := recipient.Folder(ctx, store.FolderInbox, store.ListOptions{})
 	msg := inbox.All()[0]
 
 	t.Run("add and remove tags", func(t *testing.T) {
@@ -539,7 +539,7 @@ func TestConcurrentSends(t *testing.T) {
 	}
 
 	// Verify all messages were sent
-	sent, _ := sender.Sent(ctx, store.ListOptions{Limit: 100})
+	sent, _ := sender.Folder(ctx, store.FolderSent, store.ListOptions{Limit: 100})
 	if len(sent.All()) != 20 {
 		t.Errorf("expected 20 sent messages, got %d", len(sent.All()))
 	}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/rbaliyan/mailbox"
 	"github.com/rbaliyan/mailbox/content"
+	"github.com/rbaliyan/mailbox/store"
 	"github.com/rbaliyan/mailbox/store/memory"
 )
 
@@ -98,7 +99,7 @@ func Example_serviceToService() {
 
 	registry := content.DefaultRegistry()
 	receiver := svc.Client("fulfillment-service")
-	inbox, _ := receiver.Inbox(ctx, mailbox.ListOptions{})
+	inbox, _ := receiver.Folder(ctx, store.FolderInbox, mailbox.ListOptions{})
 
 	for _, msg := range inbox.All() {
 		ct := content.ContentType(msg)

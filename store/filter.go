@@ -33,12 +33,21 @@ type SearchQuery struct {
 	Options ListOptions // pagination and sorting
 }
 
-// Filter represents a query filter.
-type Filter interface {
-	Key() string
-	Value() any
-	Operator() string
+// Filter represents a query filter with a field key, comparison operator, and value.
+type Filter struct {
+	key      string
+	value    any
+	operator string
 }
+
+// Key returns the storage field key.
+func (f Filter) Key() string { return f.key }
+
+// Value returns the filter value.
+func (f Filter) Value() any { return f.value }
+
+// Operator returns the comparison operator (eq, ne, gt, gte, lt, lte, in, nin, exists, contains).
+func (f Filter) Operator() string { return f.operator }
 
 // FilterBuilder builds filters for a specific message field.
 // Use MessageFilter() to create one, then chain a comparison method:
@@ -48,17 +57,6 @@ type FilterBuilder struct {
 	key string
 	err error
 }
-
-// filter implements Filter.
-type filter struct {
-	key      string
-	value    any
-	operator string
-}
-
-func (f *filter) Key() string      { return f.key }
-func (f *filter) Value() any       { return f.value }
-func (f *filter) Operator() string { return f.operator }
 
 // validOperators is the set of supported filter operators.
 var validOperators = map[string]bool{
@@ -81,12 +79,12 @@ var validOperators = map[string]bool{
 func NewFilter(key, operator string, value any) (Filter, error) {
 	storageKey, ok := MessageFieldKey(key)
 	if !ok {
-		return nil, fmt.Errorf("%w: unsupported field: %s", ErrFilterInvalid, key)
+		return Filter{}, fmt.Errorf("%w: unsupported field: %s", ErrFilterInvalid, key)
 	}
 	if !validOperators[operator] {
-		return nil, fmt.Errorf("%w: unsupported operator: %s", ErrFilterInvalid, operator)
+		return Filter{}, fmt.Errorf("%w: unsupported operator: %s", ErrFilterInvalid, operator)
 	}
-	return &filter{key: storageKey, value: value, operator: operator}, nil
+	return Filter{key: storageKey, value: value, operator: operator}, nil
 }
 
 // FilterError represents an error in filter building.
@@ -105,9 +103,9 @@ func (e *FilterError) Unwrap() error {
 
 func (b *FilterBuilder) build(op string, v any) (Filter, error) {
 	if b.err != nil {
-		return nil, &FilterError{Key: b.key, Err: b.err}
+		return Filter{}, &FilterError{Key: b.key, Err: b.err}
 	}
-	return &filter{key: b.key, value: v, operator: op}, nil
+	return Filter{key: b.key, value: v, operator: op}, nil
 }
 
 func (b *FilterBuilder) Equal(v any) (Filter, error)            { return b.build("eq", v) }
