@@ -87,7 +87,7 @@ func (s *Store) Load(ctx context.Context, uri string) (io.ReadCloser, error) {
 				s.logger.Debug("cache hit", "uri", uri)
 				// Update access time
 				now := time.Now()
-				os.Chtimes(cachePath, now, now)
+				_ = os.Chtimes(cachePath, now, now)
 				return f, nil
 			}
 		} else {
@@ -245,7 +245,7 @@ func (s *Store) calculateCacheSize() {
 	defer s.mu.Unlock()
 
 	var size int64
-	filepath.Walk(s.cacheDir, func(path string, info os.FileInfo, err error) error {
+	if err := filepath.Walk(s.cacheDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -253,7 +253,9 @@ func (s *Store) calculateCacheSize() {
 			size += info.Size()
 		}
 		return nil
-	})
+	}); err != nil {
+		s.logger.Warn("failed to calculate cache size", "error", err)
+	}
 	s.cacheSize = size
 }
 

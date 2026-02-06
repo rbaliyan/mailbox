@@ -87,7 +87,7 @@ func (s *Store) CreateMessages(ctx context.Context, data []store.MessageData) ([
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	now := time.Now().UTC()
 	messages := make([]store.Message, 0, len(data))

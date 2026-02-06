@@ -198,10 +198,10 @@ func TestIsPartialDelivery(t *testing.T) {
 
 		pde, ok := IsPartialDelivery(err)
 		if !ok {
-			t.Error("expected IsPartialDelivery to return true")
+			t.Fatal("expected IsPartialDelivery to return true")
 		}
 		if pde == nil {
-			t.Error("expected non-nil PartialDeliveryError")
+			t.Fatal("expected non-nil PartialDeliveryError")
 		}
 		if pde.MessageID != "msg123" {
 			t.Errorf("expected MessageID 'msg123', got %q", pde.MessageID)

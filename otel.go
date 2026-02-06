@@ -96,11 +96,6 @@ func newOtelInstrumentation(opts *options) (*otelInstrumentation, error) {
 		return o, nil
 	}
 
-	serviceName := opts.serviceName
-	if serviceName == "" {
-		serviceName = "mailbox"
-	}
-
 	// Initialize tracer
 	if opts.tracingEnabled {
 		tp := opts.tracerProvider

@@ -151,13 +151,15 @@ func TestStatsCacheDisabledWithoutTransport(t *testing.T) {
 
 	// Add message directly to store (bypassing events)
 	s := svc.(*service)
-	s.store.CreateMessage(ctx, store.MessageData{
+	if _, err := s.store.CreateMessage(ctx, store.MessageData{
 		OwnerID:  "user1",
 		SenderID: "other",
 		Subject:  "Test",
 		FolderID: store.FolderInbox,
 		Status:   store.MessageStatusDelivered,
-	})
+	}); err != nil {
+		t.Fatalf("create message: %v", err)
+	}
 
 	// Without cache, the second call should see the new message immediately
 	stats2, err := mb.Stats(ctx)
@@ -199,13 +201,15 @@ func TestStatsCaching(t *testing.T) {
 
 		// Add message directly to store (bypassing events)
 		s := svc.(*service)
-		s.store.CreateMessage(ctx, store.MessageData{
+		if _, err := s.store.CreateMessage(ctx, store.MessageData{
 			OwnerID:  "user1",
 			SenderID: "other",
 			Subject:  "Test",
 			FolderID: store.FolderInbox,
 			Status:   store.MessageStatusDelivered,
-		})
+		}); err != nil {
+			t.Fatalf("create message: %v", err)
+		}
 
 		// Second call should return cached (stale) result
 		stats2, err := mb.Stats(ctx)
@@ -244,13 +248,15 @@ func TestStatsCaching(t *testing.T) {
 
 		// Add message directly
 		s := svc.(*service)
-		s.store.CreateMessage(ctx, store.MessageData{
+		if _, err := s.store.CreateMessage(ctx, store.MessageData{
 			OwnerID:  "user1",
 			SenderID: "other",
 			Subject:  "Test",
 			FolderID: store.FolderInbox,
 			Status:   store.MessageStatusDelivered,
-		})
+		}); err != nil {
+			t.Fatalf("create message: %v", err)
+		}
 
 		// Wait for TTL to expire
 		time.Sleep(5 * time.Millisecond)
@@ -275,8 +281,8 @@ func TestStatsEventUpdates(t *testing.T) {
 	bob := svc.Client("bob")
 
 	// Seed both caches
-	alice.Stats(ctx)
-	bob.Stats(ctx)
+	_, _ = alice.Stats(ctx)
+	_, _ = bob.Stats(ctx)
 
 	t.Run("send updates sender and recipient cache", func(t *testing.T) {
 		_, err := alice.SendMessage(ctx, SendRequest{

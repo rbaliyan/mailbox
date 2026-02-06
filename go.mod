@@ -2,7 +2,7 @@ module github.com/rbaliyan/mailbox
 
 go 1.24.0
 
-toolchain go1.24.11
+toolchain go1.24.13
 
 require (
 	cloud.google.com/go/auth v0.18.0

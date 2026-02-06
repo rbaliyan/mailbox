@@ -548,7 +548,9 @@ func TestConcurrentSends(t *testing.T) {
 func TestGracefulShutdown(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := NewService(WithStore(memory.New()))
-	svc.Connect(ctx)
+	if err := svc.Connect(ctx); err != nil {
+		t.Fatalf("connect failed: %v", err)
+	}
 
 	sender := svc.Client("sender")
 
@@ -563,7 +565,7 @@ func TestGracefulShutdown(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		draft.Send(ctx)
+		_, _ = draft.Send(ctx)
 	}()
 
 	// Give it a moment to start
