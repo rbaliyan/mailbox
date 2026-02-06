@@ -33,6 +33,9 @@ const (
 
 	// Concurrency limits
 	DefaultMaxConcurrentSends = 10 // max concurrent send operations per service
+
+	// Stats cache
+	DefaultStatsRefreshInterval = 30 * time.Second // TTL for cached stats
 )
 
 // options holds mailbox configuration.
@@ -71,6 +74,9 @@ type options struct {
 	serviceName    string
 	tracerProvider trace.TracerProvider
 	meterProvider  metric.MeterProvider
+
+	// Stats cache
+	statsRefreshInterval time.Duration // TTL for cached stats
 
 	// Event handling
 	eventErrorsFatal       bool                    // If true, event publishing failures cause operation to fail
@@ -118,6 +124,8 @@ func newOptions(opts ...Option) *options {
 		maxConcurrentSends: DefaultMaxConcurrentSends,
 		// Shutdown defaults
 		shutdownTimeout: DefaultShutdownTimeout,
+		// Stats cache defaults
+		statsRefreshInterval: DefaultStatsRefreshInterval,
 	}
 	for _, opt := range opts {
 		opt(o)
@@ -374,6 +382,18 @@ func WithShutdownTimeout(d time.Duration) Option {
 	return func(o *options) {
 		if d >= MinShutdownTimeout {
 			o.shutdownTimeout = d
+		}
+	}
+}
+
+// WithStatsRefreshInterval sets the TTL for cached mailbox stats.
+// After this duration, the next Stats() call will refresh from the store.
+// Event-driven incremental updates keep the cache approximately correct between refreshes.
+// Default is 30 seconds.
+func WithStatsRefreshInterval(d time.Duration) Option {
+	return func(o *options) {
+		if d > 0 {
+			o.statsRefreshInterval = d
 		}
 	}
 }

@@ -1195,6 +1195,80 @@ func (s *Store) DeleteExpiredTrash(ctx context.Context, cutoff time.Time) (int64
 }
 
 // =============================================================================
+// Stats Operations
+// =============================================================================
+
+// MailboxStats returns aggregate statistics for a user's mailbox using a single
+// MongoDB $facet aggregation pipeline.
+func (s *Store) MailboxStats(ctx context.Context, ownerID string) (*store.MailboxStats, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return nil, store.ErrNotConnected
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	pipeline := bson.A{
+		bson.M{"$match": bson.M{"owner_id": ownerID}},
+		bson.M{"$facet": bson.M{
+			"messages": bson.A{
+				bson.M{"$match": bson.M{"__is_draft": bson.M{"$ne": true}}},
+				bson.M{"$group": bson.M{
+					"_id":    "$folder_id",
+					"total":  bson.M{"$sum": 1},
+					"unread": bson.M{"$sum": bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$is_read", false}}, 1, 0}}},
+				}},
+			},
+			"drafts": bson.A{
+				bson.M{"$match": bson.M{"__is_draft": true}},
+				bson.M{"$count": "n"},
+			},
+		}},
+	}
+
+	cursor, err := s.collection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, fmt.Errorf("aggregate mailbox stats: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var results []struct {
+		Messages []struct {
+			FolderID string `bson:"_id"`
+			Total    int64  `bson:"total"`
+			Unread   int64  `bson:"unread"`
+		} `bson:"messages"`
+		Drafts []struct {
+			N int64 `bson:"n"`
+		} `bson:"drafts"`
+	}
+	if err := cursor.All(ctx, &results); err != nil {
+		return nil, fmt.Errorf("decode mailbox stats: %w", err)
+	}
+
+	stats := &store.MailboxStats{
+		Folders: make(map[string]store.FolderCounts),
+	}
+
+	if len(results) > 0 {
+		r := results[0]
+		for _, m := range r.Messages {
+			stats.TotalMessages += m.Total
+			stats.UnreadCount += m.Unread
+			stats.Folders[m.FolderID] = store.FolderCounts{
+				Total:  m.Total,
+				Unread: m.Unread,
+			}
+		}
+		if len(r.Drafts) > 0 {
+			stats.DraftCount = r.Drafts[0].N
+		}
+	}
+
+	return stats, nil
+}
+
+// =============================================================================
 // Internal types
 // =============================================================================
 

@@ -901,6 +901,45 @@ func (s *Store) ListDistinctFolders(ctx context.Context, ownerID string) ([]stri
 }
 
 // =============================================================================
+// Stats Operations
+// =============================================================================
+
+// MailboxStats returns aggregate statistics for a user's mailbox in a single pass.
+func (s *Store) MailboxStats(ctx context.Context, ownerID string) (*store.MailboxStats, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return nil, store.ErrNotConnected
+	}
+
+	stats := &store.MailboxStats{
+		Folders: make(map[string]store.FolderCounts),
+	}
+
+	s.messages.Range(func(_, v any) bool {
+		m := v.(*message)
+		if m.ownerID != ownerID {
+			return true
+		}
+		if m.isDraft {
+			stats.DraftCount++
+			return true
+		}
+		stats.TotalMessages++
+		if !m.isRead {
+			stats.UnreadCount++
+		}
+		c := stats.Folders[m.folderID]
+		c.Total++
+		if !m.isRead {
+			c.Unread++
+		}
+		stats.Folders[m.folderID] = c
+		return true
+	})
+
+	return stats, nil
+}
+
+// =============================================================================
 // Helper Functions
 // =============================================================================
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -281,6 +282,7 @@ type Mailbox interface {
 	MessageSender
 	BulkOperator
 	AttachmentResolver
+	StatsReader
 }
 
 // Connection states for the service.
@@ -302,6 +304,7 @@ type service struct {
 	sendSem     *semaphore.Weighted // Limits concurrent sends to prevent resource exhaustion
 	eventBus    *event.Bus          // Event bus for publishing events
 	events      *ServiceEvents      // Per-service event instances
+	statsCache  sync.Map            // map[ownerID string]*statsEntry
 }
 
 // NewService creates a new mailbox service.
@@ -443,6 +446,20 @@ func (s *service) initEventBus(ctx context.Context) error {
 	if err := registerEvents(ctx, bus); err != nil {
 		bus.Close(ctx)
 		return fmt.Errorf("register events: %w", err)
+	}
+
+	// Subscribe internal handlers for stats cache updates.
+	if err := s.events.MessageSent.Subscribe(ctx, s.onMessageSent); err != nil {
+		bus.Close(ctx)
+		return fmt.Errorf("subscribe stats MessageSent: %w", err)
+	}
+	if err := s.events.MessageRead.Subscribe(ctx, s.onMessageRead); err != nil {
+		bus.Close(ctx)
+		return fmt.Errorf("subscribe stats MessageRead: %w", err)
+	}
+	if err := s.events.MessageDeleted.Subscribe(ctx, s.onMessageDeleted); err != nil {
+		bus.Close(ctx)
+		return fmt.Errorf("subscribe stats MessageDeleted: %w", err)
 	}
 
 	return nil

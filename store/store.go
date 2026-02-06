@@ -80,6 +80,9 @@ type Store interface {
 
 	// Maintenance operations - for background cleanup tasks
 	MaintenanceStore
+
+	// Stats operations - aggregate mailbox statistics
+	StatsStore
 }
 
 // DraftStore provides operations for draft messages.
