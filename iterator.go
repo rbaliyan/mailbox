@@ -95,40 +95,24 @@ type StreamOptions struct {
 	BatchSize int
 }
 
-// messageIterator implements MessageIterator using cursor-based batch fetching.
+// batchFetchFunc fetches the next batch of messages.
+type batchFetchFunc func(ctx context.Context) ([]store.Message, error)
+
+// batchIterator provides shared cursor-based batch fetching logic.
 // Uses StartAfter for proper keyset pagination, avoiding the issues with
 // offset-based pagination when data changes between fetches.
-type messageIterator struct {
-	mailbox  *userMailbox
-	storeRef store.Store
-	filters  []store.Filter
-	opts     store.ListOptions
-	batch    []store.Message
-	batchIdx int
-	done     bool
-	fetched  bool
+type batchIterator struct {
+	mailbox   *userMailbox
+	fetch     batchFetchFunc
+	setCursor func(lastID string)
+	batchSize int
+	batch     []store.Message
+	batchIdx  int
+	done      bool
+	fetched   bool
 }
 
-// newMessageIterator creates a new iterator for the given filters.
-func newMessageIterator(mailbox *userMailbox, filters []store.Filter, streamOpts StreamOptions) *messageIterator {
-	batchSize := streamOpts.BatchSize
-	if batchSize <= 0 {
-		batchSize = 100
-	}
-
-	return &messageIterator{
-		mailbox:  mailbox,
-		storeRef: mailbox.service.store,
-		filters:  filters,
-		opts: store.ListOptions{
-			Limit:     batchSize,
-			SortBy:    "created_at",
-			SortOrder: store.SortDesc,
-		},
-	}
-}
-
-func (it *messageIterator) Next(ctx context.Context) (bool, error) {
+func (it *batchIterator) Next(ctx context.Context) (bool, error) {
 	if it.done {
 		return false, nil
 	}
@@ -142,26 +126,25 @@ func (it *messageIterator) Next(ctx context.Context) (bool, error) {
 	// Check if we need to fetch next batch
 	if it.batchIdx >= len(it.batch) {
 		// Check if we've exhausted all results
-		if it.fetched && len(it.batch) < it.opts.Limit {
+		if it.fetched && len(it.batch) < it.batchSize {
 			it.done = true
 			return false, nil
 		}
 
 		// Fetch next batch
-		list, err := it.storeRef.Find(ctx, it.filters, it.opts)
+		messages, err := it.fetch(ctx)
 		if err != nil {
 			it.done = true
 			return false, err
 		}
 
-		it.batch = list.Messages
+		it.batch = messages
 		it.batchIdx = 0
 		it.fetched = true
 
 		// Set cursor for next batch using last message ID
-		// The store handles keyset pagination via StartAfter
 		if len(it.batch) > 0 {
-			it.opts.StartAfter = it.batch[len(it.batch)-1].GetID()
+			it.setCursor(it.batch[len(it.batch)-1].GetID())
 		}
 
 		// Check if this batch is empty
@@ -175,11 +158,50 @@ func (it *messageIterator) Next(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-func (it *messageIterator) Message() (Message, error) {
+func (it *batchIterator) Message() (Message, error) {
 	if it.batchIdx <= 0 || it.batchIdx > len(it.batch) {
 		return nil, ErrIteratorOutOfBounds
 	}
 	return newMessage(it.batch[it.batchIdx-1], it.mailbox), nil
+}
+
+// messageIterator implements MessageIterator for filtered queries.
+type messageIterator struct {
+	batchIterator
+	storeRef store.Store
+	filters  []store.Filter
+	opts     store.ListOptions
+}
+
+// newMessageIterator creates a new iterator for the given filters.
+func newMessageIterator(mailbox *userMailbox, filters []store.Filter, streamOpts StreamOptions) *messageIterator {
+	batchSize := streamOpts.BatchSize
+	if batchSize <= 0 {
+		batchSize = 100
+	}
+
+	it := &messageIterator{
+		storeRef: mailbox.service.store,
+		filters:  filters,
+		opts: store.ListOptions{
+			Limit:     batchSize,
+			SortBy:    "created_at",
+			SortOrder: store.SortDesc,
+		},
+	}
+	it.mailbox = mailbox
+	it.batchSize = batchSize
+	it.fetch = func(ctx context.Context) ([]store.Message, error) {
+		list, err := it.storeRef.Find(ctx, it.filters, it.opts)
+		if err != nil {
+			return nil, err
+		}
+		return list.Messages, nil
+	}
+	it.setCursor = func(lastID string) {
+		it.opts.StartAfter = lastID
+	}
+	return it
 }
 
 // Stream returns an iterator for messages matching the given filters.
@@ -196,6 +218,13 @@ func (m *userMailbox) Stream(ctx context.Context, filters []store.Filter, opts S
 	return newMessageIterator(m, append(base, filters...), opts), nil
 }
 
+// searchIterator implements MessageIterator for search queries.
+type searchIterator struct {
+	batchIterator
+	storeRef store.Store
+	query    store.SearchQuery
+}
+
 // StreamSearch returns an iterator for search results.
 func (m *userMailbox) StreamSearch(ctx context.Context, query SearchQuery, opts StreamOptions) (MessageIterator, error) {
 	if err := m.checkAccess(); err != nil {
@@ -210,8 +239,8 @@ func (m *userMailbox) StreamSearch(ctx context.Context, query SearchQuery, opts 
 		store.OwnerIs(m.userID),
 		store.NotDeleted(),
 	}
-	return &searchIterator{
-		mailbox:  m,
+
+	it := &searchIterator{
 		storeRef: m.service.store,
 		query: store.SearchQuery{
 			Query:   query.Query,
@@ -225,68 +254,18 @@ func (m *userMailbox) StreamSearch(ctx context.Context, query SearchQuery, opts 
 				SortOrder: store.SortDesc,
 			},
 		},
-		batchSize: batchSize,
-	}, nil
-}
-
-// searchIterator is specialized for search queries using cursor-based pagination.
-type searchIterator struct {
-	mailbox   *userMailbox
-	storeRef  store.Store
-	query     store.SearchQuery
-	batch     []store.Message
-	batchIdx  int
-	done      bool
-	fetched   bool
-	batchSize int
-}
-
-func (it *searchIterator) Next(ctx context.Context) (bool, error) {
-	if it.done {
-		return false, nil
 	}
-
-	// Verify service is still connected on each iteration
-	if err := it.mailbox.checkAccess(); err != nil {
-		it.done = true
-		return false, err
-	}
-
-	// Check if we need to fetch next batch
-	if it.batchIdx >= len(it.batch) {
-		if it.fetched && len(it.batch) < it.batchSize {
-			it.done = true
-			return false, nil
-		}
-
+	it.mailbox = m
+	it.batchSize = batchSize
+	it.fetch = func(ctx context.Context) ([]store.Message, error) {
 		list, err := it.storeRef.Search(ctx, it.query)
 		if err != nil {
-			it.done = true
-			return false, err
+			return nil, err
 		}
-
-		it.batch = list.Messages
-		it.batchIdx = 0
-		it.fetched = true
-
-		// Set cursor for next batch
-		if len(it.batch) > 0 {
-			it.query.Options.StartAfter = it.batch[len(it.batch)-1].GetID()
-		}
-
-		if len(it.batch) == 0 {
-			it.done = true
-			return false, nil
-		}
+		return list.Messages, nil
 	}
-
-	it.batchIdx++
-	return true, nil
-}
-
-func (it *searchIterator) Message() (Message, error) {
-	if it.batchIdx <= 0 || it.batchIdx > len(it.batch) {
-		return nil, ErrIteratorOutOfBounds
+	it.setCursor = func(lastID string) {
+		it.query.Options.StartAfter = lastID
 	}
-	return newMessage(it.batch[it.batchIdx-1], it.mailbox), nil
+	return it, nil
 }

@@ -114,73 +114,6 @@ func (m *userMailbox) Drafts(ctx context.Context, opts store.ListOptions) (Draft
 	}, nil
 }
 
-// draftList is the internal implementation of DraftList.
-type draftList struct {
-	mailbox    *userMailbox
-	drafts     []Draft
-	total      int64
-	hasMore    bool
-	nextCursor string
-}
-
-func (l *draftList) All() []Draft       { return l.drafts }
-func (l *draftList) Total() int64       { return l.total }
-func (l *draftList) HasMore() bool      { return l.hasMore }
-func (l *draftList) NextCursor() string { return l.nextCursor }
-
-func (l *draftList) IDs() []string {
-	ids := make([]string, 0, len(l.drafts))
-	for _, d := range l.drafts {
-		if id := d.ID(); id != "" {
-			ids = append(ids, id)
-		}
-	}
-	return ids
-}
-
-// Delete deletes all drafts in this list.
-func (l *draftList) Delete(ctx context.Context) (*BulkResult, error) {
-	result := &BulkResult{Results: make([]OperationResult, 0, len(l.drafts))}
-
-	for _, draft := range l.drafts {
-		if draft.ID() == "" {
-			continue // Skip unsaved drafts
-		}
-		res := OperationResult{ID: draft.ID()}
-		if err := l.mailbox.service.store.DeleteDraft(ctx, draft.ID()); err != nil {
-			res.Error = err
-		} else {
-			res.Success = true
-		}
-		result.Results = append(result.Results, res)
-	}
-
-	return result, result.Err()
-}
-
-// Send sends all drafts in this list.
-func (l *draftList) Send(ctx context.Context) (*BulkResult, error) {
-	result := &BulkResult{Results: make([]OperationResult, 0, len(l.drafts))}
-
-	for _, draft := range l.drafts {
-		draftID := draft.ID()
-		if draftID == "" {
-			draftID = "unsaved-draft"
-		}
-		res := OperationResult{ID: draftID}
-		msg, err := draft.Send(ctx)
-		if err != nil {
-			res.Error = err
-		} else {
-			res.Success = true
-			res.Message = msg
-		}
-		result.Results = append(result.Results, res)
-	}
-
-	return result, result.Err()
-}
-
 // Folder returns messages in a specific folder for the current user.
 func (m *userMailbox) Folder(ctx context.Context, folderID string, opts store.ListOptions) (MessageList, error) {
 	return m.listWithOTel(ctx, "folder:"+folderID, opts, func() []store.Filter {
@@ -528,13 +461,12 @@ func (m *userMailbox) SendMessage(ctx context.Context, req SendRequest) (Message
 		draft.AddAttachment(a)
 	}
 
-	// Send via existing flow
+	// Send via existing flow — return message even on partial delivery or event error
 	msg, err := m.sendDraft(ctx, draft, req.ThreadID, req.ReplyToID)
-	if err != nil {
-		return nil, err
+	if msg != nil {
+		return newMessage(msg, m), err
 	}
-
-	return newMessage(msg, m), nil
+	return nil, err
 }
 
 // ResolveAttachments resolves attachment metadata by IDs.

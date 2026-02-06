@@ -52,7 +52,7 @@
 //
 // # Events
 //
-// Mailbox provides typed event variables for message lifecycle events.
+// Mailbox provides typed events for message lifecycle notifications.
 // Events use the github.com/rbaliyan/event/v3 library which supports
 // multiple transports (Redis Streams, NATS, Kafka, in-memory channel).
 //
@@ -63,16 +63,16 @@
 //	    mailbox.WithRedisClient(redisClient),
 //	)
 //
-// Events are automatically registered during Connect(). Subscribe to them
-// using the global event variables:
+// Events are automatically registered during Connect(). Access per-service
+// events via the Events() method:
 //
-//	mailbox.EventMessageSent.Subscribe(ctx, func(ctx context.Context, e event.Event[mailbox.MessageSentEvent], ev mailbox.MessageSentEvent) error {
-//	    fmt.Printf("Message %s sent to %v\n", ev.MessageID, ev.RecipientIDs)
-//	    return nil
-//	})
+//	events := svc.Events()
+//	events.MessageSent.Subscribe(ctx, handler)
+//	events.MessageRead.Subscribe(ctx, handler)
+//	events.MessageDeleted.Subscribe(ctx, handler)
 //
-// Available event variables:
-//   - EventMessageSent - when a message is sent
-//   - EventMessageRead - when a message is marked as read
-//   - EventMessageDeleted - when a message is permanently deleted
+// Available events:
+//   - MessageSent - when a message is sent
+//   - MessageRead - when a message is marked as read
+//   - MessageDeleted - when a message is permanently deleted
 package mailbox

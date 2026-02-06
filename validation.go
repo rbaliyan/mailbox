@@ -10,6 +10,18 @@ import (
 	"github.com/rbaliyan/mailbox/store"
 )
 
+// MessageLimits holds all message validation limits.
+// Used to pass limits to validation functions.
+type MessageLimits struct {
+	MaxSubjectLength   int
+	MaxBodySize        int
+	MaxAttachmentSize  int64
+	MaxAttachmentCount int
+	MaxRecipientCount  int
+	MaxMetadataSize    int
+	MaxMetadataKeys    int
+}
+
 // Validation constants for message content.
 // These are the default values; use MessageLimits for configurable validation.
 const (
@@ -318,52 +330,27 @@ func SafeAttachmentMIMETypes() []string {
 	}
 }
 
+// validateMessageReader validates recipients, content, metadata, and attachments
+// for any type that implements store.MessageReader.
+func validateMessageReader(r store.MessageReader, limits MessageLimits) error {
+	if err := ValidateRecipients(r.GetRecipientIDs(), limits); err != nil {
+		return err
+	}
+	if err := ValidateMessageContentWithLimits(r.GetSubject(), r.GetBody(), limits); err != nil {
+		return err
+	}
+	if err := ValidateMetadataWithLimits(r.GetMetadata(), limits); err != nil {
+		return err
+	}
+	return ValidateAttachments(r.GetAttachments(), limits)
+}
+
 // ValidateMessage performs full validation of a message.
 func ValidateMessage(msg store.Message, limits MessageLimits) error {
-	// Validate recipients
-	if err := ValidateRecipients(msg.GetRecipientIDs(), limits); err != nil {
-		return err
-	}
-
-	// Validate content
-	if err := ValidateMessageContentWithLimits(msg.GetSubject(), msg.GetBody(), limits); err != nil {
-		return err
-	}
-
-	// Validate metadata
-	if err := ValidateMetadataWithLimits(msg.GetMetadata(), limits); err != nil {
-		return err
-	}
-
-	// Validate attachments
-	if err := ValidateAttachments(msg.GetAttachments(), limits); err != nil {
-		return err
-	}
-
-	return nil
+	return validateMessageReader(msg, limits)
 }
 
 // ValidateDraft performs full validation of a draft before sending.
 func ValidateDraft(draft store.DraftMessage, limits MessageLimits) error {
-	// Validate recipients
-	if err := ValidateRecipients(draft.GetRecipientIDs(), limits); err != nil {
-		return err
-	}
-
-	// Validate content
-	if err := ValidateMessageContentWithLimits(draft.GetSubject(), draft.GetBody(), limits); err != nil {
-		return err
-	}
-
-	// Validate metadata
-	if err := ValidateMetadataWithLimits(draft.GetMetadata(), limits); err != nil {
-		return err
-	}
-
-	// Validate attachments
-	if err := ValidateAttachments(draft.GetAttachments(), limits); err != nil {
-		return err
-	}
-
-	return nil
+	return validateMessageReader(draft, limits)
 }

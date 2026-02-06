@@ -250,14 +250,15 @@ func (d *draft) ReplyToID() string {
 
 // Send validates and sends the draft.
 // Creates recipient copies and moves sender's copy to sent folder.
+// On partial delivery, returns both the sent message and a PartialDeliveryError.
+// On event publish failure, returns both the sent message and an EventPublishError.
 func (d *draft) Send(ctx context.Context) (Message, error) {
 	msg, err := d.mailbox.sendDraft(ctx, d.message, d.threadID, d.replyToID)
-	if err != nil {
-		return nil, err
+	if msg != nil {
+		d.saved = true
+		return newMessage(msg, d.mailbox), err
 	}
-	// Mark as saved since it's now in the store
-	d.saved = true
-	return newMessage(msg, d.mailbox), nil
+	return nil, err
 }
 
 // Save saves the draft without sending.
@@ -283,4 +284,71 @@ func (d *draft) Delete(ctx context.Context) error {
 
 	// Permanently delete the draft
 	return d.mailbox.service.store.DeleteDraft(ctx, d.message.GetID())
+}
+
+// draftList is the internal implementation of DraftList.
+type draftList struct {
+	mailbox    *userMailbox
+	drafts     []Draft
+	total      int64
+	hasMore    bool
+	nextCursor string
+}
+
+func (l *draftList) All() []Draft       { return l.drafts }
+func (l *draftList) Total() int64       { return l.total }
+func (l *draftList) HasMore() bool      { return l.hasMore }
+func (l *draftList) NextCursor() string { return l.nextCursor }
+
+func (l *draftList) IDs() []string {
+	ids := make([]string, 0, len(l.drafts))
+	for _, d := range l.drafts {
+		if id := d.ID(); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// Delete deletes all drafts in this list.
+func (l *draftList) Delete(ctx context.Context) (*BulkResult, error) {
+	result := &BulkResult{Results: make([]OperationResult, 0, len(l.drafts))}
+
+	for _, draft := range l.drafts {
+		if draft.ID() == "" {
+			continue // Skip unsaved drafts
+		}
+		res := OperationResult{ID: draft.ID()}
+		if err := l.mailbox.service.store.DeleteDraft(ctx, draft.ID()); err != nil {
+			res.Error = err
+		} else {
+			res.Success = true
+		}
+		result.Results = append(result.Results, res)
+	}
+
+	return result, result.Err()
+}
+
+// Send sends all drafts in this list.
+func (l *draftList) Send(ctx context.Context) (*BulkResult, error) {
+	result := &BulkResult{Results: make([]OperationResult, 0, len(l.drafts))}
+
+	for _, draft := range l.drafts {
+		draftID := draft.ID()
+		if draftID == "" {
+			draftID = "unsaved-draft"
+		}
+		res := OperationResult{ID: draftID}
+		msg, err := draft.Send(ctx)
+		if err != nil {
+			res.Error = err
+		} else {
+			res.Success = true
+			res.Message = msg
+		}
+		result.Results = append(result.Results, res)
+	}
+
+	return result, result.Err()
 }

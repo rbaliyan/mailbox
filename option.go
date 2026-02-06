@@ -453,18 +453,6 @@ func WithEventPublishFailureHandler(fn EventPublishFailureFunc) Option {
 	}
 }
 
-// MessageLimits holds all message validation limits.
-// Used to pass limits to validation functions.
-type MessageLimits struct {
-	MaxSubjectLength   int
-	MaxBodySize        int
-	MaxAttachmentSize  int64
-	MaxAttachmentCount int
-	MaxRecipientCount  int
-	MaxMetadataSize    int
-	MaxMetadataKeys    int
-}
-
 // getLimits returns the configured message limits.
 func (o *options) getLimits() MessageLimits {
 	return MessageLimits{

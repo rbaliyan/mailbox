@@ -338,30 +338,35 @@ func (l *messageList) Archive(ctx context.Context) (*BulkResult, error) {
 }
 
 func (l *messageList) Move(ctx context.Context, folderID string) (*BulkResult, error) {
-	return l.forEachMessage(func(msg Message) error { return msg.Move(ctx, folderID) })
+	return l.forEachMessage(ctx, func(msg Message) error { return msg.Move(ctx, folderID) })
 }
 
 func (l *messageList) Delete(ctx context.Context) (*BulkResult, error) {
-	return l.forEachMessage(func(msg Message) error { return msg.Delete(ctx) })
+	return l.forEachMessage(ctx, func(msg Message) error { return msg.Delete(ctx) })
 }
 
 func (l *messageList) AddTag(ctx context.Context, tagID string) (*BulkResult, error) {
-	return l.forEachMessage(func(msg Message) error { return msg.AddTag(ctx, tagID) })
+	return l.forEachMessage(ctx, func(msg Message) error { return msg.AddTag(ctx, tagID) })
 }
 
 func (l *messageList) RemoveTag(ctx context.Context, tagID string) (*BulkResult, error) {
-	return l.forEachMessage(func(msg Message) error { return msg.RemoveTag(ctx, tagID) })
+	return l.forEachMessage(ctx, func(msg Message) error { return msg.RemoveTag(ctx, tagID) })
 }
 
 // bulkUpdateFlags applies flag updates to all messages in the list.
 func (l *messageList) bulkUpdateFlags(ctx context.Context, flags Flags) (*BulkResult, error) {
-	return l.forEachMessage(func(msg Message) error { return msg.Update(ctx, flags) })
+	return l.forEachMessage(ctx, func(msg Message) error { return msg.Update(ctx, flags) })
 }
 
 // forEachMessage applies an operation to each message, collecting results.
-func (l *messageList) forEachMessage(op func(Message) error) (*BulkResult, error) {
+// Checks for context cancellation between iterations to support early termination.
+func (l *messageList) forEachMessage(ctx context.Context, op func(Message) error) (*BulkResult, error) {
 	result := &BulkResult{Results: make([]OperationResult, 0, len(l.messages))}
 	for _, msg := range l.messages {
+		if err := ctx.Err(); err != nil {
+			result.Results = append(result.Results, OperationResult{ID: msg.GetID(), Error: err})
+			continue
+		}
 		res := OperationResult{ID: msg.GetID()}
 		if err := op(msg); err != nil {
 			res.Error = err

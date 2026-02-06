@@ -989,47 +989,53 @@ func (m *userMailbox) RemoveTag(ctx context.Context, messageID, tagID string) er
 
 // BulkUpdateFlags updates flags on multiple messages by ID.
 func (m *userMailbox) BulkUpdateFlags(ctx context.Context, messageIDs []string, flags Flags) (*BulkResult, error) {
-	return m.bulkOp(messageIDs, func(id string) error {
+	return m.bulkOp(ctx, messageIDs, func(id string) error {
 		return m.UpdateFlags(ctx, id, flags)
 	})
 }
 
 // BulkMove moves multiple messages to a folder by ID.
 func (m *userMailbox) BulkMove(ctx context.Context, messageIDs []string, folderID string) (*BulkResult, error) {
-	return m.bulkOp(messageIDs, func(id string) error {
+	return m.bulkOp(ctx, messageIDs, func(id string) error {
 		return m.MoveToFolder(ctx, id, folderID)
 	})
 }
 
 // BulkDelete moves multiple messages to trash by ID.
 func (m *userMailbox) BulkDelete(ctx context.Context, messageIDs []string) (*BulkResult, error) {
-	return m.bulkOp(messageIDs, func(id string) error {
+	return m.bulkOp(ctx, messageIDs, func(id string) error {
 		return m.Delete(ctx, id)
 	})
 }
 
 // BulkAddTag adds a tag to multiple messages by ID.
 func (m *userMailbox) BulkAddTag(ctx context.Context, messageIDs []string, tagID string) (*BulkResult, error) {
-	return m.bulkOp(messageIDs, func(id string) error {
+	return m.bulkOp(ctx, messageIDs, func(id string) error {
 		return m.AddTag(ctx, id, tagID)
 	})
 }
 
 // BulkRemoveTag removes a tag from multiple messages by ID.
 func (m *userMailbox) BulkRemoveTag(ctx context.Context, messageIDs []string, tagID string) (*BulkResult, error) {
-	return m.bulkOp(messageIDs, func(id string) error {
+	return m.bulkOp(ctx, messageIDs, func(id string) error {
 		return m.RemoveTag(ctx, id, tagID)
 	})
 }
 
 // bulkOp applies an operation to each message ID, collecting results.
-func (m *userMailbox) bulkOp(messageIDs []string, op func(id string) error) (*BulkResult, error) {
+// Checks for context cancellation between iterations to support early termination.
+func (m *userMailbox) bulkOp(ctx context.Context, messageIDs []string, op func(id string) error) (*BulkResult, error) {
 	if err := m.checkAccess(); err != nil {
 		return nil, err
 	}
 
 	result := &BulkResult{Results: make([]OperationResult, 0, len(messageIDs))}
 	for _, id := range messageIDs {
+		if err := ctx.Err(); err != nil {
+			// Mark remaining items as failed due to context cancellation
+			result.Results = append(result.Results, OperationResult{ID: id, Error: err})
+			continue
+		}
 		res := OperationResult{ID: id}
 		if err := op(id); err != nil {
 			res.Error = err
