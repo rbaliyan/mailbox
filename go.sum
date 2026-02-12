@@ -130,8 +130,8 @@ github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 h1:GFCKgm
 github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10/go.mod h1:t/avpk3KcrXxUnYOhZhMXJlSEyie6gQbtLq5NM3loB8=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/rbaliyan/event/v3 v3.8.0 h1:4Kr3aQZrM9wDAURFEamslB7T5CAmec6o+xZDCEE2zw0=
-github.com/rbaliyan/event/v3 v3.8.0/go.mod h1:+EO0ddrHwFIKD7Gecc7nIxsK/AiQGi+oLnjYrBK0Rak=
+github.com/rbaliyan/event/v3 v3.9.0 h1:o+aTWztpFq1clVomSdoA8hh9D2Ya7hrQFnlPy4BHgrY=
+github.com/rbaliyan/event/v3 v3.9.0/go.mod h1:+EO0ddrHwFIKD7Gecc7nIxsK/AiQGi+oLnjYrBK0Rak=
 github.com/redis/go-redis/v9 v9.17.3 h1:fN29NdNrE17KttK5Ndf20buqfDZwGNgoUr9qjl1DQx4=
 github.com/redis/go-redis/v9 v9.17.3/go.mod h1:u410H11HMLoB+TP67dz8rL9s6QW2j76l0//kSOd3370=
 github.com/spiffe/go-spiffe/v2 v2.6.0 h1:l+DolpxNWYgruGQVV0xsfeya3CsC7m8iBzDnMpsbLuo=
