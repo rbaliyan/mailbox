@@ -159,6 +159,9 @@ func (r *Registry) Lookup(contentType string) (Codec, bool) {
 // Encode works with any draft type (mailbox.DraftComposer, store.DraftMessage,
 // or mailbox.SendRequest) without depending on their differing method signatures.
 //
+// Deprecated: Use [EncodeWithHeaders] for new code. EncodeWithHeaders uses
+// first-class message headers instead of metadata keys for content type and schema.
+//
 // Options:
 //   - [WithSchema] sets the schema metadata key.
 func Encode(codec Codec, data []byte, opts ...EncodeOption) (string, Metadata, error) {
@@ -180,6 +183,36 @@ func Encode(codec Codec, data []byte, opts ...EncodeOption) (string, Metadata, e
 	}
 
 	return body, meta, nil
+}
+
+// EncodeWithHeaders encodes data using the codec and returns the text-safe body
+// string along with headers (Content-Type, and optionally Schema) that should
+// be set on the draft or send request via SetHeader.
+//
+// Unlike [Encode], which uses metadata keys, EncodeWithHeaders uses first-class
+// message headers ([store.HeaderContentType], [store.HeaderSchema]).
+//
+// Options:
+//   - [WithSchema] sets the Schema header.
+func EncodeWithHeaders(codec Codec, data []byte, opts ...EncodeOption) (string, map[string]string, error) {
+	body, err := codec.Encode(data)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: %w", ErrEncoding, err)
+	}
+
+	headers := map[string]string{
+		store.HeaderContentType: codec.ContentType(),
+	}
+
+	var o encodeOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.schema != "" {
+		headers[store.HeaderSchema] = o.schema
+	}
+
+	return body, headers, nil
 }
 
 // Decode reads the content_type from message metadata, looks up the
@@ -205,16 +238,28 @@ func Decode(msg store.MessageReader, registry *Registry) ([]byte, error) {
 	return data, nil
 }
 
-// ContentType returns the content type from message metadata.
-// Returns an empty string if no content_type metadata is set.
+// ContentType returns the content type from message headers or metadata.
+// Checks the Content-Type header first, then falls back to the metadata
+// convention for backward compatibility.
 func ContentType(msg store.MessageReader) string {
+	if headers := msg.GetHeaders(); len(headers) > 0 {
+		if ct := headers[store.HeaderContentType]; ct != "" {
+			return ct
+		}
+	}
 	ct, _ := msg.GetMetadata()[MetaContentType].(string)
 	return ct
 }
 
-// Schema returns the schema identifier from message metadata.
-// Returns an empty string if no schema metadata is set.
+// Schema returns the schema identifier from message headers or metadata.
+// Checks the Schema header first, then falls back to the metadata
+// convention for backward compatibility.
 func Schema(msg store.MessageReader) string {
+	if headers := msg.GetHeaders(); len(headers) > 0 {
+		if s := headers[store.HeaderSchema]; s != "" {
+			return s
+		}
+	}
 	s, _ := msg.GetMetadata()[MetaSchema].(string)
 	return s
 }

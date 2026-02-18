@@ -13,13 +13,17 @@ import (
 // MessageLimits holds all message validation limits.
 // Used to pass limits to validation functions.
 type MessageLimits struct {
-	MaxSubjectLength   int
-	MaxBodySize        int
-	MaxAttachmentSize  int64
-	MaxAttachmentCount int
-	MaxRecipientCount  int
-	MaxMetadataSize    int
-	MaxMetadataKeys    int
+	MaxSubjectLength     int
+	MaxBodySize          int
+	MaxAttachmentSize    int64
+	MaxAttachmentCount   int
+	MaxRecipientCount    int
+	MaxMetadataSize      int
+	MaxMetadataKeys      int
+	MaxHeaderCount       int
+	MaxHeaderKeyLength   int
+	MaxHeaderValueLength int
+	MaxHeadersTotalSize  int
 }
 
 // Validation constants for message content.
@@ -38,14 +42,49 @@ const (
 // DefaultLimits returns the default message limits.
 func DefaultLimits() MessageLimits {
 	return MessageLimits{
-		MaxSubjectLength:   DefaultMaxSubjectLength,
-		MaxBodySize:        DefaultMaxBodySize,
-		MaxAttachmentSize:  DefaultMaxAttachmentSize,
-		MaxAttachmentCount: DefaultMaxAttachmentCount,
-		MaxRecipientCount:  DefaultMaxRecipientCount,
-		MaxMetadataSize:    DefaultMaxMetadataSize,
-		MaxMetadataKeys:    DefaultMaxMetadataKeys,
+		MaxSubjectLength:     DefaultMaxSubjectLength,
+		MaxBodySize:          DefaultMaxBodySize,
+		MaxAttachmentSize:    DefaultMaxAttachmentSize,
+		MaxAttachmentCount:   DefaultMaxAttachmentCount,
+		MaxRecipientCount:    DefaultMaxRecipientCount,
+		MaxMetadataSize:      DefaultMaxMetadataSize,
+		MaxMetadataKeys:      DefaultMaxMetadataKeys,
+		MaxHeaderCount:       DefaultMaxHeaderCount,
+		MaxHeaderKeyLength:   DefaultMaxHeaderKeyLength,
+		MaxHeaderValueLength: DefaultMaxHeaderValueLength,
+		MaxHeadersTotalSize:  DefaultMaxHeadersTotalSize,
 	}
+}
+
+// ValidateHeaders validates message headers against configurable limits.
+func ValidateHeaders(headers map[string]string, limits MessageLimits) error {
+	if len(headers) == 0 {
+		return nil
+	}
+
+	if len(headers) > limits.MaxHeaderCount {
+		return fmt.Errorf("%w: header count %d exceeds max %d", ErrTooManyHeaders, len(headers), limits.MaxHeaderCount)
+	}
+
+	totalSize := 0
+	for key, value := range headers {
+		if key == "" {
+			return fmt.Errorf("%w: empty key not allowed", ErrInvalidHeaders)
+		}
+		if len(key) > limits.MaxHeaderKeyLength {
+			return fmt.Errorf("%w: key %q exceeds max length %d", ErrHeaderKeyTooLong, key, limits.MaxHeaderKeyLength)
+		}
+		if len(value) > limits.MaxHeaderValueLength {
+			return fmt.Errorf("%w: value for key %q exceeds max length %d", ErrHeaderValueTooLong, key, limits.MaxHeaderValueLength)
+		}
+		totalSize += len(key) + len(value)
+	}
+
+	if totalSize > limits.MaxHeadersTotalSize {
+		return fmt.Errorf("%w: total headers size %d exceeds max %d bytes", ErrHeadersTooLarge, totalSize, limits.MaxHeadersTotalSize)
+	}
+
+	return nil
 }
 
 // ValidateMetadata validates metadata against size and key constraints using default limits.
@@ -341,13 +380,16 @@ func isValidTagID(tagID string) bool {
 	return true
 }
 
-// validateMessageReader validates recipients, content, metadata, and attachments
+// validateMessageReader validates recipients, content, headers, metadata, and attachments
 // for any type that implements store.MessageReader.
 func validateMessageReader(r store.MessageReader, limits MessageLimits) error {
 	if err := ValidateRecipients(r.GetRecipientIDs(), limits); err != nil {
 		return err
 	}
 	if err := ValidateMessageContentWithLimits(r.GetSubject(), r.GetBody(), limits); err != nil {
+		return err
+	}
+	if err := ValidateHeaders(r.GetHeaders(), limits); err != nil {
 		return err
 	}
 	if err := ValidateMetadataWithLimits(r.GetMetadata(), limits); err != nil {

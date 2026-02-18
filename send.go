@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/rbaliyan/mailbox/store"
@@ -27,6 +28,7 @@ func (m *userMailbox) createSenderMessage(ctx context.Context, draft store.Draft
 		RecipientIDs: draft.GetRecipientIDs(),
 		Subject:      draft.GetSubject(),
 		Body:         draft.GetBody(),
+		Headers:      draft.GetHeaders(),
 		Metadata:     draft.GetMetadata(),
 		Status:       store.MessageStatusQueued,
 		FolderID:     store.FolderOutbox,
@@ -107,6 +109,7 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 			RecipientIDs: draft.GetRecipientIDs(), // Keep original list for display
 			Subject:      draft.GetSubject(),
 			Body:         draft.GetBody(),
+			Headers:      draft.GetHeaders(),
 			Metadata:     draft.GetMetadata(),
 			Status:       store.MessageStatusDelivered,
 			FolderID:     store.FolderInbox,
@@ -238,12 +241,20 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 	// check reflects the actual number of unique recipients.
 	draft.SetRecipients(deduplicateRecipients(draft.GetRecipientIDs())...)
 
-	// Step 2: Validate the draft (before acquiring semaphore to avoid wasting slots)
+	// Step 2: Auto-populate Content-Length header if not already set.
+	// This must happen before validation so the auto-added header is included in limit checks.
+	headers := draft.GetHeaders()
+	if headers == nil || headers[store.HeaderContentLength] == "" {
+		// Content-Length is byte length (not rune count), matching HTTP semantics.
+		draft.SetHeader(store.HeaderContentLength, strconv.Itoa(len(draft.GetBody())))
+	}
+
+	// Step 2b: Validate the draft (before acquiring semaphore to avoid wasting slots)
 	if err := ValidateDraft(draft, m.service.opts.getLimits()); err != nil {
 		return nil, err
 	}
 
-	// Step 2b: Fail early if draft has attachments but no attachment manager is configured.
+	// Step 2c: Fail early if draft has attachments but no attachment manager is configured.
 	// Without a manager, attachment refs won't be tracked and attachments may be orphaned
 	// or prematurely deleted.
 	if len(draft.GetAttachments()) > 0 && m.service.attachments == nil {
@@ -347,6 +358,9 @@ func (m *userMailbox) SendMessage(ctx context.Context, req SendRequest) (Message
 	draft.SetRecipients(req.RecipientIDs...)
 	draft.SetSubject(req.Subject)
 	draft.SetBody(req.Body)
+	for k, v := range req.Headers {
+		draft.SetHeader(k, v)
+	}
 	for k, v := range req.Metadata {
 		draft.SetMetadata(k, v)
 	}
@@ -403,6 +417,9 @@ func (m *userMailbox) saveDraft(ctx context.Context, draft store.DraftMessage) (
 		if err := ValidateBodyWithLimits(draft.GetBody(), limits); err != nil {
 			return nil, err
 		}
+	}
+	if err := ValidateHeaders(draft.GetHeaders(), limits); err != nil {
+		return nil, err
 	}
 	if err := ValidateMetadataWithLimits(draft.GetMetadata(), limits); err != nil {
 		return nil, err

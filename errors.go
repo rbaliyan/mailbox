@@ -110,6 +110,21 @@ var (
 	// ErrInvalidMIMEType is returned when an attachment has an invalid or disallowed MIME type.
 	ErrInvalidMIMEType = errors.New("mailbox: invalid mime type")
 
+	// ErrInvalidHeaders is returned when headers validation fails.
+	ErrInvalidHeaders = errors.New("mailbox: invalid headers")
+
+	// ErrTooManyHeaders is returned when header count exceeds the limit.
+	ErrTooManyHeaders = errors.New("mailbox: too many headers")
+
+	// ErrHeaderKeyTooLong is returned when a header key exceeds the maximum length.
+	ErrHeaderKeyTooLong = errors.New("mailbox: header key too long")
+
+	// ErrHeaderValueTooLong is returned when a header value exceeds the maximum length.
+	ErrHeaderValueTooLong = errors.New("mailbox: header value too long")
+
+	// ErrHeadersTooLarge is returned when total headers size exceeds the limit.
+	ErrHeadersTooLarge = errors.New("mailbox: headers too large")
+
 	// ErrInvalidFolderID is returned when a folder ID is invalid.
 	// Wraps store.ErrInvalidFolderID for consistent error checking.
 	ErrInvalidFolderID = fmt.Errorf("mailbox: %w", store.ErrInvalidFolderID)
@@ -247,6 +262,11 @@ func IsRetryableError(err error) bool {
 		ErrInvalidUserID,
 		ErrInvalidIdempotencyKey,
 		ErrDuplicateEntry,
+		ErrInvalidHeaders,
+		ErrTooManyHeaders,
+		ErrHeaderKeyTooLong,
+		ErrHeaderValueTooLong,
+		ErrHeadersTooLarge,
 	}
 
 	for _, permErr := range permanentErrors {

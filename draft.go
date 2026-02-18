@@ -13,6 +13,7 @@ type DraftReader interface {
 	Subject() string
 	Body() string
 	RecipientIDs() []string
+	Headers() map[string]string
 	Metadata() map[string]any
 	Attachments() []store.Attachment
 	ThreadID() string
@@ -30,6 +31,7 @@ type DraftComposer interface {
 	SetRecipients(recipientIDs ...string) DraftComposer
 	SetSubject(subject string) DraftComposer
 	SetBody(body string) DraftComposer
+	SetHeader(key, value string) DraftComposer
 	SetMetadata(key string, value any) DraftComposer
 }
 
@@ -147,6 +149,11 @@ func (d *draft) RecipientIDs() []string {
 	return d.message.GetRecipientIDs()
 }
 
+// Headers returns the draft headers.
+func (d *draft) Headers() map[string]string {
+	return d.message.GetHeaders()
+}
+
 // Metadata returns the draft metadata.
 func (d *draft) Metadata() map[string]any {
 	return d.message.GetMetadata()
@@ -172,6 +179,12 @@ func (d *draft) SetSubject(subject string) DraftComposer {
 // SetBody sets the body.
 func (d *draft) SetBody(body string) DraftComposer {
 	d.message.SetBody(body)
+	return d
+}
+
+// SetHeader sets a header key-value pair.
+func (d *draft) SetHeader(key, value string) DraftComposer {
+	d.message.SetHeader(key, value)
 	return d
 }
 

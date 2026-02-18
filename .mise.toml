@@ -2,3 +2,4 @@
 go = "1.24"
 just = "1.40"
 "go:golang.org/x/vuln/cmd/govulncheck" = "latest"
+"go:github.com/golangci/golangci-lint/v2/cmd/golangci-lint" = "v2.10.1"
