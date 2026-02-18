@@ -97,6 +97,7 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 			sender_id VARCHAR(255) NOT NULL,
 			subject TEXT NOT NULL DEFAULT '',
 			body TEXT NOT NULL DEFAULT '',
+			headers JSONB DEFAULT '{}',
 			metadata JSONB DEFAULT '{}',
 			status VARCHAR(50) NOT NULL DEFAULT 'draft',
 			folder_id VARCHAR(255) NOT NULL DEFAULT '__inbox',
@@ -117,6 +118,12 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 
 	if _, err := s.db.ExecContext(ctx, createTable); err != nil {
 		return fmt.Errorf("create table: %w", err)
+	}
+
+	// Schema migration: add headers column for existing tables
+	addHeaders := fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS headers JSONB DEFAULT '{}'`, s.opts.table)
+	if _, err := s.db.ExecContext(ctx, addHeaders); err != nil {
+		s.logger.Warn("failed to add headers column (may already exist)", "error", err)
 	}
 
 	// Create indexes
@@ -227,6 +234,7 @@ func (s *Store) SaveDraft(ctx context.Context, draft store.DraftMessage) (store.
 			recipientIDs: draft.GetRecipientIDs(),
 			subject:      draft.GetSubject(),
 			body:         draft.GetBody(),
+			headers:      draft.GetHeaders(),
 			metadata:     draft.GetMetadata(),
 			status:       store.MessageStatusDraft,
 			folderID:     store.FolderDrafts,
@@ -241,6 +249,11 @@ func (s *Store) SaveDraft(ctx context.Context, draft store.DraftMessage) (store.
 	msg.status = store.MessageStatusDraft
 
 	// Marshal JSON fields
+	headersJSON, err := json.Marshal(msg.headers)
+	if err != nil {
+		return nil, fmt.Errorf("marshal headers: %w", err)
+	}
+
 	metadataJSON, err := json.Marshal(msg.metadata)
 	if err != nil {
 		return nil, fmt.Errorf("marshal metadata: %w", err)
@@ -257,14 +270,14 @@ func (s *Store) SaveDraft(ctx context.Context, draft store.DraftMessage) (store.
 		msg.createdAt = now
 
 		query := fmt.Sprintf(`
-			INSERT INTO %s (id, owner_id, sender_id, subject, body, metadata, status, folder_id,
+			INSERT INTO %s (id, owner_id, sender_id, subject, body, headers, metadata, status, folder_id,
 			                recipient_ids, tags, attachments, is_draft, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 			RETURNING id
 		`, s.opts.table)
 
 		err := s.db.QueryRowContext(ctx, query,
-			msg.id, msg.ownerID, msg.senderID, msg.subject, msg.body, metadataJSON,
+			msg.id, msg.ownerID, msg.senderID, msg.subject, msg.body, headersJSON, metadataJSON,
 			msg.status, msg.folderID, pq.Array(msg.recipientIDs), pq.Array(msg.tags),
 			attachmentsJSON, true, msg.createdAt, msg.updatedAt,
 		).Scan(&msg.id)
@@ -275,15 +288,15 @@ func (s *Store) SaveDraft(ctx context.Context, draft store.DraftMessage) (store.
 		// Update existing draft
 		query := fmt.Sprintf(`
 			UPDATE %s
-			SET subject = $1, body = $2, metadata = $3, recipient_ids = $4,
-			    attachments = $5, updated_at = $6
-			WHERE id = $7 AND is_draft = true
+			SET subject = $1, body = $2, headers = $3, metadata = $4, recipient_ids = $5,
+			    attachments = $6, updated_at = $7
+			WHERE id = $8 AND is_draft = true
 			RETURNING id
 		`, s.opts.table)
 
 		var returnedID string
 		err := s.db.QueryRowContext(ctx, query,
-			msg.subject, msg.body, metadataJSON, pq.Array(msg.recipientIDs),
+			msg.subject, msg.body, headersJSON, metadataJSON, pq.Array(msg.recipientIDs),
 			attachmentsJSON, msg.updatedAt, msg.id,
 		).Scan(&returnedID)
 		if err != nil {

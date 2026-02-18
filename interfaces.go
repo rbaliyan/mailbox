@@ -206,6 +206,7 @@ type SendRequest struct {
 	RecipientIDs  []string
 	Subject       string
 	Body          string
+	Headers       map[string]string
 	Metadata      map[string]any
 	Attachments   []store.Attachment
 	AttachmentIDs []string

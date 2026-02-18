@@ -34,6 +34,7 @@ Most messaging infrastructure (Kafka, Redis Streams, NATS) treats messages as im
 - **Persistent Addressable Messaging** - Messages belong to owners, persist until removed
 - **Idempotent Delivery** - Per-recipient deduplication with safe retry after partial failure
 - **Mutable Message State** - Read/unread, folders, tags, metadata on every message
+- **First-Class Headers** - Protocol-level `map[string]string` headers (Content-Type, Priority, Correlation-ID) separate from application metadata
 - **Draft Composition** - Fluent API for composing messages
 - **Thread Support** - Conversation threading with replies
 - **Fan-Out with Independent State** - Each recipient gets their own copy to manage
@@ -117,7 +118,8 @@ _, err := producer.SendMessage(ctx, mailbox.SendRequest{
     RecipientIDs: []string{"image-resizer"},
     Subject:      "resize",
     Body:         `{"url": "s3://bucket/photo.jpg", "width": 800}`,
-    Metadata:     map[string]any{"job_id": "j-9281", "priority": "high"},
+    Headers:      map[string]string{store.HeaderContentType: "application/json", store.HeaderPriority: "high"},
+    Metadata:     map[string]any{"job_id": "j-9281"},
 })
 
 // Job consumer: process pending work (possibly on a different host, started later)
@@ -450,6 +452,74 @@ Tracked metrics:
 - `mailbox.messages.received` - Messages received counter
 - `mailbox.operations.duration` - Operation latency histogram
 
+## Message Headers
+
+Messages have two separate key-value stores:
+
+- **Headers** (`map[string]string`) — protocol-level metadata like Content-Type, Priority, Correlation-ID. Analogous to HTTP headers.
+- **Metadata** (`map[string]any`) — application-level arbitrary data. Unchanged from previous versions.
+
+### Setting Headers
+
+```go
+// Via draft composition (fluent API)
+draft.SetSubject("Sensor Reading").
+    SetBody(jsonBytes).
+    SetRecipients("analytics-svc").
+    SetHeader(store.HeaderContentType, "application/json").
+    SetHeader(store.HeaderSchema, "sensor.reading/v1").
+    SetHeader(store.HeaderPriority, "high")
+
+// Via SendRequest
+msg, _ := mb.SendMessage(ctx, mailbox.SendRequest{
+    RecipientIDs: []string{"consumer"},
+    Subject:      "Reading",
+    Body:         jsonBytes,
+    Headers:      map[string]string{
+        store.HeaderContentType: "application/json",
+        store.HeaderSchema:      "sensor.reading/v1",
+    },
+})
+```
+
+### Well-Known Headers
+
+The `store` package defines constants for common headers:
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `HeaderContentType` | `Content-Type` | MIME type of the body |
+| `HeaderContentLength` | `Content-Length` | Body size in bytes (auto-populated on send) |
+| `HeaderContentEncoding` | `Content-Encoding` | Body encoding (e.g., gzip) |
+| `HeaderSchema` | `Schema` | Schema identifier (e.g., `sensor.reading/v1`) |
+| `HeaderPriority` | `Priority` | Message priority |
+| `HeaderCorrelationID` | `Correlation-ID` | Request correlation ID |
+| `HeaderExpires` | `Expires` | Message expiry timestamp |
+| `HeaderReplyToAddress` | `Reply-To-Address` | Reply-to address |
+| `HeaderCustomID` | `Custom-ID` | Application-defined ID |
+
+Content-Length is automatically populated from the body size at send time if not already set.
+
+### Content Package Integration
+
+The `content` sub-package provides codec support for structured/binary message bodies using headers:
+
+```go
+// Encode: struct -> bytes -> text-safe body + headers
+data, _ := json.Marshal(reading)
+body, headers, _ := content.EncodeWithHeaders(content.JSON, data, content.WithSchema("sensor.reading/v1"))
+draft.SetBody(body)
+for k, v := range headers {
+    draft.SetHeader(k, v)
+}
+
+// Decode: message -> raw bytes
+raw, _ := content.Decode(msg, content.DefaultRegistry())
+json.Unmarshal(raw, &reading)
+```
+
+The `content.ContentType()` and `content.Schema()` helpers check headers first, then fall back to metadata for backward compatibility.
+
 ## Message Limits
 
 Configure the most commonly adjusted limits:
@@ -460,13 +530,15 @@ svc, _ := mailbox.NewService(
     mailbox.WithMaxBodySize(5 * 1024 * 1024),       // Default: 10 MB
     mailbox.WithMaxAttachmentSize(10 * 1024 * 1024), // Default: 25 MB
     mailbox.WithMaxRecipients(50),                   // Default: 100
+    mailbox.WithMaxHeaderCount(25),                  // Default: 50
 )
 ```
 
-Default limits (not configurable, sensible for most use cases):
+Default limits:
 - Subject: 998 characters (RFC 5322)
 - Attachment count: 20 per message
 - Metadata: 64 KB, 100 keys max
+- Headers: 50 max, 128-byte keys, 8 KB values, 64 KB total
 - Query limit: 100 messages (default 20)
 
 ## Graceful Shutdown

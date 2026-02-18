@@ -252,6 +252,80 @@ func TestWithPlugins(t *testing.T) {
 	})
 }
 
+func TestHeaderLimitOptions(t *testing.T) {
+	t.Run("WithMaxHeaderCount", func(t *testing.T) {
+		opts := newOptions(WithMaxHeaderCount(25))
+		if opts.maxHeaderCount != 25 {
+			t.Errorf("expected maxHeaderCount 25, got %d", opts.maxHeaderCount)
+		}
+	})
+
+	t.Run("WithMaxHeaderCount ignores zero", func(t *testing.T) {
+		opts := newOptions(WithMaxHeaderCount(0))
+		if opts.maxHeaderCount != DefaultMaxHeaderCount {
+			t.Errorf("expected default %d, got %d", DefaultMaxHeaderCount, opts.maxHeaderCount)
+		}
+	})
+
+	t.Run("WithMaxHeaderKeyLength", func(t *testing.T) {
+		opts := newOptions(WithMaxHeaderKeyLength(64))
+		if opts.maxHeaderKeyLength != 64 {
+			t.Errorf("expected maxHeaderKeyLength 64, got %d", opts.maxHeaderKeyLength)
+		}
+	})
+
+	t.Run("WithMaxHeaderKeyLength ignores zero", func(t *testing.T) {
+		opts := newOptions(WithMaxHeaderKeyLength(0))
+		if opts.maxHeaderKeyLength != DefaultMaxHeaderKeyLength {
+			t.Errorf("expected default %d, got %d", DefaultMaxHeaderKeyLength, opts.maxHeaderKeyLength)
+		}
+	})
+
+	t.Run("WithMaxHeaderValueLength", func(t *testing.T) {
+		opts := newOptions(WithMaxHeaderValueLength(4096))
+		if opts.maxHeaderValueLength != 4096 {
+			t.Errorf("expected maxHeaderValueLength 4096, got %d", opts.maxHeaderValueLength)
+		}
+	})
+
+	t.Run("WithMaxHeaderValueLength ignores zero", func(t *testing.T) {
+		opts := newOptions(WithMaxHeaderValueLength(0))
+		if opts.maxHeaderValueLength != DefaultMaxHeaderValueLength {
+			t.Errorf("expected default %d, got %d", DefaultMaxHeaderValueLength, opts.maxHeaderValueLength)
+		}
+	})
+
+	t.Run("WithMaxHeadersTotalSize", func(t *testing.T) {
+		opts := newOptions(WithMaxHeadersTotalSize(32 * 1024))
+		if opts.maxHeadersTotalSize != 32*1024 {
+			t.Errorf("expected maxHeadersTotalSize 32KB, got %d", opts.maxHeadersTotalSize)
+		}
+	})
+
+	t.Run("WithMaxHeadersTotalSize ignores zero", func(t *testing.T) {
+		opts := newOptions(WithMaxHeadersTotalSize(0))
+		if opts.maxHeadersTotalSize != DefaultMaxHeadersTotalSize {
+			t.Errorf("expected default %d, got %d", DefaultMaxHeadersTotalSize, opts.maxHeadersTotalSize)
+		}
+	})
+
+	t.Run("defaults populated in newOptions", func(t *testing.T) {
+		opts := newOptions()
+		if opts.maxHeaderCount != DefaultMaxHeaderCount {
+			t.Errorf("expected default maxHeaderCount %d, got %d", DefaultMaxHeaderCount, opts.maxHeaderCount)
+		}
+		if opts.maxHeaderKeyLength != DefaultMaxHeaderKeyLength {
+			t.Errorf("expected default maxHeaderKeyLength %d, got %d", DefaultMaxHeaderKeyLength, opts.maxHeaderKeyLength)
+		}
+		if opts.maxHeaderValueLength != DefaultMaxHeaderValueLength {
+			t.Errorf("expected default maxHeaderValueLength %d, got %d", DefaultMaxHeaderValueLength, opts.maxHeaderValueLength)
+		}
+		if opts.maxHeadersTotalSize != DefaultMaxHeadersTotalSize {
+			t.Errorf("expected default maxHeadersTotalSize %d, got %d", DefaultMaxHeadersTotalSize, opts.maxHeadersTotalSize)
+		}
+	})
+}
+
 func TestOptionsGetLimits(t *testing.T) {
 	opts := newOptions(
 		WithMaxBodySize(1024),
@@ -273,6 +347,30 @@ func TestOptionsGetLimits(t *testing.T) {
 	// Other limits should have default values
 	if limits.MaxSubjectLength != DefaultMaxSubjectLength {
 		t.Errorf("expected default MaxSubjectLength, got %d", limits.MaxSubjectLength)
+	}
+}
+
+func TestOptionsGetLimits_Headers(t *testing.T) {
+	opts := newOptions(
+		WithMaxHeaderCount(10),
+		WithMaxHeaderKeyLength(64),
+		WithMaxHeaderValueLength(2048),
+		WithMaxHeadersTotalSize(16 * 1024),
+	)
+
+	limits := opts.getLimits()
+
+	if limits.MaxHeaderCount != 10 {
+		t.Errorf("expected MaxHeaderCount 10, got %d", limits.MaxHeaderCount)
+	}
+	if limits.MaxHeaderKeyLength != 64 {
+		t.Errorf("expected MaxHeaderKeyLength 64, got %d", limits.MaxHeaderKeyLength)
+	}
+	if limits.MaxHeaderValueLength != 2048 {
+		t.Errorf("expected MaxHeaderValueLength 2048, got %d", limits.MaxHeaderValueLength)
+	}
+	if limits.MaxHeadersTotalSize != 16*1024 {
+		t.Errorf("expected MaxHeadersTotalSize 16384, got %d", limits.MaxHeadersTotalSize)
 	}
 }
 

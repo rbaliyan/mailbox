@@ -344,6 +344,11 @@ func buildDraftUpdate(msg *message) bson.M {
 	if msg.delta.recipientsSet {
 		set["recipient_ids"] = msg.delta.recipientIDs
 	}
+	if len(msg.delta.headers) > 0 {
+		for k, v := range msg.delta.headers {
+			set["headers."+k] = v
+		}
+	}
 	if len(msg.delta.metadata) > 0 {
 		for k, v := range msg.delta.metadata {
 			set["metadata."+k] = v

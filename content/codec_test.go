@@ -14,6 +14,7 @@ import (
 // mockMessage implements store.MessageReader for Decode tests.
 type mockMessage struct {
 	body     string
+	headers  map[string]string
 	metadata map[string]any
 }
 
@@ -23,6 +24,7 @@ func (m *mockMessage) GetSenderID() string                { return "" }
 func (m *mockMessage) GetSubject() string                 { return "" }
 func (m *mockMessage) GetBody() string                    { return m.body }
 func (m *mockMessage) GetRecipientIDs() []string          { return nil }
+func (m *mockMessage) GetHeaders() map[string]string      { return m.headers }
 func (m *mockMessage) GetMetadata() map[string]any        { return m.metadata }
 func (m *mockMessage) GetAttachments() []store.Attachment { return nil }
 func (m *mockMessage) GetCreatedAt() time.Time            { return time.Time{} }
@@ -320,6 +322,76 @@ func TestSchema(t *testing.T) {
 	msg2 := &mockMessage{metadata: map[string]any{}}
 	if s := Schema(msg2); s != "" {
 		t.Errorf("Schema should be empty, got %q", s)
+	}
+}
+
+// --- EncodeWithHeaders tests ---
+
+func TestEncodeWithHeaders(t *testing.T) {
+	data := []byte(`{"temperature":72}`)
+	body, headers, err := EncodeWithHeaders(JSON, data, WithSchema("sensor/v1"))
+	if err != nil {
+		t.Fatalf("EncodeWithHeaders: %v", err)
+	}
+	if body != string(data) {
+		t.Errorf("body = %q, want %q", body, string(data))
+	}
+	if headers[store.HeaderContentType] != "application/json" {
+		t.Errorf("Content-Type = %q", headers[store.HeaderContentType])
+	}
+	if headers[store.HeaderSchema] != "sensor/v1" {
+		t.Errorf("Schema = %q", headers[store.HeaderSchema])
+	}
+}
+
+func TestEncodeWithHeaders_NoSchema(t *testing.T) {
+	data := []byte(`test`)
+	_, headers, err := EncodeWithHeaders(Plain, data)
+	if err != nil {
+		t.Fatalf("EncodeWithHeaders: %v", err)
+	}
+	if _, ok := headers[store.HeaderSchema]; ok {
+		t.Error("Schema header should not be set without WithSchema option")
+	}
+}
+
+func TestContentType_HeadersFirst(t *testing.T) {
+	// Headers take precedence over metadata
+	msg := &mockMessage{
+		headers:  map[string]string{store.HeaderContentType: "application/json"},
+		metadata: map[string]any{MetaContentType: "text/plain"},
+	}
+	if ct := ContentType(msg); ct != "application/json" {
+		t.Errorf("ContentType should prefer header, got %q", ct)
+	}
+}
+
+func TestContentType_MetadataFallback(t *testing.T) {
+	// Falls back to metadata when no header is set
+	msg := &mockMessage{
+		metadata: map[string]any{MetaContentType: "text/plain"},
+	}
+	if ct := ContentType(msg); ct != "text/plain" {
+		t.Errorf("ContentType should fall back to metadata, got %q", ct)
+	}
+}
+
+func TestSchema_HeadersFirst(t *testing.T) {
+	msg := &mockMessage{
+		headers:  map[string]string{store.HeaderSchema: "order/v2"},
+		metadata: map[string]any{MetaSchema: "order/v1"},
+	}
+	if s := Schema(msg); s != "order/v2" {
+		t.Errorf("Schema should prefer header, got %q", s)
+	}
+}
+
+func TestSchema_MetadataFallback(t *testing.T) {
+	msg := &mockMessage{
+		metadata: map[string]any{MetaSchema: "order/v1"},
+	}
+	if s := Schema(msg); s != "order/v1" {
+		t.Errorf("Schema should fall back to metadata, got %q", s)
 	}
 }
 

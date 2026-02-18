@@ -37,6 +37,7 @@ func newMessageDocFromData(data store.MessageData, now time.Time) *messageDoc {
 		RecipientIDs: data.RecipientIDs,
 		Subject:      data.Subject,
 		Body:         data.Body,
+		Headers:      data.Headers,
 		Metadata:     data.Metadata,
 		Status:       string(data.Status),
 		FolderID:     data.FolderID,

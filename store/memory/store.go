@@ -116,6 +116,12 @@ func (s *Store) SaveDraft(ctx context.Context, draft store.DraftMessage) (store.
 			updatedAt:    draft.GetUpdatedAt(),
 			isDraft:      true,
 		}
+		if headers := draft.GetHeaders(); headers != nil {
+			m.headers = make(map[string]string, len(headers))
+			for k, v := range headers {
+				m.headers[k] = v
+			}
+		}
 		if meta := draft.GetMetadata(); meta != nil {
 			m.metadata = make(map[string]any, len(meta))
 			for k, v := range meta {

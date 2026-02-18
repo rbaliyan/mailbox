@@ -89,6 +89,7 @@ type MessageReader interface {
 	GetSubject() string
 	GetBody() string
 	GetRecipientIDs() []string
+	GetHeaders() map[string]string
 	GetMetadata() map[string]any
 	GetAttachments() []Attachment
 	GetCreatedAt() time.Time
@@ -123,6 +124,7 @@ type DraftMessage interface {
 	SetSubject(subject string) DraftMessage
 	SetBody(body string) DraftMessage
 	SetRecipients(recipientIDs ...string) DraftMessage
+	SetHeader(key, value string) DraftMessage
 	SetMetadata(key string, value any) DraftMessage
 	AddAttachment(attachment Attachment) DraftMessage
 }
@@ -135,6 +137,7 @@ type MessageData struct {
 	RecipientIDs []string
 	Subject      string
 	Body         string
+	Headers      map[string]string
 	Metadata     map[string]any
 	Status       MessageStatus
 	FolderID     string

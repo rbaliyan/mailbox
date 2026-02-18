@@ -14,6 +14,7 @@ type message struct {
 	recipientIDs []string
 	subject      string
 	body         string
+	headers      map[string]string
 	metadata     map[string]any
 	status       store.MessageStatus
 	isRead       bool
@@ -58,6 +59,12 @@ func (m *message) clone() *message {
 		c.attachments = make([]store.Attachment, len(m.attachments))
 		copy(c.attachments, m.attachments)
 	}
+	if m.headers != nil {
+		c.headers = make(map[string]string, len(m.headers))
+		for k, v := range m.headers {
+			c.headers[k] = v
+		}
+	}
 	if m.metadata != nil {
 		c.metadata = make(map[string]any, len(m.metadata))
 		for k, v := range m.metadata {
@@ -78,6 +85,7 @@ func (m *message) GetSenderID() string                { return m.senderID }
 func (m *message) GetRecipientIDs() []string          { return m.recipientIDs }
 func (m *message) GetSubject() string                 { return m.subject }
 func (m *message) GetBody() string                    { return m.body }
+func (m *message) GetHeaders() map[string]string      { return m.headers }
 func (m *message) GetMetadata() map[string]any        { return m.metadata }
 func (m *message) GetStatus() store.MessageStatus     { return m.status }
 func (m *message) GetIsRead() bool                    { return m.isRead }
@@ -105,6 +113,15 @@ func (m *message) SetBody(body string) store.DraftMessage {
 
 func (m *message) SetRecipients(recipientIDs ...string) store.DraftMessage {
 	m.recipientIDs = recipientIDs
+	m.updatedAt = time.Now().UTC()
+	return m
+}
+
+func (m *message) SetHeader(key, value string) store.DraftMessage {
+	if m.headers == nil {
+		m.headers = make(map[string]string)
+	}
+	m.headers[key] = value
 	m.updatedAt = time.Now().UTC()
 	return m
 }
