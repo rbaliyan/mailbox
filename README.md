@@ -40,11 +40,11 @@ Most messaging infrastructure (Kafka, Redis Streams, NATS) treats messages as im
 - **Fan-Out with Independent State** - Each recipient gets their own copy to manage
 - **Full-Text Search** - Search across subject, body, and metadata
 - **Stats with Event-Driven Cache** - Per-user aggregate counts with incremental updates
-- **File Attachments** - S3 and GCS with reference counting and deduplication
-- **Real-Time Events** - Publish message lifecycle events to Redis Streams, NATS, Kafka, or any transport
+- **File Attachments** - S3 and GCS with reference counting and deduplication ([details](docs/attachments.md))
+- **Real-Time Events** - Publish message lifecycle events to Redis Streams, NATS, Kafka, or any transport ([details](docs/events.md))
 - **Multiple Backends** - MongoDB, PostgreSQL, in-memory storage
-- **Plugin System** - Extensible hooks for send-time validation and filtering
-- **OpenTelemetry** - Built-in tracing and metrics
+- **Plugin System** - Extensible hooks for send-time validation and filtering ([details](docs/advanced.md#plugin-system))
+- **OpenTelemetry** - Built-in tracing and metrics ([details](docs/advanced.md#opentelemetry-integration))
 - **Soft Delete** - Trash with restore and configurable retention cleanup
 
 ## Installation
@@ -182,28 +182,34 @@ import "github.com/rbaliyan/mailbox/store/memory"
 store := memory.New()
 ```
 
-## Caching
+## Message Headers
 
-This library does **not** include built-in caching. Caching is an infrastructure concern
-that varies significantly based on deployment architecture (single instance, multi-instance,
-serverless, etc.).
+Messages have two separate key-value stores:
 
-If you need caching, implement it at the store level using the decorator pattern:
+- **Headers** (`map[string]string`) — protocol-level metadata like Content-Type, Priority, Correlation-ID. Analogous to HTTP headers.
+- **Metadata** (`map[string]any`) — application-level arbitrary data. Unchanged from previous versions.
 
 ```go
-// Example: Wrap your store with a caching decorator
-cachedStore := mycache.NewCachedStore(mongoStore, redis.Client, 5*time.Minute)
-svc, _ := mailbox.NewService(mailbox.WithStore(cachedStore))
+// Via draft composition (fluent API)
+draft.SetSubject("Sensor Reading").
+    SetBody(jsonBytes).
+    SetRecipients("analytics-svc").
+    SetHeader(store.HeaderContentType, "application/json").
+    SetHeader(store.HeaderSchema, "sensor.reading/v1").
+    SetHeader(store.HeaderPriority, "high")
 ```
 
-For cross-deployment synchronization, subscribe to events:
+Well-known header constants are defined in the `store` package: `HeaderContentType`, `HeaderContentLength` (auto-populated on send), `HeaderSchema`, `HeaderPriority`, `HeaderCorrelationID`, `HeaderExpires`, `HeaderReplyToAddress`, `HeaderCustomID`.
+
+The `content` sub-package provides codec support for structured/binary message bodies using headers:
 
 ```go
-// Subscribe to events for real-time updates
-mailbox.EventMessageSent.Subscribe(ctx, func(ctx context.Context, ev event.Event[mailbox.MessageSentEvent], data mailbox.MessageSentEvent) error {
-    // Handle new message notification across all deployments
-    return nil
-})
+// Encode: struct -> bytes -> text-safe body + headers
+data, _ := json.Marshal(reading)
+body, headers, _ := content.EncodeWithHeaders(content.JSON, data, content.WithSchema("sensor.reading/v1"))
+
+// Decode: message -> raw bytes
+raw, _ := content.Decode(msg, content.DefaultRegistry())
 ```
 
 ## Thread & Conversation Support
@@ -281,265 +287,6 @@ for id, err := range sendResult.Failed {
 // Delete all drafts
 result, _ := drafts.DeleteAll(ctx)
 ```
-
-## Plugin System
-
-Plugins can hook into message sending for validation, spam filtering, or rate limiting:
-
-```go
-// Create a plugin for spam filtering
-type SpamFilter struct{}
-
-func (p *SpamFilter) Name() string { return "spam-filter" }
-func (p *SpamFilter) Init(ctx context.Context) error { return nil }
-func (p *SpamFilter) Close(ctx context.Context) error { return nil }
-
-func (p *SpamFilter) BeforeSend(ctx context.Context, userID string, draft store.DraftMessage) error {
-    if containsSpam(draft.GetBody()) {
-        return errors.New("message blocked: spam detected")
-    }
-    return nil
-}
-
-func (p *SpamFilter) AfterSend(ctx context.Context, userID string, msg store.Message) {
-    log.Printf("Message %s sent by %s", msg.GetID(), userID)
-}
-
-// Register the plugin
-svc, _ := mailbox.NewService(
-    mailbox.WithStore(store),
-    mailbox.WithPlugin(&SpamFilter{}),
-)
-```
-
-For observing other operations (read, delete, archive), use the event system instead.
-
-## File Attachments
-
-### S3
-
-```go
-import (
-    "github.com/aws/aws-sdk-go-v2/config"
-    "github.com/aws/aws-sdk-go-v2/service/s3"
-    s3store "github.com/rbaliyan/mailbox/store/attachment/s3"
-)
-
-cfg, _ := config.LoadDefaultConfig(ctx)
-s3Client := s3.NewFromConfig(cfg)
-
-attachmentStore := s3store.New(s3Client,
-    s3store.WithBucket("my-attachments"),
-    s3store.WithPrefix("mailbox/"),
-)
-
-svc, _ := mailbox.NewService(
-    mailbox.WithStore(store),
-    mailbox.WithAttachmentStore(attachmentStore),
-)
-```
-
-### GCS
-
-```go
-import (
-    "cloud.google.com/go/storage"
-    gcsstore "github.com/rbaliyan/mailbox/store/attachment/gcs"
-)
-
-gcsClient, _ := storage.NewClient(ctx)
-
-attachmentStore := gcsstore.New(gcsClient,
-    gcsstore.WithBucket("my-attachments"),
-    gcsstore.WithPrefix("mailbox/"),
-)
-```
-
-## Real-Time Events
-
-### Setting Up Events
-
-```go
-import (
-    "github.com/redis/go-redis/v9"
-    "github.com/rbaliyan/event/v3"
-    eventredis "github.com/rbaliyan/event/v3/redis"
-)
-
-// Create Redis client for event transport
-redisClient := redis.NewUniversalClient(&redis.UniversalOptions{
-    Addrs: []string{"localhost:6379"},
-})
-
-// Create event bus with Redis transport
-bus, _ := event.NewBus("myapp", event.WithTransport(eventredis.New(redisClient)))
-
-// Register mailbox events with the bus
-mailbox.RegisterEvents(ctx, bus)
-
-// Create service with event client
-svc, _ := mailbox.NewService(
-    mailbox.WithStore(store),
-    mailbox.WithEventClient(redisClient),
-)
-```
-
-### Subscribing to Events
-
-```go
-// Message sent event
-mailbox.EventMessageSent.Subscribe(ctx, func(ctx context.Context, ev event.Event[mailbox.MessageSentEvent], data mailbox.MessageSentEvent) error {
-    log.Printf("Message sent: %s to %v", data.MessageID, data.RecipientIDs)
-    return nil
-})
-
-// Message read event
-mailbox.EventMessageRead.Subscribe(ctx, func(ctx context.Context, ev event.Event[mailbox.MessageReadEvent], data mailbox.MessageReadEvent) error {
-    log.Printf("Message %s read by %s", data.MessageID, data.UserID)
-    return nil
-})
-
-// Message deleted event (permanent deletions only)
-mailbox.EventMessageDeleted.Subscribe(ctx, func(ctx context.Context, ev event.Event[mailbox.MessageDeletedEvent], data mailbox.MessageDeletedEvent) error {
-    log.Printf("Message %s permanently deleted by %s", data.MessageID, data.UserID)
-    return nil
-})
-```
-
-### Available Events
-
-Events are optional - they use a no-op transport by default and are silently
-skipped if `RegisterEvents()` is not called. This allows the library to work
-without any event infrastructure.
-
-| Event | Description |
-|-------|-------------|
-| `EventMessageSent` | Message was sent (primary event for recipient notifications) |
-| `EventMessageRead` | Message was marked as read (for read receipts) |
-| `EventMessageDeleted` | Message permanently deleted |
-
-## OpenTelemetry Integration
-
-Built-in support for distributed tracing and metrics:
-
-```go
-import (
-    "go.opentelemetry.io/otel"
-    "go.opentelemetry.io/otel/sdk/trace"
-)
-
-// Set up OpenTelemetry provider
-tp := trace.NewTracerProvider(/* ... */)
-otel.SetTracerProvider(tp)
-
-// Enable tracing and metrics
-svc, _ := mailbox.NewService(
-    mailbox.WithStore(store),
-    mailbox.WithOTel(true),                    // Enable both tracing and metrics
-    mailbox.WithServiceName("my-mailbox"),     // Custom service name
-)
-
-// Or enable individually
-svc, _ := mailbox.NewService(
-    mailbox.WithStore(store),
-    mailbox.WithTracing(true),   // Tracing only
-    mailbox.WithMetrics(true),   // Metrics only
-)
-```
-
-Tracked metrics:
-- `mailbox.messages.sent` - Messages sent counter
-- `mailbox.messages.received` - Messages received counter
-- `mailbox.operations.duration` - Operation latency histogram
-
-## Message Headers
-
-Messages have two separate key-value stores:
-
-- **Headers** (`map[string]string`) — protocol-level metadata like Content-Type, Priority, Correlation-ID. Analogous to HTTP headers.
-- **Metadata** (`map[string]any`) — application-level arbitrary data. Unchanged from previous versions.
-
-### Setting Headers
-
-```go
-// Via draft composition (fluent API)
-draft.SetSubject("Sensor Reading").
-    SetBody(jsonBytes).
-    SetRecipients("analytics-svc").
-    SetHeader(store.HeaderContentType, "application/json").
-    SetHeader(store.HeaderSchema, "sensor.reading/v1").
-    SetHeader(store.HeaderPriority, "high")
-
-// Via SendRequest
-msg, _ := mb.SendMessage(ctx, mailbox.SendRequest{
-    RecipientIDs: []string{"consumer"},
-    Subject:      "Reading",
-    Body:         jsonBytes,
-    Headers:      map[string]string{
-        store.HeaderContentType: "application/json",
-        store.HeaderSchema:      "sensor.reading/v1",
-    },
-})
-```
-
-### Well-Known Headers
-
-The `store` package defines constants for common headers:
-
-| Constant | Value | Description |
-|----------|-------|-------------|
-| `HeaderContentType` | `Content-Type` | MIME type of the body |
-| `HeaderContentLength` | `Content-Length` | Body size in bytes (auto-populated on send) |
-| `HeaderContentEncoding` | `Content-Encoding` | Body encoding (e.g., gzip) |
-| `HeaderSchema` | `Schema` | Schema identifier (e.g., `sensor.reading/v1`) |
-| `HeaderPriority` | `Priority` | Message priority |
-| `HeaderCorrelationID` | `Correlation-ID` | Request correlation ID |
-| `HeaderExpires` | `Expires` | Message expiry timestamp |
-| `HeaderReplyToAddress` | `Reply-To-Address` | Reply-to address |
-| `HeaderCustomID` | `Custom-ID` | Application-defined ID |
-
-Content-Length is automatically populated from the body size at send time if not already set.
-
-### Content Package Integration
-
-The `content` sub-package provides codec support for structured/binary message bodies using headers:
-
-```go
-// Encode: struct -> bytes -> text-safe body + headers
-data, _ := json.Marshal(reading)
-body, headers, _ := content.EncodeWithHeaders(content.JSON, data, content.WithSchema("sensor.reading/v1"))
-draft.SetBody(body)
-for k, v := range headers {
-    draft.SetHeader(k, v)
-}
-
-// Decode: message -> raw bytes
-raw, _ := content.Decode(msg, content.DefaultRegistry())
-json.Unmarshal(raw, &reading)
-```
-
-The `content.ContentType()` and `content.Schema()` helpers check headers first, then fall back to metadata for backward compatibility.
-
-## Message Limits
-
-Configure the most commonly adjusted limits:
-
-```go
-svc, _ := mailbox.NewService(
-    mailbox.WithStore(store),
-    mailbox.WithMaxBodySize(5 * 1024 * 1024),       // Default: 10 MB
-    mailbox.WithMaxAttachmentSize(10 * 1024 * 1024), // Default: 25 MB
-    mailbox.WithMaxRecipients(50),                   // Default: 100
-    mailbox.WithMaxHeaderCount(25),                  // Default: 50
-)
-```
-
-Default limits:
-- Subject: 998 characters (RFC 5322)
-- Attachment count: 20 per message
-- Metadata: 64 KB, 100 keys max
-- Headers: 50 max, 128-byte keys, 8 KB values, 64 KB total
-- Query limit: 100 messages (default 20)
 
 ## Graceful Shutdown
 
@@ -619,7 +366,8 @@ draft.
     SetSubject("Meeting Tomorrow").
     SetBody("Let's discuss the project.").
     SetRecipients("user456", "user789").
-    SetMetadata("priority", "high").
+    SetHeader(store.HeaderPriority, "high").
+    SetMetadata("category", "meetings").
     AddAttachment(attachment).
     ReplyTo(parentMessageID)
 
@@ -630,40 +378,12 @@ msg, err := draft.Send(ctx)
 saved, err := draft.Save(ctx)
 ```
 
-## Architecture
+## Further Reading
 
-### Addressable, Not Topic-Based
-
-Unlike message brokers where you publish to topics and consumers subscribe, Mailbox delivers to named recipients. Each recipient gets an independent copy with its own state. This is the same model as email (IMAP/JMAP) — but as a library, without protocol overhead.
-
-```
-Producer ──send──> Mailbox Store ──query──> Consumer
-                   (persists)               (reads when ready)
-```
-
-Producers and consumers are temporally decoupled. Messages persist in the store and can be queried, filtered, and managed by the recipient at any point. This makes it natural for async workflows where the consumer may not be running when the message is sent.
-
-### No Distributed Locks
-
-All concurrency is handled through database-native atomicity:
-
-1. **Atomic Database Operations** - MongoDB `findOneAndUpdate`, PostgreSQL `INSERT ON CONFLICT`
-2. **Idempotent Delivery** - Per-recipient deduplication keys prevent duplicates on retry
-3. **Transactional Batches** - Database transactions for multi-document atomicity
-
-### Store Interface
-
-The store is composed of four sub-interfaces:
-
-- **DraftStore** - Mutable draft operations
-- **MessageStore** - Message queries and state mutations
-- **MaintenanceStore** - Background maintenance operations
-- **StatsStore** - Aggregate mailbox statistics
-
-### Service vs Client
-
-- **Service** - Singleton that manages connections, configuration, and shared resources
-- **Client** - Lightweight, per-identity handle (obtained via `svc.Client(id)`) — works for users and services alike
+- [Real-Time Events](docs/events.md) — Setting up event publishing and subscribing to message lifecycle events
+- [File Attachments](docs/attachments.md) — S3 and GCS attachment storage
+- [Advanced Configuration](docs/advanced.md) — Caching, plugins, OpenTelemetry, message limits
+- [Architecture](docs/architecture.md) — Design principles, store interface, concurrency model
 
 ## License
 
