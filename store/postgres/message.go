@@ -26,6 +26,7 @@ type message struct {
 	recipientIDs   []string
 	subject        string
 	body           string
+	headers        map[string]string
 	metadata       map[string]any
 	status         store.MessageStatus
 	isRead         bool
@@ -49,6 +50,7 @@ func (m *message) GetSenderID() string                { return m.senderID }
 func (m *message) GetRecipientIDs() []string          { return m.recipientIDs }
 func (m *message) GetSubject() string                 { return m.subject }
 func (m *message) GetBody() string                    { return m.body }
+func (m *message) GetHeaders() map[string]string      { return m.headers }
 func (m *message) GetMetadata() map[string]any        { return m.metadata }
 func (m *message) GetStatus() store.MessageStatus     { return m.status }
 func (m *message) GetIsRead() bool                    { return m.isRead }
@@ -74,6 +76,14 @@ func (m *message) SetBody(body string) store.DraftMessage {
 
 func (m *message) SetRecipients(recipientIDs ...string) store.DraftMessage {
 	m.recipientIDs = recipientIDs
+	return m
+}
+
+func (m *message) SetHeader(key, value string) store.DraftMessage {
+	if m.headers == nil {
+		m.headers = make(map[string]string)
+	}
+	m.headers[key] = value
 	return m
 }
 
@@ -129,13 +139,13 @@ type rowScanner interface {
 
 func (s *Store) scanMessage(row rowScanner) (*message, error) {
 	var msg message
-	var metadataJSON, attachmentsJSON []byte
+	var headersJSON, metadataJSON, attachmentsJSON []byte
 	var readAt sql.NullTime
 	var idempotencyKey, threadID, replyToID sql.NullString
 
 	err := row.Scan(
 		&msg.id, &msg.ownerID, &msg.senderID, &msg.subject, &msg.body,
-		&metadataJSON, &msg.status, &msg.folderID, &msg.isRead, &readAt,
+		&headersJSON, &metadataJSON, &msg.status, &msg.folderID, &msg.isRead, &readAt,
 		pq.Array(&msg.recipientIDs), pq.Array(&msg.tags), &attachmentsJSON,
 		&msg.isDeleted, &msg.isDraft, &idempotencyKey, &threadID, &replyToID,
 		&msg.createdAt, &msg.updatedAt,
@@ -158,6 +168,11 @@ func (s *Store) scanMessage(row rowScanner) (*message, error) {
 	}
 
 	// Unmarshal JSON fields
+	if len(headersJSON) > 0 {
+		if err := json.Unmarshal(headersJSON, &msg.headers); err != nil {
+			return nil, fmt.Errorf("unmarshal headers: %w", err)
+		}
+	}
 	if len(metadataJSON) > 0 {
 		if err := json.Unmarshal(metadataJSON, &msg.metadata); err != nil {
 			return nil, fmt.Errorf("unmarshal metadata: %w", err)

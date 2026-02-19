@@ -27,6 +27,12 @@ const (
 	DefaultMaxMetadataSize    = 64 * 1024        // 64 KB total metadata
 	DefaultMaxMetadataKeys    = 100              // max metadata keys
 
+	// Default header limits
+	DefaultMaxHeaderCount       = 50              // max headers per message
+	DefaultMaxHeaderKeyLength   = 128             // max header key length
+	DefaultMaxHeaderValueLength = 8 * 1024        // 8 KB max header value
+	DefaultMaxHeadersTotalSize  = 64 * 1024       // 64 KB total headers
+
 	// Query limits
 	DefaultMaxQueryLimit = 100 // max messages per query
 	DefaultQueryLimit    = 20  // default messages per query
@@ -50,13 +56,17 @@ type options struct {
 	trashRetention time.Duration
 
 	// Message limits
-	maxSubjectLength   int
-	maxBodySize        int
-	maxAttachmentSize  int64
-	maxAttachmentCount int
-	maxRecipientCount  int
-	maxMetadataSize    int
-	maxMetadataKeys    int
+	maxSubjectLength     int
+	maxBodySize          int
+	maxAttachmentSize    int64
+	maxAttachmentCount   int
+	maxRecipientCount    int
+	maxMetadataSize      int
+	maxMetadataKeys      int
+	maxHeaderCount       int
+	maxHeaderKeyLength   int
+	maxHeaderValueLength int
+	maxHeadersTotalSize  int
 
 	// Query limits
 	maxQueryLimit     int
@@ -118,8 +128,12 @@ func newOptions(opts ...Option) *options {
 		maxAttachmentSize:  DefaultMaxAttachmentSize,
 		maxAttachmentCount: DefaultMaxAttachmentCount,
 		maxRecipientCount:  DefaultMaxRecipientCount,
-		maxMetadataSize:    DefaultMaxMetadataSize,
-		maxMetadataKeys:    DefaultMaxMetadataKeys,
+		maxMetadataSize:      DefaultMaxMetadataSize,
+		maxMetadataKeys:      DefaultMaxMetadataKeys,
+		maxHeaderCount:       DefaultMaxHeaderCount,
+		maxHeaderKeyLength:   DefaultMaxHeaderKeyLength,
+		maxHeaderValueLength: DefaultMaxHeaderValueLength,
+		maxHeadersTotalSize:  DefaultMaxHeadersTotalSize,
 		// Query limits defaults
 		maxQueryLimit:     DefaultMaxQueryLimit,
 		defaultQueryLimit: DefaultQueryLimit,
@@ -351,6 +365,46 @@ func WithMaxMetadataKeys(n int) Option {
 	}
 }
 
+// WithMaxHeaderCount sets the maximum number of headers per message.
+// Default is 50.
+func WithMaxHeaderCount(n int) Option {
+	return func(o *options) {
+		if n > 0 {
+			o.maxHeaderCount = n
+		}
+	}
+}
+
+// WithMaxHeaderKeyLength sets the maximum length of a single header key.
+// Default is 128 bytes.
+func WithMaxHeaderKeyLength(n int) Option {
+	return func(o *options) {
+		if n > 0 {
+			o.maxHeaderKeyLength = n
+		}
+	}
+}
+
+// WithMaxHeaderValueLength sets the maximum length of a single header value.
+// Default is 8 KB.
+func WithMaxHeaderValueLength(n int) Option {
+	return func(o *options) {
+		if n > 0 {
+			o.maxHeaderValueLength = n
+		}
+	}
+}
+
+// WithMaxHeadersTotalSize sets the maximum total size of all headers combined.
+// Default is 64 KB.
+func WithMaxHeadersTotalSize(n int) Option {
+	return func(o *options) {
+		if n > 0 {
+			o.maxHeadersTotalSize = n
+		}
+	}
+}
+
 // --- Query Limit Options ---
 
 // WithMaxQueryLimit sets the maximum number of messages per query.
@@ -475,12 +529,16 @@ func WithEventPublishFailureHandler(fn EventPublishFailureFunc) Option {
 // getLimits returns the configured message limits.
 func (o *options) getLimits() MessageLimits {
 	return MessageLimits{
-		MaxSubjectLength:   o.maxSubjectLength,
-		MaxBodySize:        o.maxBodySize,
-		MaxAttachmentSize:  o.maxAttachmentSize,
-		MaxAttachmentCount: o.maxAttachmentCount,
-		MaxRecipientCount:  o.maxRecipientCount,
-		MaxMetadataSize:    o.maxMetadataSize,
-		MaxMetadataKeys:    o.maxMetadataKeys,
+		MaxSubjectLength:     o.maxSubjectLength,
+		MaxBodySize:          o.maxBodySize,
+		MaxAttachmentSize:    o.maxAttachmentSize,
+		MaxAttachmentCount:   o.maxAttachmentCount,
+		MaxRecipientCount:    o.maxRecipientCount,
+		MaxMetadataSize:      o.maxMetadataSize,
+		MaxMetadataKeys:      o.maxMetadataKeys,
+		MaxHeaderCount:       o.maxHeaderCount,
+		MaxHeaderKeyLength:   o.maxHeaderKeyLength,
+		MaxHeaderValueLength: o.maxHeaderValueLength,
+		MaxHeadersTotalSize:  o.maxHeadersTotalSize,
 	}
 }

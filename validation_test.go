@@ -654,4 +654,125 @@ func TestDefaultLimits(t *testing.T) {
 	if limits.MaxMetadataKeys != DefaultMaxMetadataKeys {
 		t.Errorf("expected MaxMetadataKeys %d, got %d", DefaultMaxMetadataKeys, limits.MaxMetadataKeys)
 	}
+	if limits.MaxHeaderCount != DefaultMaxHeaderCount {
+		t.Errorf("expected MaxHeaderCount %d, got %d", DefaultMaxHeaderCount, limits.MaxHeaderCount)
+	}
+	if limits.MaxHeaderKeyLength != DefaultMaxHeaderKeyLength {
+		t.Errorf("expected MaxHeaderKeyLength %d, got %d", DefaultMaxHeaderKeyLength, limits.MaxHeaderKeyLength)
+	}
+	if limits.MaxHeaderValueLength != DefaultMaxHeaderValueLength {
+		t.Errorf("expected MaxHeaderValueLength %d, got %d", DefaultMaxHeaderValueLength, limits.MaxHeaderValueLength)
+	}
+	if limits.MaxHeadersTotalSize != DefaultMaxHeadersTotalSize {
+		t.Errorf("expected MaxHeadersTotalSize %d, got %d", DefaultMaxHeadersTotalSize, limits.MaxHeadersTotalSize)
+	}
+}
+
+// --- Header validation tests ---
+
+func TestValidateHeaders_Valid(t *testing.T) {
+	limits := DefaultLimits()
+	headers := map[string]string{
+		"Content-Type": "application/json",
+		"Schema":       "sensor.reading/v1",
+		"Priority":     "high",
+	}
+	if err := ValidateHeaders(headers, limits); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidateHeaders_Nil(t *testing.T) {
+	limits := DefaultLimits()
+	if err := ValidateHeaders(nil, limits); err != nil {
+		t.Fatalf("expected no error for nil headers, got %v", err)
+	}
+}
+
+func TestValidateHeaders_Empty(t *testing.T) {
+	limits := DefaultLimits()
+	if err := ValidateHeaders(map[string]string{}, limits); err != nil {
+		t.Fatalf("expected no error for empty headers, got %v", err)
+	}
+}
+
+func TestValidateHeaders_TooMany(t *testing.T) {
+	limits := DefaultLimits()
+	limits.MaxHeaderCount = 2
+
+	headers := map[string]string{
+		"A": "1",
+		"B": "2",
+		"C": "3",
+	}
+	err := ValidateHeaders(headers, limits)
+	if err == nil {
+		t.Fatal("expected error for too many headers")
+	}
+	if !errors.Is(err, ErrTooManyHeaders) {
+		t.Errorf("expected ErrTooManyHeaders, got %v", err)
+	}
+}
+
+func TestValidateHeaders_EmptyKey(t *testing.T) {
+	limits := DefaultLimits()
+	headers := map[string]string{
+		"": "value",
+	}
+	err := ValidateHeaders(headers, limits)
+	if err == nil {
+		t.Fatal("expected error for empty header key")
+	}
+	if !errors.Is(err, ErrInvalidHeaders) {
+		t.Errorf("expected ErrInvalidHeaders, got %v", err)
+	}
+}
+
+func TestValidateHeaders_KeyTooLong(t *testing.T) {
+	limits := DefaultLimits()
+	limits.MaxHeaderKeyLength = 10
+
+	headers := map[string]string{
+		"ThisKeyIsWayTooLong": "value",
+	}
+	err := ValidateHeaders(headers, limits)
+	if err == nil {
+		t.Fatal("expected error for oversized header key")
+	}
+	if !errors.Is(err, ErrHeaderKeyTooLong) {
+		t.Errorf("expected ErrHeaderKeyTooLong, got %v", err)
+	}
+}
+
+func TestValidateHeaders_ValueTooLong(t *testing.T) {
+	limits := DefaultLimits()
+	limits.MaxHeaderValueLength = 5
+
+	headers := map[string]string{
+		"Key": "this value is too long",
+	}
+	err := ValidateHeaders(headers, limits)
+	if err == nil {
+		t.Fatal("expected error for oversized header value")
+	}
+	if !errors.Is(err, ErrHeaderValueTooLong) {
+		t.Errorf("expected ErrHeaderValueTooLong, got %v", err)
+	}
+}
+
+func TestValidateHeaders_TotalSizeTooLarge(t *testing.T) {
+	limits := DefaultLimits()
+	limits.MaxHeadersTotalSize = 10
+
+	headers := map[string]string{
+		"Key1": "value1",
+		"Key2": "value2",
+	}
+	err := ValidateHeaders(headers, limits)
+	if err == nil {
+		t.Fatal("expected error for total headers size exceeded")
+	}
+	if !errors.Is(err, ErrHeadersTooLarge) {
+		t.Errorf("expected ErrHeadersTooLarge, got %v", err)
+	}
 }

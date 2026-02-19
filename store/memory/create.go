@@ -33,6 +33,12 @@ func newMessageFromData(data store.MessageData, id string, now time.Time) *messa
 		m.tags = make([]string, len(data.Tags))
 		copy(m.tags, data.Tags)
 	}
+	if data.Headers != nil {
+		m.headers = make(map[string]string, len(data.Headers))
+		for k, v := range data.Headers {
+			m.headers[k] = v
+		}
+	}
 	if data.Metadata != nil {
 		m.metadata = make(map[string]any, len(data.Metadata))
 		for k, v := range data.Metadata {

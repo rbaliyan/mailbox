@@ -480,6 +480,190 @@ func TestTags(t *testing.T) {
 	})
 }
 
+func TestSendWithHeaders(t *testing.T) {
+	ctx := context.Background()
+	svc := setupTestService(t)
+	defer svc.Close(ctx)
+
+	sender := svc.Client("sender")
+	recipient := svc.Client("recipient")
+
+	t.Run("send message with headers", func(t *testing.T) {
+		draft := mustCompose(sender)
+		draft.SetSubject("Structured Message").
+			SetBody(`{"temperature":72}`).
+			SetRecipients("recipient").
+			SetHeader(store.HeaderContentType, "application/json").
+			SetHeader(store.HeaderSchema, "sensor.reading/v1").
+			SetHeader(store.HeaderPriority, "high")
+
+		msg, err := draft.Send(ctx)
+		if err != nil {
+			t.Fatalf("send failed: %v", err)
+		}
+
+		// Verify sender copy has headers
+		headers := msg.GetHeaders()
+		if headers[store.HeaderContentType] != "application/json" {
+			t.Errorf("Content-Type = %q, want application/json", headers[store.HeaderContentType])
+		}
+		if headers[store.HeaderSchema] != "sensor.reading/v1" {
+			t.Errorf("Schema = %q, want sensor.reading/v1", headers[store.HeaderSchema])
+		}
+		if headers[store.HeaderPriority] != "high" {
+			t.Errorf("Priority = %q, want high", headers[store.HeaderPriority])
+		}
+
+		// Verify recipient copy has headers
+		inbox, _ := recipient.Folder(ctx, store.FolderInbox, store.ListOptions{})
+		if len(inbox.All()) == 0 {
+			t.Fatal("expected message in recipient inbox")
+		}
+		recipientHeaders := inbox.All()[0].GetHeaders()
+		if recipientHeaders[store.HeaderContentType] != "application/json" {
+			t.Errorf("recipient Content-Type = %q, want application/json", recipientHeaders[store.HeaderContentType])
+		}
+		if recipientHeaders[store.HeaderSchema] != "sensor.reading/v1" {
+			t.Errorf("recipient Schema = %q, want sensor.reading/v1", recipientHeaders[store.HeaderSchema])
+		}
+	})
+
+	t.Run("Content-Length auto-populated on send", func(t *testing.T) {
+		draft := mustCompose(sender)
+		body := "Hello, World!"
+		draft.SetSubject("Auto Length").
+			SetBody(body).
+			SetRecipients("recipient")
+
+		msg, err := draft.Send(ctx)
+		if err != nil {
+			t.Fatalf("send failed: %v", err)
+		}
+
+		headers := msg.GetHeaders()
+		expected := "13" // len("Hello, World!") == 13 bytes
+		if headers[store.HeaderContentLength] != expected {
+			t.Errorf("Content-Length = %q, want %q", headers[store.HeaderContentLength], expected)
+		}
+	})
+
+	t.Run("Content-Length not overwritten if already set", func(t *testing.T) {
+		draft := mustCompose(sender)
+		draft.SetSubject("Custom Length").
+			SetBody("Body").
+			SetRecipients("recipient").
+			SetHeader(store.HeaderContentLength, "999")
+
+		msg, err := draft.Send(ctx)
+		if err != nil {
+			t.Fatalf("send failed: %v", err)
+		}
+
+		if msg.GetHeaders()[store.HeaderContentLength] != "999" {
+			t.Errorf("Content-Length = %q, want 999 (should not be overwritten)", msg.GetHeaders()[store.HeaderContentLength])
+		}
+	})
+
+	t.Run("send without headers has only Content-Length", func(t *testing.T) {
+		draft := mustCompose(sender)
+		draft.SetSubject("No Headers").
+			SetBody("Plain text").
+			SetRecipients("recipient")
+
+		msg, err := draft.Send(ctx)
+		if err != nil {
+			t.Fatalf("send failed: %v", err)
+		}
+
+		headers := msg.GetHeaders()
+		if headers[store.HeaderContentLength] == "" {
+			t.Error("Content-Length should be auto-populated")
+		}
+		if headers[store.HeaderContentType] != "" {
+			t.Errorf("Content-Type should not be set, got %q", headers[store.HeaderContentType])
+		}
+	})
+}
+
+func TestSaveDraftWithHeaders(t *testing.T) {
+	ctx := context.Background()
+	svc := setupTestService(t)
+	defer svc.Close(ctx)
+
+	user := svc.Client("user")
+
+	t.Run("save and retrieve draft with headers", func(t *testing.T) {
+		draft := mustCompose(user)
+		draft.SetSubject("Draft with Headers").
+			SetBody("Body").
+			SetHeader(store.HeaderContentType, "application/json").
+			SetHeader(store.HeaderSchema, "order/v1")
+
+		saved, err := draft.Save(ctx)
+		if err != nil {
+			t.Fatalf("save failed: %v", err)
+		}
+
+		// Retrieve draft and verify headers persisted
+		drafts, err := user.Drafts(ctx, store.ListOptions{})
+		if err != nil {
+			t.Fatalf("list drafts failed: %v", err)
+		}
+
+		found := false
+		for _, d := range drafts.All() {
+			if d.Subject() == "Draft with Headers" {
+				found = true
+				headers := d.Headers()
+				if headers[store.HeaderContentType] != "application/json" {
+					t.Errorf("Content-Type = %q, want application/json", headers[store.HeaderContentType])
+				}
+				if headers[store.HeaderSchema] != "order/v1" {
+					t.Errorf("Schema = %q, want order/v1", headers[store.HeaderSchema])
+				}
+				break
+			}
+		}
+		if !found {
+			t.Error("draft not found in list")
+		}
+
+		// Clean up
+		_ = saved.Delete(ctx)
+	})
+}
+
+func TestSendMessageWithHeaders(t *testing.T) {
+	ctx := context.Background()
+	svc := setupTestService(t)
+	defer svc.Close(ctx)
+
+	mb := svc.Client("sender")
+
+	t.Run("SendMessage copies headers from request", func(t *testing.T) {
+		msg, err := mb.SendMessage(ctx, SendRequest{
+			RecipientIDs: []string{"recipient"},
+			Subject:      "Via SendRequest",
+			Body:         "Body",
+			Headers: map[string]string{
+				store.HeaderContentType:  "text/plain",
+				store.HeaderCorrelationID: "corr-123",
+			},
+		})
+		if err != nil {
+			t.Fatalf("SendMessage failed: %v", err)
+		}
+
+		headers := msg.GetHeaders()
+		if headers[store.HeaderContentType] != "text/plain" {
+			t.Errorf("Content-Type = %q, want text/plain", headers[store.HeaderContentType])
+		}
+		if headers[store.HeaderCorrelationID] != "corr-123" {
+			t.Errorf("Correlation-ID = %q, want corr-123", headers[store.HeaderCorrelationID])
+		}
+	})
+}
+
 func TestUnauthorizedAccess(t *testing.T) {
 	ctx := context.Background()
 	svc := setupTestService(t)

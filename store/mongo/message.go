@@ -14,14 +14,15 @@ var _ store.Attachment = (*attachment)(nil)
 
 // messageDoc is the MongoDB document representation.
 type messageDoc struct {
-	ID             bson.ObjectID   `bson:"_id,omitempty"`
-	OwnerID        string          `bson:"owner_id"`
-	SenderID       string          `bson:"sender_id"`
-	RecipientIDs   []string        `bson:"recipient_ids"`
-	Subject        string          `bson:"subject"`
-	Body           string          `bson:"body"`
-	Metadata       map[string]any  `bson:"metadata,omitempty"`
-	Status         string          `bson:"status"`
+	ID             bson.ObjectID     `bson:"_id,omitempty"`
+	OwnerID        string            `bson:"owner_id"`
+	SenderID       string            `bson:"sender_id"`
+	RecipientIDs   []string          `bson:"recipient_ids"`
+	Subject        string            `bson:"subject"`
+	Body           string            `bson:"body"`
+	Headers        map[string]string `bson:"headers,omitempty"`
+	Metadata       map[string]any    `bson:"metadata,omitempty"`
+	Status         string            `bson:"status"`
 	IsRead         bool            `bson:"is_read"`
 	ReadAt         *time.Time      `bson:"read_at,omitempty"`
 	FolderID       string          `bson:"folder_id"`
@@ -53,6 +54,7 @@ type message struct {
 	recipientIDs []string
 	subject      string
 	body         string
+	headers      map[string]string
 	metadata     map[string]any
 	status       store.MessageStatus
 	isRead       bool
@@ -76,6 +78,7 @@ type messageDelta struct {
 	body          *string
 	recipientIDs  []string
 	recipientsSet bool
+	headers       map[string]string
 	metadata      map[string]any
 }
 
@@ -99,6 +102,7 @@ func (m *message) GetSenderID() string            { return m.senderID }
 func (m *message) GetRecipientIDs() []string      { return m.recipientIDs }
 func (m *message) GetSubject() string             { return m.subject }
 func (m *message) GetBody() string                { return m.body }
+func (m *message) GetHeaders() map[string]string  { return m.headers }
 func (m *message) GetMetadata() map[string]any    { return m.metadata }
 func (m *message) GetStatus() store.MessageStatus { return m.status }
 func (m *message) GetIsRead() bool                { return m.isRead }
@@ -143,6 +147,18 @@ func (m *message) SetRecipients(recipientIDs ...string) store.DraftMessage {
 	return m
 }
 
+func (m *message) SetHeader(key, value string) store.DraftMessage {
+	if m.headers == nil {
+		m.headers = make(map[string]string)
+	}
+	if m.delta.headers == nil {
+		m.delta.headers = make(map[string]string)
+	}
+	m.headers[key] = value
+	m.delta.headers[key] = value
+	return m
+}
+
 func (m *message) SetMetadata(key string, value any) store.DraftMessage {
 	if m.metadata == nil {
 		m.metadata = make(map[string]any)
@@ -179,6 +195,7 @@ func (m *message) hasChanges() bool {
 	return m.delta.subject != nil ||
 		m.delta.body != nil ||
 		m.delta.recipientsSet ||
+		len(m.delta.headers) > 0 ||
 		len(m.delta.metadata) > 0
 }
 
@@ -208,6 +225,7 @@ func messageToDoc(msg *message) *messageDoc {
 		RecipientIDs: msg.recipientIDs,
 		Subject:      msg.subject,
 		Body:         msg.body,
+		Headers:      msg.headers,
 		Metadata:     msg.metadata,
 		Status:       string(msg.status),
 		IsRead:       msg.isRead,
@@ -251,6 +269,7 @@ func docToMessage(doc *messageDoc) *message {
 		recipientIDs: doc.RecipientIDs,
 		subject:      doc.Subject,
 		body:         doc.Body,
+		headers:      doc.Headers,
 		metadata:     doc.Metadata,
 		status:       store.MessageStatus(doc.Status),
 		isRead:       doc.IsRead,
