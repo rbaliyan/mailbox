@@ -12,7 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 	"github.com/rbaliyan/mailbox/store"
@@ -20,8 +20,8 @@ import (
 
 // Store implements store.AttachmentFileStore using AWS S3.
 type Store struct {
-	client   *s3.Client
-	uploader *manager.Uploader
+	client *s3.Client
+	tm     *transfermanager.Client
 	bucket   string
 	prefix   string
 	logger   *slog.Logger
@@ -60,11 +60,11 @@ func New(ctx context.Context, opts ...Option) (*Store, error) {
 	})
 
 	return &Store{
-		client:   client,
-		uploader: manager.NewUploader(client),
-		bucket:   o.bucket,
-		prefix:   o.prefix,
-		logger:   o.logger,
+		client: client,
+		tm:     transfermanager.New(client),
+		bucket: o.bucket,
+		prefix: o.prefix,
+		logger: o.logger,
 	}, nil
 }
 
@@ -113,14 +113,14 @@ func (s *Store) Upload(ctx context.Context, filename, contentType string, conten
 	// Generate unique key
 	key := s.generateKey(filename)
 
-	input := &s3.PutObjectInput{
+	input := &transfermanager.UploadObjectInput{
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(key),
 		Body:        content,
 		ContentType: aws.String(contentType),
 	}
 
-	_, err := s.uploader.Upload(ctx, input)
+	_, err := s.tm.UploadObject(ctx, input)
 	if err != nil {
 		return "", fmt.Errorf("upload to s3: %w", err)
 	}
