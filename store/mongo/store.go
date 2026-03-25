@@ -113,10 +113,13 @@ func (s *Store) ensureIndexes(ctx context.Context) error {
 			bson.E{Key: "folder_id", Value: 1},
 			bson.E{Key: "updated_at", Value: 1},
 		}},
-		// Compound indexes for common queries
+		// Compound index for folder listing queries (Find, Count, FindWithCount).
+		// Includes __is_draft to fully cover the { $ne: true } filter that all
+		// message queries add, avoiding a post-index scan on large collections.
 		{Keys: bson.D{
 			bson.E{Key: "owner_id", Value: 1},
 			bson.E{Key: "folder_id", Value: 1},
+			bson.E{Key: "__is_draft", Value: 1},
 			bson.E{Key: "created_at", Value: -1},
 		}},
 		// Draft listing index
