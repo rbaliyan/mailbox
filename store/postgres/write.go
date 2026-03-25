@@ -55,7 +55,7 @@ func (s *Store) MarkRead(ctx context.Context, id string, read bool) error {
 	return nil
 }
 
-func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) error {
+func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string, opts ...store.MoveOption) error {
 	if err := s.checkConnected(); err != nil {
 		return err
 	}
@@ -68,15 +68,31 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) er
 		return store.ErrInvalidFolderID
 	}
 
+	mo := store.ApplyMoveOptions(opts)
+	if from := mo.FromFolderID(); from != "" && !store.IsValidFolderID(from) {
+		return store.ErrInvalidFolderID
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	query := fmt.Sprintf(`
-		UPDATE %s SET folder_id = $1, updated_at = $2
-		WHERE id = $3 AND is_draft = false
-	`, s.opts.table)
+	var query string
+	var args []any
+	if from := mo.FromFolderID(); from != "" {
+		query = fmt.Sprintf(`
+			UPDATE %s SET folder_id = $1, updated_at = $2
+			WHERE id = $3 AND is_draft = false AND folder_id = $4
+		`, s.opts.table)
+		args = []any{folderID, time.Now().UTC(), id, from}
+	} else {
+		query = fmt.Sprintf(`
+			UPDATE %s SET folder_id = $1, updated_at = $2
+			WHERE id = $3 AND is_draft = false
+		`, s.opts.table)
+		args = []any{folderID, time.Now().UTC(), id}
+	}
 
-	result, err := s.db.ExecContext(ctx, query, folderID, time.Now().UTC(), id)
+	result, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("move to folder: %w", err)
 	}
@@ -86,6 +102,18 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) er
 		return fmt.Errorf("rows affected: %w", err)
 	}
 	if rows == 0 {
+		// If conditional move, distinguish not-found from folder mismatch.
+		// Note: between the failed update and this existence check, the message
+		// could be deleted by another process. In that narrow window we return
+		// ErrNotFound instead of ErrFolderMismatch — this is benign because the
+		// caller would get ErrNotFound on the next attempt anyway.
+		if mo.FromFolderID() != "" {
+			existsQuery := fmt.Sprintf(`SELECT 1 FROM %s WHERE id = $1 AND is_draft = false LIMIT 1`, s.opts.table)
+			var exists int
+			if err := s.db.QueryRowContext(ctx, existsQuery, id).Scan(&exists); err == nil {
+				return store.ErrFolderMismatch
+			}
+		}
 		return store.ErrNotFound
 	}
 

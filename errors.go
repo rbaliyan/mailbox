@@ -142,6 +142,11 @@ var (
 	// ErrCacheInvalidationFailed is returned when cache invalidation fails in strict mode.
 	// The underlying operation succeeded, but cached data may be stale.
 	ErrCacheInvalidationFailed = errors.New("mailbox: cache invalidation failed")
+
+	// ErrFolderMismatch is returned by conditional MoveToFolder when the message
+	// exists but is not in the expected source folder.
+	// Wraps store.ErrFolderMismatch for consistent error checking.
+	ErrFolderMismatch = fmt.Errorf("mailbox: %w", store.ErrFolderMismatch)
 )
 
 // PartialDeliveryError provides details about which recipients failed.
@@ -259,6 +264,7 @@ func IsRetryableError(err error) bool {
 		ErrAttachmentTooLarge,
 		ErrInvalidAttachment,
 		ErrInvalidFolderID,
+		ErrFolderMismatch,
 		ErrInvalidUserID,
 		ErrInvalidIdempotencyKey,
 		ErrDuplicateEntry,
@@ -284,6 +290,7 @@ func IsRetryableError(err error) bool {
 		store.ErrEmptySubject,
 		store.ErrFilterInvalid,
 		store.ErrInvalidFolderID,
+		store.ErrFolderMismatch,
 		store.ErrInvalidIdempotencyKey,
 	}
 

@@ -23,6 +23,13 @@ func (m *userMailbox) UpdateFlags(ctx context.Context, messageID string, flags F
 		return err
 	}
 
+	// No flags set — nothing to do. This returns early before getAndVerify,
+	// so a nonexistent messageID will return nil (not ErrNotFound). This is
+	// intentional: an empty update is a no-op regardless of message existence.
+	if flags.Read == nil && flags.Archived == nil {
+		return nil
+	}
+
 	start := time.Now()
 	defer func() { m.service.otel.recordUpdate(ctx, time.Since(start), "update_flags", retErr) }()
 
@@ -212,7 +219,7 @@ func (m *userMailbox) PermanentlyDelete(ctx context.Context, messageID string) (
 }
 
 // MoveToFolder moves a message to a folder.
-func (m *userMailbox) MoveToFolder(ctx context.Context, messageID, folderID string) (retErr error) {
+func (m *userMailbox) MoveToFolder(ctx context.Context, messageID, folderID string, opts ...store.MoveOption) (retErr error) {
 	if err := m.checkAccess(); err != nil {
 		return err
 	}
@@ -225,13 +232,19 @@ func (m *userMailbox) MoveToFolder(ctx context.Context, messageID, folderID stri
 		return fmt.Errorf("%w: %s", ErrInvalidFolderID, folderID)
 	}
 
+	// Validate fromFolderID if provided
+	mo := store.ApplyMoveOptions(opts)
+	if from := mo.FromFolderID(); from != "" && !store.IsValidFolderID(from) {
+		return fmt.Errorf("%w: %s", ErrInvalidFolderID, from)
+	}
+
 	msg, err := m.getAndVerify(ctx, messageID)
 	if err != nil {
 		return err
 	}
 
 	oldFolderID := msg.GetFolderID()
-	if err := m.service.store.MoveToFolder(ctx, messageID, folderID); err != nil {
+	if err := m.service.store.MoveToFolder(ctx, messageID, folderID, opts...); err != nil {
 		return fmt.Errorf("move to folder: %w", err)
 	}
 

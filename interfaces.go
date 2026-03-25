@@ -187,7 +187,7 @@ type AttachmentResolver interface {
 // but skip the intermediate Get for efficiency in server integrations.
 type MailboxMutator interface {
 	UpdateFlags(ctx context.Context, messageID string, flags Flags) error
-	MoveToFolder(ctx context.Context, messageID string, folderID string) error
+	MoveToFolder(ctx context.Context, messageID string, folderID string, opts ...store.MoveOption) error
 	Delete(ctx context.Context, messageID string) error
 	Restore(ctx context.Context, messageID string) error
 	PermanentlyDelete(ctx context.Context, messageID string) error
@@ -226,7 +226,7 @@ type MessageSender interface {
 // with per-ID success/failure information.
 type BulkOperator interface {
 	BulkUpdateFlags(ctx context.Context, messageIDs []string, flags Flags) (*BulkResult, error)
-	BulkMove(ctx context.Context, messageIDs []string, folderID string) (*BulkResult, error)
+	BulkMove(ctx context.Context, messageIDs []string, folderID string, opts ...store.MoveOption) (*BulkResult, error)
 	BulkDelete(ctx context.Context, messageIDs []string) (*BulkResult, error)
 	BulkPermanentlyDelete(ctx context.Context, messageIDs []string) (*BulkResult, error)
 	BulkAddTag(ctx context.Context, messageIDs []string, tagID string) (*BulkResult, error)

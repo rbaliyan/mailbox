@@ -85,13 +85,20 @@ func (s *Store) MarkAllRead(ctx context.Context, ownerID, folderID string) (int6
 }
 
 // MoveToFolder moves a message to a different folder.
+// When called with store.FromFolder, the move is conditional: it succeeds only
+// if the message is currently in the specified source folder.
 // Uses per-message locking to prevent concurrent mutation races.
-func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) error {
+func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string, opts ...store.MoveOption) error {
 	if err := s.checkConnected(); err != nil {
 		return err
 	}
 	if id == "" {
 		return store.ErrInvalidID
+	}
+
+	mo := store.ApplyMoveOptions(opts)
+	if from := mo.FromFolderID(); from != "" && !store.IsValidFolderID(from) {
+		return store.ErrInvalidFolderID
 	}
 
 	// Acquire per-message lock to prevent concurrent mutation races
@@ -107,6 +114,11 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) er
 	orig := v.(*message)
 	if orig.isDraft {
 		return store.ErrNotFound
+	}
+
+	// Conditional move: check source folder within lock (atomic CAS).
+	if from := mo.FromFolderID(); from != "" && orig.folderID != from {
+		return store.ErrFolderMismatch
 	}
 
 	// Copy-on-write: clone, modify, store (now atomic within lock)

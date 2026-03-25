@@ -124,6 +124,37 @@ type MessageStoreReader interface {
 	Search(ctx context.Context, query SearchQuery) (*MessageList, error)
 }
 
+// MoveOption configures the behavior of MoveToFolder.
+type MoveOption func(*moveOptions)
+
+type moveOptions struct {
+	fromFolderID string
+}
+
+// ApplyMoveOptions resolves variadic MoveOption into a moveOptions struct.
+// This is intended for Store implementations that need to inspect move options.
+// Application code should pass MoveOption values directly to MoveToFolder.
+func ApplyMoveOptions(opts []MoveOption) moveOptions {
+	var o moveOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
+// FromFolderID returns the configured source folder, or empty string if none.
+func (o moveOptions) FromFolderID() string { return o.fromFolderID }
+
+// FromFolder constrains MoveToFolder to only move the message if it is
+// currently in fromFolderID. If the message exists but is in a different
+// folder, the store returns ErrFolderMismatch instead of moving it.
+//
+// This turns MoveToFolder into an atomic compare-and-swap on the folder field,
+// which callers can use as a claim primitive: attempt the move, check the error.
+func FromFolder(folderID string) MoveOption {
+	return func(o *moveOptions) { o.fromFolderID = folderID }
+}
+
 // MessageStoreMutator provides mutation operations for messages.
 // Mutations are specific operations, not general setters.
 type MessageStoreMutator interface {
@@ -131,7 +162,12 @@ type MessageStoreMutator interface {
 	MarkRead(ctx context.Context, id string, read bool) error
 
 	// MoveToFolder moves a message to a different folder.
-	MoveToFolder(ctx context.Context, id string, folderID string) error
+	//
+	// When called without options, the move is unconditional (existing behavior).
+	// When called with FromFolder, the move is conditional: it succeeds only if
+	// the message is currently in the specified source folder. If the message
+	// exists but is in a different folder, ErrFolderMismatch is returned.
+	MoveToFolder(ctx context.Context, id string, folderID string, opts ...MoveOption) error
 
 	// AddTag adds a tag to a message.
 	AddTag(ctx context.Context, id string, tagID string) error

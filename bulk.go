@@ -3,6 +3,8 @@ package mailbox
 import (
 	"context"
 	"fmt"
+
+	"github.com/rbaliyan/mailbox/store"
 )
 
 // OperationResult contains the result of a single operation within a bulk operation.
@@ -165,9 +167,9 @@ func (m *userMailbox) BulkUpdateFlags(ctx context.Context, messageIDs []string, 
 }
 
 // BulkMove moves multiple messages to a folder by ID.
-func (m *userMailbox) BulkMove(ctx context.Context, messageIDs []string, folderID string) (*BulkResult, error) {
+func (m *userMailbox) BulkMove(ctx context.Context, messageIDs []string, folderID string, opts ...store.MoveOption) (*BulkResult, error) {
 	return m.bulkOp(ctx, messageIDs, func(id string) error {
-		return m.MoveToFolder(ctx, id, folderID)
+		return m.MoveToFolder(ctx, id, folderID, opts...)
 	})
 }
 
