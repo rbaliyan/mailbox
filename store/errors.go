@@ -40,6 +40,12 @@ var (
 	// ErrTransactionFailed is returned when a database transaction fails.
 	// This indicates the atomic operation could not complete and no changes were made.
 	ErrTransactionFailed = errors.New("store: transaction failed")
+
+	// ErrFolderMismatch is returned when a conditional move finds the message
+	// but it is not in the expected source folder. This enables atomic
+	// compare-and-swap folder moves where the caller can detect that another
+	// process already moved (claimed) the message.
+	ErrFolderMismatch = errors.New("store: folder mismatch")
 )
 
 // Error checking helpers.
@@ -58,4 +64,8 @@ func IsDuplicateEntry(err error) bool {
 
 func IsNotConnected(err error) bool {
 	return errors.Is(err, ErrNotConnected)
+}
+
+func IsFolderMismatch(err error) bool {
+	return errors.Is(err, ErrFolderMismatch)
 }

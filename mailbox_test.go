@@ -767,6 +767,194 @@ func TestGracefulShutdown(t *testing.T) {
 	wg.Wait()
 }
 
+func TestMoveToFolder_Conditional(t *testing.T) {
+	ctx := context.Background()
+	svc := setupTestService(t)
+	defer svc.Close(ctx)
+
+	sender := svc.Client("sender")
+	recipient := svc.Client("recipient")
+
+	// Helper to send a message and return the recipient's copy.
+	sendMsg := func(t *testing.T, subject string) Message {
+		t.Helper()
+		draft := mustCompose(sender)
+		draft.SetSubject(subject).SetBody("body").SetRecipients("recipient")
+		if _, err := draft.Send(ctx); err != nil {
+			t.Fatalf("send failed: %v", err)
+		}
+		inbox, err := recipient.Folder(ctx, store.FolderInbox, store.ListOptions{Limit: 100})
+		if err != nil {
+			t.Fatalf("list inbox failed: %v", err)
+		}
+		for _, m := range inbox.All() {
+			if m.GetSubject() == subject {
+				return m
+			}
+		}
+		t.Fatalf("message %q not found in inbox", subject)
+		return nil
+	}
+
+	t.Run("unconditional move works without options", func(t *testing.T) {
+		msg := sendMsg(t, "unconditional")
+		if err := recipient.MoveToFolder(ctx, msg.GetID(), "custom"); err != nil {
+			t.Fatalf("unconditional move failed: %v", err)
+		}
+		got, _ := recipient.Get(ctx, msg.GetID())
+		if got.GetFolderID() != "custom" {
+			t.Errorf("folder = %q, want %q", got.GetFolderID(), "custom")
+		}
+	})
+
+	t.Run("conditional move succeeds when folder matches", func(t *testing.T) {
+		msg := sendMsg(t, "cond-ok")
+		err := recipient.MoveToFolder(ctx, msg.GetID(), "processing", store.FromFolder(store.FolderInbox))
+		if err != nil {
+			t.Fatalf("conditional move failed: %v", err)
+		}
+		got, _ := recipient.Get(ctx, msg.GetID())
+		if got.GetFolderID() != "processing" {
+			t.Errorf("folder = %q, want %q", got.GetFolderID(), "processing")
+		}
+	})
+
+	t.Run("conditional move returns ErrFolderMismatch when folder differs", func(t *testing.T) {
+		msg := sendMsg(t, "cond-mismatch")
+		// Move to a known folder first.
+		if err := recipient.MoveToFolder(ctx, msg.GetID(), "processing"); err != nil {
+			t.Fatalf("setup move failed: %v", err)
+		}
+		// Try conditional move from inbox — should fail.
+		err := recipient.MoveToFolder(ctx, msg.GetID(), "claimed", store.FromFolder(store.FolderInbox))
+		if !errors.Is(err, store.ErrFolderMismatch) {
+			t.Fatalf("expected ErrFolderMismatch, got %v", err)
+		}
+		// Message should still be in "processing".
+		got, _ := recipient.Get(ctx, msg.GetID())
+		if got.GetFolderID() != "processing" {
+			t.Errorf("folder = %q, want %q", got.GetFolderID(), "processing")
+		}
+	})
+
+	t.Run("conditional move returns ErrNotFound for missing message", func(t *testing.T) {
+		err := recipient.MoveToFolder(ctx, "nonexistent-id", "dest", store.FromFolder(store.FolderInbox))
+		if !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+	})
+
+	t.Run("conditional move with invalid from folder returns error", func(t *testing.T) {
+		msg := sendMsg(t, "cond-invalid-from")
+		err := recipient.MoveToFolder(ctx, msg.GetID(), "dest", store.FromFolder("__bogus"))
+		if !errors.Is(err, ErrInvalidFolderID) {
+			t.Fatalf("expected ErrInvalidFolderID, got %v", err)
+		}
+	})
+
+	t.Run("Message.Move passes options through", func(t *testing.T) {
+		msg := sendMsg(t, "msg-move")
+		// Conditional move via Message.Move.
+		if err := msg.Move(ctx, "claimed", store.FromFolder(store.FolderInbox)); err != nil {
+			t.Fatalf("Message.Move failed: %v", err)
+		}
+		// Second attempt should fail.
+		err := msg.Move(ctx, "claimed-again", store.FromFolder(store.FolderInbox))
+		if !errors.Is(err, store.ErrFolderMismatch) {
+			t.Fatalf("expected ErrFolderMismatch, got %v", err)
+		}
+	})
+
+	t.Run("BulkMove passes options through", func(t *testing.T) {
+		m1 := sendMsg(t, "bulk1")
+		m2 := sendMsg(t, "bulk2")
+		// Move m2 out of inbox first so the conditional move will fail for it.
+		if err := recipient.MoveToFolder(ctx, m2.GetID(), "other"); err != nil {
+			t.Fatalf("setup move failed: %v", err)
+		}
+
+		result, err := recipient.BulkMove(ctx, []string{m1.GetID(), m2.GetID()}, "done", store.FromFolder(store.FolderInbox))
+		// BulkMove returns both result and error on partial failure.
+		if result == nil {
+			t.Fatalf("expected non-nil result, got error: %v", err)
+		}
+		if result.SuccessCount() != 1 {
+			t.Errorf("expected 1 success, got %d", result.SuccessCount())
+		}
+		if result.FailureCount() != 1 {
+			t.Errorf("expected 1 failure, got %d", result.FailureCount())
+		}
+		// The error should wrap the partial failure.
+		if err == nil {
+			t.Error("expected error for partial failure")
+		}
+	})
+}
+
+func TestUpdateFlags_EmptyFlags(t *testing.T) {
+	ctx := context.Background()
+	svc := setupTestService(t)
+	defer svc.Close(ctx)
+
+	sender := svc.Client("sender")
+	recipient := svc.Client("recipient")
+
+	// Send a message.
+	draft := mustCompose(sender)
+	draft.SetSubject("Flags Test").SetBody("body").SetRecipients("recipient")
+	if _, err := draft.Send(ctx); err != nil {
+		t.Fatalf("send failed: %v", err)
+	}
+	inbox, _ := recipient.Folder(ctx, store.FolderInbox, store.ListOptions{})
+	msg := inbox.All()[0]
+
+	t.Run("empty flags is a no-op", func(t *testing.T) {
+		// Should succeed and not touch the message.
+		err := recipient.UpdateFlags(ctx, msg.GetID(), Flags{})
+		if err != nil {
+			t.Fatalf("UpdateFlags with empty flags should succeed, got %v", err)
+		}
+		got, _ := recipient.Get(ctx, msg.GetID())
+		if got.GetIsRead() {
+			t.Error("message should still be unread")
+		}
+		if got.GetFolderID() != store.FolderInbox {
+			t.Errorf("folder = %q, want %q", got.GetFolderID(), store.FolderInbox)
+		}
+	})
+
+	t.Run("empty flags does not require valid message ID", func(t *testing.T) {
+		// Since empty flags returns nil immediately (before getAndVerify),
+		// even a bogus ID should succeed.
+		err := recipient.UpdateFlags(ctx, "nonexistent", Flags{})
+		if err != nil {
+			t.Fatalf("expected nil for empty flags with bad ID, got %v", err)
+		}
+	})
+
+	t.Run("nil Read with non-nil Archived still works", func(t *testing.T) {
+		err := recipient.UpdateFlags(ctx, msg.GetID(), Flags{Archived: ptr(true)})
+		if err != nil {
+			t.Fatalf("archive failed: %v", err)
+		}
+		got, _ := recipient.Get(ctx, msg.GetID())
+		if got.GetFolderID() != store.FolderArchived {
+			t.Errorf("folder = %q, want %q", got.GetFolderID(), store.FolderArchived)
+		}
+	})
+
+	t.Run("nil Archived with non-nil Read still works", func(t *testing.T) {
+		err := recipient.UpdateFlags(ctx, msg.GetID(), Flags{Read: ptr(true)})
+		if err != nil {
+			t.Fatalf("mark read failed: %v", err)
+		}
+		got, _ := recipient.Get(ctx, msg.GetID())
+		if !got.GetIsRead() {
+			t.Error("message should be read")
+		}
+	})
+}
+
 // Helper to setup a test service
 func setupTestService(t *testing.T) Service {
 	t.Helper()

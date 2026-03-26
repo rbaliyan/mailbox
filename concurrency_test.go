@@ -2,6 +2,7 @@ package mailbox
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -385,5 +386,118 @@ func TestConcurrentFolderMoves(t *testing.T) {
 
 	if errCount > 0 {
 		t.Errorf("%d errors occurred during concurrent folder moves", errCount)
+	}
+}
+
+func TestConditionalMoveToFolder(t *testing.T) {
+	ctx := context.Background()
+	memStore := memory.New()
+	svc, err := NewService(WithStore(memStore))
+	if err != nil {
+		t.Fatalf("failed to create service: %v", err)
+	}
+	if err := svc.Connect(ctx); err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer svc.Close(ctx)
+
+	sender := svc.Client("sender")
+	reader := svc.Client("reader")
+
+	draft := mustCompose(sender)
+	draft.SetRecipients("reader").SetSubject("Test").SetBody("Body")
+	_, err = draft.Send(ctx)
+	if err != nil {
+		t.Fatalf("failed to send: %v", err)
+	}
+
+	inbox, err := reader.Folder(ctx, store.FolderInbox, store.ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatalf("failed to get inbox: %v", err)
+	}
+	msgs := inbox.All()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	msg := msgs[0]
+
+	t.Run("conditional move succeeds when in expected folder", func(t *testing.T) {
+		err := msg.Move(ctx, "processing", store.FromFolder(store.FolderInbox))
+		if err != nil {
+			t.Fatalf("expected success, got: %v", err)
+		}
+	})
+
+	t.Run("conditional move returns folder mismatch", func(t *testing.T) {
+		// Message is now in "processing", not inbox
+		err := msg.Move(ctx, "claimed", store.FromFolder(store.FolderInbox))
+		if !store.IsFolderMismatch(err) {
+			t.Fatalf("expected ErrFolderMismatch, got: %v", err)
+		}
+	})
+
+	t.Run("unconditional move still works", func(t *testing.T) {
+		err := msg.Move(ctx, store.FolderInbox)
+		if err != nil {
+			t.Fatalf("expected success, got: %v", err)
+		}
+	})
+}
+
+func TestConditionalMove_ConcurrentClaim(t *testing.T) {
+	ctx := context.Background()
+	memStore := memory.New()
+	svc, err := NewService(WithStore(memStore))
+	if err != nil {
+		t.Fatalf("failed to create service: %v", err)
+	}
+	if err := svc.Connect(ctx); err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer svc.Close(ctx)
+
+	sender := svc.Client("sender")
+	reader := svc.Client("reader")
+
+	draft := mustCompose(sender)
+	draft.SetRecipients("reader").SetSubject("Job").SetBody("Work")
+	_, err = draft.Send(ctx)
+	if err != nil {
+		t.Fatalf("failed to send: %v", err)
+	}
+
+	inbox, err := reader.Folder(ctx, store.FolderInbox, store.ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatalf("failed to get inbox: %v", err)
+	}
+	msg := inbox.All()[0]
+
+	// Simulate N workers racing to claim the same message
+	const workers = 10
+	var wg sync.WaitGroup
+	wins := make(chan string, workers)
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			folder := fmt.Sprintf("worker-%d", workerID)
+			err := reader.MoveToFolder(ctx, msg.GetID(), folder, store.FromFolder(store.FolderInbox))
+			if err == nil {
+				wins <- folder
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(wins)
+
+	// Exactly one worker should have won the claim
+	var winCount int
+	for range wins {
+		winCount++
+	}
+	if winCount != 1 {
+		t.Fatalf("expected exactly 1 winner, got %d", winCount)
 	}
 }

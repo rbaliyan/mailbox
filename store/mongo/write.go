@@ -57,12 +57,19 @@ func (s *Store) MarkRead(ctx context.Context, id string, read bool) error {
 }
 
 // MoveToFolder moves a message to a different folder.
-func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) error {
+// When called with store.FromFolder, the move is conditional: it succeeds only
+// if the message is currently in the specified source folder.
+func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string, opts ...store.MoveOption) error {
 	if atomic.LoadInt32(&s.connected) == 0 {
 		return store.ErrNotConnected
 	}
 
 	if !store.IsValidFolderID(folderID) {
+		return store.ErrInvalidFolderID
+	}
+
+	mo := store.ApplyMoveOptions(opts)
+	if from := mo.FromFolderID(); from != "" && !store.IsValidFolderID(from) {
 		return store.ErrInvalidFolderID
 	}
 
@@ -78,6 +85,9 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) er
 		"_id":        oid,
 		"__is_draft": bson.M{"$ne": true},
 	}
+	if from := mo.FromFolderID(); from != "" {
+		filter["folder_id"] = from
+	}
 	update := bson.M{
 		"$set": bson.M{
 			"folder_id":  folderID,
@@ -91,6 +101,20 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string) er
 	}
 
 	if result.MatchedCount == 0 {
+		// If conditional move, distinguish not-found from folder mismatch.
+		// Note: between the failed update and this existence check, the message
+		// could be deleted by another process. In that narrow window we return
+		// ErrNotFound instead of ErrFolderMismatch — this is benign because the
+		// caller would get ErrNotFound on the next attempt anyway.
+		if mo.FromFolderID() != "" {
+			count, countErr := s.collection.CountDocuments(ctx, bson.M{
+				"_id":        oid,
+				"__is_draft": bson.M{"$ne": true},
+			})
+			if countErr == nil && count > 0 {
+				return store.ErrFolderMismatch
+			}
+		}
 		return store.ErrNotFound
 	}
 

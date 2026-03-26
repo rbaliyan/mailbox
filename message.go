@@ -13,7 +13,8 @@ type MessageMutator interface {
 	Update(ctx context.Context, flags Flags) error
 
 	// Move moves the message to a folder.
-	Move(ctx context.Context, folderID string) error
+	// When called with store.FromFolder, the move is conditional.
+	Move(ctx context.Context, folderID string, opts ...store.MoveOption) error
 
 	// Delete moves the message to trash.
 	Delete(ctx context.Context) error
@@ -79,8 +80,8 @@ func (m *message) Update(ctx context.Context, flags Flags) error {
 
 // Move moves the message to a folder.
 // Delegates to userMailbox.MoveToFolder for consistent behavior.
-func (m *message) Move(ctx context.Context, folderID string) error {
-	return m.mailbox.MoveToFolder(ctx, m.GetID(), folderID)
+func (m *message) Move(ctx context.Context, folderID string, opts ...store.MoveOption) error {
+	return m.mailbox.MoveToFolder(ctx, m.GetID(), folderID, opts...)
 }
 
 // Delete moves the message to trash.
@@ -135,7 +136,7 @@ type MessageListMutator interface {
 	// MarkUnread marks all messages in this list as unread.
 	MarkUnread(ctx context.Context) (*BulkResult, error)
 	// Move moves all messages in this list to the specified folder.
-	Move(ctx context.Context, folderID string) (*BulkResult, error)
+	Move(ctx context.Context, folderID string, opts ...store.MoveOption) (*BulkResult, error)
 	// Delete moves all messages in this list to trash.
 	Delete(ctx context.Context) (*BulkResult, error)
 	// AddTag adds a tag to all messages in this list.
@@ -207,8 +208,8 @@ func (l *messageList) Archive(ctx context.Context) (*BulkResult, error) {
 	return l.Move(ctx, store.FolderArchived)
 }
 
-func (l *messageList) Move(ctx context.Context, folderID string) (*BulkResult, error) {
-	return l.forEachMessage(ctx, func(msg Message) error { return msg.Move(ctx, folderID) })
+func (l *messageList) Move(ctx context.Context, folderID string, opts ...store.MoveOption) (*BulkResult, error) {
+	return l.forEachMessage(ctx, func(msg Message) error { return msg.Move(ctx, folderID, opts...) })
 }
 
 func (l *messageList) Delete(ctx context.Context) (*BulkResult, error) {
