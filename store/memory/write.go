@@ -118,7 +118,11 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string, op
 
 	// Conditional move: check source folder within lock (atomic CAS).
 	if from := mo.FromFolderID(); from != "" && orig.folderID != from {
-		return store.ErrFolderMismatch
+		return &store.FolderMismatchError{
+			MessageID:      id,
+			ExpectedFolder: from,
+			ActualFolder:   orig.folderID,
+		}
 	}
 
 	// Copy-on-write: clone, modify, store (now atomic within lock)

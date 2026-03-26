@@ -101,18 +101,24 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string, op
 	}
 
 	if result.MatchedCount == 0 {
-		// If conditional move, distinguish not-found from folder mismatch.
-		// Note: between the failed update and this existence check, the message
-		// could be deleted by another process. In that narrow window we return
-		// ErrNotFound instead of ErrFolderMismatch — this is benign because the
-		// caller would get ErrNotFound on the next attempt anyway.
+		// If conditional move, distinguish not-found from folder mismatch
+		// by fetching the actual folder. Between the failed update and this
+		// read, the message could be deleted — in that narrow window we
+		// return ErrNotFound, which is benign.
 		if mo.FromFolderID() != "" {
-			count, countErr := s.collection.CountDocuments(ctx, bson.M{
+			var doc struct {
+				FolderID string `bson:"folder_id"`
+			}
+			findErr := s.collection.FindOne(ctx, bson.M{
 				"_id":        oid,
 				"__is_draft": bson.M{"$ne": true},
-			})
-			if countErr == nil && count > 0 {
-				return store.ErrFolderMismatch
+			}).Decode(&doc)
+			if findErr == nil {
+				return &store.FolderMismatchError{
+					MessageID:      id,
+					ExpectedFolder: mo.FromFolderID(),
+					ActualFolder:   doc.FolderID,
+				}
 			}
 		}
 		return store.ErrNotFound

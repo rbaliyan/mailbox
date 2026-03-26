@@ -102,16 +102,19 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string, op
 		return fmt.Errorf("rows affected: %w", err)
 	}
 	if rows == 0 {
-		// If conditional move, distinguish not-found from folder mismatch.
-		// Note: between the failed update and this existence check, the message
-		// could be deleted by another process. In that narrow window we return
-		// ErrNotFound instead of ErrFolderMismatch — this is benign because the
-		// caller would get ErrNotFound on the next attempt anyway.
+		// If conditional move, distinguish not-found from folder mismatch
+		// by fetching the actual folder. Between the failed update and this
+		// read, the message could be deleted — in that narrow window we
+		// return ErrNotFound, which is benign.
 		if mo.FromFolderID() != "" {
-			existsQuery := fmt.Sprintf(`SELECT 1 FROM %s WHERE id = $1 AND is_draft = false LIMIT 1`, s.opts.table)
-			var exists int
-			if err := s.db.QueryRowContext(ctx, existsQuery, id).Scan(&exists); err == nil {
-				return store.ErrFolderMismatch
+			folderQuery := fmt.Sprintf(`SELECT folder_id FROM %s WHERE id = $1 AND is_draft = false LIMIT 1`, s.opts.table)
+			var actualFolder string
+			if err := s.db.QueryRowContext(ctx, folderQuery, id).Scan(&actualFolder); err == nil {
+				return &store.FolderMismatchError{
+					MessageID:      id,
+					ExpectedFolder: mo.FromFolderID(),
+					ActualFolder:   actualFolder,
+				}
 			}
 		}
 		return store.ErrNotFound

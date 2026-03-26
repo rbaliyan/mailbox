@@ -428,11 +428,21 @@ func TestConditionalMoveToFolder(t *testing.T) {
 		}
 	})
 
-	t.Run("conditional move returns folder mismatch", func(t *testing.T) {
+	t.Run("conditional move returns folder mismatch with details", func(t *testing.T) {
 		// Message is now in "processing", not inbox
 		err := msg.Move(ctx, "claimed", store.FromFolder(store.FolderInbox))
 		if !store.IsFolderMismatch(err) {
 			t.Fatalf("expected ErrFolderMismatch, got: %v", err)
+		}
+		fme, ok := AsFolderMismatch(err)
+		if !ok {
+			t.Fatal("expected FolderMismatchError details")
+		}
+		if fme.ExpectedFolder != store.FolderInbox {
+			t.Errorf("ExpectedFolder = %q, want %q", fme.ExpectedFolder, store.FolderInbox)
+		}
+		if fme.ActualFolder != "processing" {
+			t.Errorf("ActualFolder = %q, want %q", fme.ActualFolder, "processing")
 		}
 	})
 

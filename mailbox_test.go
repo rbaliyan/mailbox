@@ -830,6 +830,17 @@ func TestMoveToFolder_Conditional(t *testing.T) {
 		if !errors.Is(err, store.ErrFolderMismatch) {
 			t.Fatalf("expected ErrFolderMismatch, got %v", err)
 		}
+		// Verify error details via errors.As.
+		fme, ok := store.AsFolderMismatch(err)
+		if !ok {
+			t.Fatal("expected FolderMismatchError details")
+		}
+		if fme.ExpectedFolder != store.FolderInbox {
+			t.Errorf("ExpectedFolder = %q, want %q", fme.ExpectedFolder, store.FolderInbox)
+		}
+		if fme.ActualFolder != "processing" {
+			t.Errorf("ActualFolder = %q, want %q", fme.ActualFolder, "processing")
+		}
 		// Message should still be in "processing".
 		got, _ := recipient.Get(ctx, msg.GetID())
 		if got.GetFolderID() != "processing" {

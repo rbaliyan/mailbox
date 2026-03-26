@@ -146,6 +146,7 @@ var (
 	// ErrFolderMismatch is returned by conditional MoveToFolder when the message
 	// exists but is not in the expected source folder.
 	// Wraps store.ErrFolderMismatch for consistent error checking.
+	// Use AsFolderMismatch to extract the actual folder from the error.
 	ErrFolderMismatch = fmt.Errorf("mailbox: %w", store.ErrFolderMismatch)
 )
 
@@ -368,6 +369,13 @@ func IsEventPublishError(err error) (*EventPublishError, bool) {
 		return epe, true
 	}
 	return nil, false
+}
+
+// AsFolderMismatch extracts folder mismatch details from an error.
+// Returns the expected and actual folder IDs when a conditional MoveToFolder
+// found the message in a different folder than specified by FromFolder.
+func AsFolderMismatch(err error) (*store.FolderMismatchError, bool) {
+	return store.AsFolderMismatch(err)
 }
 
 // AttachmentRefError provides details about attachment reference counting failures.

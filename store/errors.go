@@ -1,6 +1,9 @@
 package store
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Sentinel errors for the store package.
 var (
@@ -68,4 +71,35 @@ func IsNotConnected(err error) bool {
 
 func IsFolderMismatch(err error) bool {
 	return errors.Is(err, ErrFolderMismatch)
+}
+
+// FolderMismatchError provides details when a conditional move fails because
+// the message is in a different folder than expected. Use errors.As to extract
+// the details, or errors.Is with ErrFolderMismatch for a simple check.
+type FolderMismatchError struct {
+	// MessageID is the ID of the message that was found.
+	MessageID string
+	// ExpectedFolder is the folder the caller expected the message to be in.
+	ExpectedFolder string
+	// ActualFolder is the folder the message is actually in.
+	ActualFolder string
+}
+
+func (e *FolderMismatchError) Error() string {
+	return fmt.Sprintf("store: folder mismatch: message %s in %q, expected %q",
+		e.MessageID, e.ActualFolder, e.ExpectedFolder)
+}
+
+func (e *FolderMismatchError) Unwrap() error {
+	return ErrFolderMismatch
+}
+
+// AsFolderMismatch extracts FolderMismatchError details from an error.
+// Returns nil, false if the error is not a FolderMismatchError.
+func AsFolderMismatch(err error) (*FolderMismatchError, bool) {
+	var fme *FolderMismatchError
+	if errors.As(err, &fme) {
+		return fme, true
+	}
+	return nil, false
 }
