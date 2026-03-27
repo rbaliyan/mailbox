@@ -147,6 +147,10 @@ var (
 	// exists but is not in the expected source folder.
 	// Wraps store.ErrFolderMismatch for consistent error checking.
 	ErrFolderMismatch = fmt.Errorf("mailbox: %w", store.ErrFolderMismatch)
+
+	// ErrNotifierNotConfigured is returned when Notifications() is called
+	// without a notifier configured via WithNotifier.
+	ErrNotifierNotConfigured = errors.New("mailbox: notifier not configured")
 )
 
 // PartialDeliveryError provides details about which recipients failed.

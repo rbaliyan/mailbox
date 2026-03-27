@@ -11,6 +11,7 @@ import (
 	"github.com/rbaliyan/event/v3"
 	"github.com/rbaliyan/event/v3/transport/noop"
 	eventredis "github.com/rbaliyan/event/v3/transport/redis"
+	"github.com/rbaliyan/mailbox/notify"
 	"github.com/rbaliyan/mailbox/store"
 	"golang.org/x/sync/semaphore"
 )
@@ -26,6 +27,7 @@ const (
 type service struct {
 	store             store.Store
 	attachments       store.AttachmentManager
+	notifier          *notify.Notifier
 	logger            *slog.Logger
 	opts              *options
 	state             int32 // stateDisconnected, stateConnecting, or stateConnected
@@ -66,6 +68,7 @@ func NewService(opts ...Option) (Service, error) {
 	return &service{
 		store:       o.store,
 		attachments: o.attachments,
+		notifier:    o.notifier,
 		logger:      o.logger,
 		opts:        o,
 		plugins:     plugins,
@@ -203,6 +206,35 @@ func (s *service) initEventBus(ctx context.Context) error {
 		return fmt.Errorf("subscribe stats MessageMoved: %w", err)
 	}
 
+	// Subscribe notification handlers with AsWorker (worker model).
+	// Each event is processed by exactly one instance in the consumer group.
+	if s.notifier != nil {
+		if err := events.MessageSent.Subscribe(ctx, s.onNotifyMessageSent, event.AsWorker[MessageSentEvent]()); err != nil {
+			_ = bus.Close(ctx)
+			return fmt.Errorf("subscribe notify MessageSent: %w", err)
+		}
+		if err := events.MessageReceived.Subscribe(ctx, s.onNotifyMessageReceived, event.AsWorker[MessageReceivedEvent]()); err != nil {
+			_ = bus.Close(ctx)
+			return fmt.Errorf("subscribe notify MessageReceived: %w", err)
+		}
+		if err := events.MessageRead.Subscribe(ctx, s.onNotifyMessageRead, event.AsWorker[MessageReadEvent]()); err != nil {
+			_ = bus.Close(ctx)
+			return fmt.Errorf("subscribe notify MessageRead: %w", err)
+		}
+		if err := events.MessageDeleted.Subscribe(ctx, s.onNotifyMessageDeleted, event.AsWorker[MessageDeletedEvent]()); err != nil {
+			_ = bus.Close(ctx)
+			return fmt.Errorf("subscribe notify MessageDeleted: %w", err)
+		}
+		if err := events.MessageMoved.Subscribe(ctx, s.onNotifyMessageMoved, event.AsWorker[MessageMovedEvent]()); err != nil {
+			_ = bus.Close(ctx)
+			return fmt.Errorf("subscribe notify MessageMoved: %w", err)
+		}
+		if err := events.MarkAllRead.Subscribe(ctx, s.onNotifyMarkAllRead, event.AsWorker[MarkAllReadEvent]()); err != nil {
+			_ = bus.Close(ctx)
+			return fmt.Errorf("subscribe notify MarkAllRead: %w", err)
+		}
+	}
+
 	// All setup succeeded - commit to service state.
 	s.eventBus = bus
 	s.events = events
@@ -231,6 +263,13 @@ func (s *service) Close(ctx context.Context) error {
 	} else {
 		s.sendSem.Release(int64(s.opts.maxConcurrentSends))
 		s.logger.Info("all in-flight operations completed")
+	}
+
+	// Close notifier (stops all notification streams).
+	if s.notifier != nil {
+		if err := s.notifier.Close(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("close notifier: %w", err))
+		}
 	}
 
 	// Close plugins first (reverse order of init)
