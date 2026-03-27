@@ -50,6 +50,21 @@ mailbox/
 ├── validation.go       # Input validation
 ├── plugin.go           # Plugin/extension system
 ├── otel.go             # OpenTelemetry integration
+├── notifications.go    # Event-to-notification bridge (AsWorker handlers)
+├── presence/
+│   ├── presence.go     # Tracker interface, Registration, RoutingInfo
+│   ├── memory/
+│   │   └── tracker.go  # In-memory presence tracker (testing)
+│   └── redis/
+│       ├── tracker.go  # Redis hash presence tracker (multi-instance)
+│       └── option.go   # Redis presence options
+├── notify/
+│   ├── notify.go       # Event, Stream, Store, Router interfaces
+│   ├── notifier.go     # Notifier (push, subscribe, local delivery, routing)
+│   ├── stream.go       # Stream with channel delivery + store polling
+│   ├── option.go       # Notifier options
+│   └── memory/
+│       └── store.go    # In-memory notification store (testing)
 ├── store/
 │   ├── store.go        # Store interface (DraftStore + MessageStore + MaintenanceStore)
 │   ├── errors.go       # Store-specific errors
@@ -177,6 +192,47 @@ mailbox.EventMessageDeleted.Subscribe(ctx, handler)
 
 Events are published after successful operations. Event payloads include message ID, user ID, and timestamps.
 
+### Notifications (Real-Time Per-User Streams)
+
+The notification system delivers real-time events to connected users via SSE or similar transports:
+
+- **`presence/`**: Independent module tracking user online/offline status with optional routing info. Redis-backed for multi-instance, memory for testing.
+- **`notify/`**: Per-user notification streams. Uses event bus with `AsWorker` (worker model — one instance processes each event). Persistence via `notify.Store` enables backfill on reconnect.
+- **`notify.Router`**: Optional cross-instance delivery. When presence carries routing info, events are forwarded directly to the instance holding the user's connection.
+
+```go
+// Setup
+tracker := predis.New(redisClient, predis.WithTTL(30*time.Second))
+notifier := notify.NewNotifier(
+    notify.WithStore(notifyStore),
+    notify.WithPresence(tracker),
+    notify.WithRouter(myRouter),       // optional
+    notify.WithInstanceID("web-3"),    // optional
+)
+svc, _ := mailbox.NewService(
+    mailbox.WithStore(store),
+    mailbox.WithNotifier(notifier),
+)
+
+// SSE handler
+reg, _ := tracker.Register(ctx, userID, presence.WithRouting(presence.RoutingInfo{
+    InstanceID: "web-3",
+}))
+defer reg.Unregister(ctx)
+
+stream, _ := svc.Notifications(ctx, userID, lastEventID)
+defer stream.Close()
+
+for {
+    evt, err := stream.Next(r.Context())
+    if err != nil {
+        return
+    }
+    fmt.Fprintf(w, "id: %s\ndata: %s\n\n", evt.ID, evt.Payload)
+    flusher.Flush()
+}
+```
+
 ### Concurrency
 
 **No Distributed Locks Principle:**
@@ -250,6 +306,23 @@ All configuration is done via the functional options pattern.
 | `WithServiceName(string)` | "mailbox" | Service name for telemetry |
 | `WithTracerProvider(trace.TracerProvider)` | global | Custom tracer provider |
 | `WithMeterProvider(metric.MeterProvider)` | global | Custom meter provider |
+
+### Notifications
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithNotifier(*notify.Notifier)` | nil | Per-user notification system |
+
+Notifier options (`notify.NewNotifier(...)`):
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `notify.WithStore(Store)` | nil | Notification persistence for backfill |
+| `notify.WithPresence(Tracker)` | nil | Skip pushes for offline users |
+| `notify.WithRouter(Router)` | nil | Cross-instance event delivery |
+| `notify.WithInstanceID(string)` | "" | This instance's ID for routing |
+| `notify.WithPollInterval(time.Duration)` | 2s | Store poll interval for cross-instance events |
+| `notify.WithBufferSize(int)` | 64 | Channel buffer size for local delivery |
 
 ### Extensions
 

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/rbaliyan/event/v3/transport"
+	"github.com/rbaliyan/mailbox/notify"
 	"github.com/rbaliyan/mailbox/store"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/metric"
@@ -87,6 +88,9 @@ type options struct {
 
 	// Stats cache
 	statsRefreshInterval time.Duration // TTL for cached stats
+
+	// Notifications
+	notifier *notify.Notifier // Per-user notification system (optional)
 
 	// Event handling
 	eventErrorsFatal      bool                    // If true, event publishing failures cause operation to fail
@@ -509,6 +513,20 @@ func WithRedisClient(client redis.UniversalClient) Option {
 	return func(o *options) {
 		if client != nil {
 			o.redisClient = client
+		}
+	}
+}
+
+// --- Notification Options ---
+
+// WithNotifier sets the per-user notification system.
+// When provided, the service subscribes to mailbox events using AsWorker
+// (worker model) and pushes notifications to connected users.
+// Use svc.Notifications(ctx, userID, lastEventID) to open a notification stream.
+func WithNotifier(n *notify.Notifier) Option {
+	return func(o *options) {
+		if n != nil {
+			o.notifier = n
 		}
 	}
 }

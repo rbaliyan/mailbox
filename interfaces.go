@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/rbaliyan/mailbox/notify"
 	"github.com/rbaliyan/mailbox/store"
 )
 
@@ -44,6 +45,12 @@ type Service interface {
 	// Each service has its own events bound to its own event bus, enabling
 	// independent event routing and parallel testing.
 	Events() *ServiceEvents
+
+	// Notifications returns a real-time notification stream for the given user.
+	// Requires WithNotifier to be configured. Returns ErrNotifierNotConfigured otherwise.
+	// lastEventID enables backfill of missed events ("" for new events only).
+	// The caller must close the returned Stream when done.
+	Notifications(ctx context.Context, userID string, lastEventID string) (notify.Stream, error)
 }
 
 // MessageReader provides single message retrieval.
