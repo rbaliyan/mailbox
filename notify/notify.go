@@ -1,21 +1,3 @@
-// Package notify provides per-user notification streams for the mailbox library.
-//
-// Notifications are delivered in real-time to connected users via [Stream] and
-// persisted in a [Store] for backfill on reconnect. The [Notifier] coordinates
-// between the event bus (worker model via AsWorker), presence tracking, and
-// notification storage.
-//
-// Architecture:
-//
-//	Mailbox Event (MessageReceived, etc.)
-//	  → Event Bus (AsWorker — one worker per event)
-//	    → Notifier.Push() checks presence
-//	      → Store.Save() (for backfill on reconnect)
-//	      → Local stream delivery (if user connected to this instance)
-//	      → Router.Route() (if user connected to another instance)
-//
-// Implementations:
-//   - memory: In-memory store for single-instance and testing.
 package notify
 
 import (
@@ -83,9 +65,9 @@ type Router interface {
 // Router implementations back to the presence package.
 type RoutingInfo struct {
 	// InstanceID identifies the target server instance.
-	InstanceID string
+	InstanceID string `json:"instance_id,omitempty"`
 	// Metadata holds arbitrary routing data (e.g., address, port).
-	Metadata map[string]string
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // Store persists notifications per user for backfill on reconnect.

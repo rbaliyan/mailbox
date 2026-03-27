@@ -13,7 +13,7 @@
 //
 // # Routing Information
 //
-// Registrations can carry optional [RoutingInfo] via [WithRouting].
+// Registrations can carry optional routing info via [WithRouting].
 // This enables cross-instance notification delivery without polling:
 //
 //	reg, _ := tracker.Register(ctx, userID, presence.WithRouting(presence.RoutingInfo{
