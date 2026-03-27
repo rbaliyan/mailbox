@@ -17,8 +17,8 @@ var _ notify.Store = (*Store)(nil)
 type Store struct {
 	mu      sync.RWMutex
 	events  map[string][]notify.Event // userID -> events
-	counter int64
-	closed  int32
+	counter atomic.Int64
+	closed  atomic.Bool
 }
 
 // New creates a new in-memory notification store.
@@ -30,11 +30,11 @@ func New() *Store {
 
 // Save persists a notification event in memory.
 func (s *Store) Save(_ context.Context, evt *notify.Event) error {
-	if atomic.LoadInt32(&s.closed) != 0 {
-		return notify.ErrNotifierClosed
+	if s.closed.Load() {
+		return notify.ErrStoreClosed
 	}
 
-	id := atomic.AddInt64(&s.counter, 1)
+	id := s.counter.Add(1)
 	evt.ID = fmt.Sprintf("%d", id)
 
 	s.mu.Lock()
@@ -46,8 +46,8 @@ func (s *Store) Save(_ context.Context, evt *notify.Event) error {
 
 // List returns notifications for a user after the given event ID.
 func (s *Store) List(_ context.Context, userID string, afterID string, limit int) ([]notify.Event, error) {
-	if atomic.LoadInt32(&s.closed) != 0 {
-		return nil, notify.ErrNotifierClosed
+	if s.closed.Load() {
+		return nil, notify.ErrStoreClosed
 	}
 
 	if limit <= 0 {
@@ -89,8 +89,8 @@ func (s *Store) List(_ context.Context, userID string, afterID string, limit int
 
 // Cleanup removes notifications older than the given time.
 func (s *Store) Cleanup(_ context.Context, olderThan time.Time) error {
-	if atomic.LoadInt32(&s.closed) != 0 {
-		return notify.ErrNotifierClosed
+	if s.closed.Load() {
+		return notify.ErrStoreClosed
 	}
 
 	s.mu.Lock()
@@ -114,6 +114,6 @@ func (s *Store) Cleanup(_ context.Context, olderThan time.Time) error {
 
 // Close marks the store as closed.
 func (s *Store) Close(_ context.Context) error {
-	atomic.StoreInt32(&s.closed, 1)
+	s.closed.Store(true)
 	return nil
 }

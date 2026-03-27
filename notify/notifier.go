@@ -20,7 +20,7 @@ import (
 type Notifier struct {
 	opts    *options
 	streams sync.Map // map[string]*userStreams — local per-user stream sets
-	closed  int32
+	closed  atomic.Bool
 }
 
 // userStreams holds the set of active streams for a single user on this instance.
@@ -43,7 +43,7 @@ func NewNotifier(opts ...Option) *Notifier {
 // (if the user is connected to this instance) or via the Router (if the user
 // is connected to another instance).
 func (n *Notifier) Push(ctx context.Context, userID string, evt Event) error {
-	if atomic.LoadInt32(&n.closed) != 0 {
+	if n.closed.Load() {
 		return ErrNotifierClosed
 	}
 
@@ -65,6 +65,12 @@ func (n *Notifier) Push(ctx context.Context, userID string, evt Event) error {
 		if err := n.opts.store.Save(ctx, &evt); err != nil {
 			return err
 		}
+	}
+
+	// If store supports native streaming (e.g., Redis Streams), Save is
+	// the delivery mechanism — subscribers pick up events via XREAD BLOCK.
+	if _, ok := n.opts.store.(StreamStore); ok {
+		return nil
 	}
 
 	// Try local delivery first.
@@ -94,8 +100,13 @@ func (n *Notifier) Deliver(userID string, evt Event) {
 // registration separately (e.g., at the SSE handler level) since presence
 // is an independent module.
 func (n *Notifier) Subscribe(ctx context.Context, userID string, lastEventID string) (Stream, error) {
-	if atomic.LoadInt32(&n.closed) != 0 {
+	if n.closed.Load() {
 		return nil, ErrNotifierClosed
+	}
+
+	// Use native streaming if the store supports it (e.g., Redis Streams).
+	if ss, ok := n.opts.store.(StreamStore); ok {
+		return ss.Subscribe(ctx, userID, lastEventID)
 	}
 
 	streamCtx, cancel := context.WithCancel(context.Background())
@@ -139,7 +150,7 @@ func (n *Notifier) Subscribe(ctx context.Context, userID string, lastEventID str
 
 // Close shuts down the notifier and all active streams.
 func (n *Notifier) Close(_ context.Context) error {
-	if !atomic.CompareAndSwapInt32(&n.closed, 0, 1) {
+	if !n.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 
@@ -150,7 +161,7 @@ func (n *Notifier) Close(_ context.Context) error {
 		us.mu.Lock()
 		for _, s := range us.streams {
 			s.cancel()
-			atomic.StoreInt32(&s.closed, 1)
+			s.closed.Store(true)
 		}
 		us.streams = nil
 		us.mu.Unlock()
@@ -174,7 +185,7 @@ func (n *Notifier) deliverLocal(userID string, evt Event) bool {
 
 	delivered := false
 	for _, s := range us.streams {
-		if atomic.LoadInt32(&s.closed) != 0 {
+		if s.closed.Load() {
 			continue
 		}
 		select {

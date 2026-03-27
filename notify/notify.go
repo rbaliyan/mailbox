@@ -13,6 +13,9 @@ var (
 
 	// ErrNotifierClosed is returned when the notifier has been closed.
 	ErrNotifierClosed = errors.New("notify: notifier closed")
+
+	// ErrStoreClosed is returned when the notification store has been closed.
+	ErrStoreClosed = errors.New("notify: store closed")
 )
 
 // Event is a notification delivered to a user's stream.
@@ -86,4 +89,20 @@ type Store interface {
 
 	// Close releases resources held by the store.
 	Close(ctx context.Context) error
+}
+
+// StreamStore is an optional interface that Store implementations can
+// implement when they support native event streaming. When the notifier's
+// store implements StreamStore, Subscribe delegates to the store's native
+// streaming instead of using channel-based delivery with polling.
+//
+// Redis Streams is the canonical example: XADD persists events and
+// XREAD BLOCK delivers them, collapsing store and stream into a single
+// data structure — no channels, no poll loops, no Router needed.
+type StreamStore interface {
+	Store
+
+	// Subscribe returns a Stream backed by native streaming (e.g., XREAD BLOCK).
+	// If lastEventID is non-empty, missed events are replayed before live delivery.
+	Subscribe(ctx context.Context, userID string, lastEventID string) (Stream, error)
 }

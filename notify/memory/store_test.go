@@ -127,7 +127,7 @@ func TestClosePreventsSave(t *testing.T) {
 	_ = s.Close(ctx)
 
 	err := s.Save(ctx, &notify.Event{UserID: "user1"})
-	if err != notify.ErrNotifierClosed {
-		t.Fatalf("expected ErrNotifierClosed, got %v", err)
+	if err != notify.ErrStoreClosed {
+		t.Fatalf("expected ErrStoreClosed, got %v", err)
 	}
 }
