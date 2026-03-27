@@ -41,6 +41,11 @@ type Service interface {
 	// longer than the configured retention period. Call this periodically
 	// using your application's scheduler.
 	CleanupTrash(ctx context.Context) (*CleanupTrashResult, error)
+	// EnforceQuotas evaluates quotas for the given users and applies enforcement
+	// actions. Only users with QuotaActionDeleteOldest policies are processed;
+	// QuotaActionReject is enforced at delivery time. Call this periodically
+	// using your application's scheduler when using delete-oldest mode.
+	EnforceQuotas(ctx context.Context, userIDs []string) (*EnforceQuotasResult, error)
 	// Events returns per-service event instances for subscribing and publishing.
 	// Each service has its own events bound to its own event bus, enabling
 	// independent event routing and parallel testing.

@@ -92,6 +92,9 @@ type options struct {
 	// Notifications
 	notifier *notify.Notifier // Per-user notification system (optional)
 
+	// Quota
+	quotaProvider QuotaProvider // Optional quota provider for per-user message limits
+
 	// Event handling
 	eventErrorsFatal      bool                    // If true, event publishing failures cause operation to fail
 	eventTransport        transport.Transport     // Event transport (optional, uses noop if nil)
@@ -528,6 +531,27 @@ func WithNotifier(n *notify.Notifier) Option {
 		if n != nil {
 			o.notifier = n
 		}
+	}
+}
+
+// --- Quota Options ---
+
+// WithQuotaProvider sets a custom quota provider for per-user message limits.
+// The provider is consulted during message delivery to check recipient quotas.
+// When nil (default), quotas are disabled and delivery is unrestricted.
+func WithQuotaProvider(p QuotaProvider) Option {
+	return func(o *options) {
+		if p != nil {
+			o.quotaProvider = p
+		}
+	}
+}
+
+// WithGlobalQuota sets a uniform quota policy for all users.
+// This is a convenience wrapper around WithQuotaProvider using a StaticQuotaProvider.
+func WithGlobalQuota(policy QuotaPolicy) Option {
+	return func(o *options) {
+		o.quotaProvider = &StaticQuotaProvider{Policy: policy}
 	}
 }
 
