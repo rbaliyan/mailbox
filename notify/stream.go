@@ -20,7 +20,7 @@ type stream struct {
 	pollInterval time.Duration
 	ctx          context.Context
 	cancel       context.CancelFunc
-	closed       int32
+	closed       atomic.Bool
 
 	mu     sync.Mutex // Protects lastID
 	lastID string
@@ -45,7 +45,7 @@ func (s *stream) Next(ctx context.Context) (Event, error) {
 // Context cancellation terminates Next and pollLoop; the channel is not
 // closed, so concurrent senders never panic.
 func (s *stream) Close() error {
-	if !atomic.CompareAndSwapInt32(&s.closed, 0, 1) {
+	if !s.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 	s.cancel()

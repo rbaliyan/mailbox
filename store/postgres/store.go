@@ -68,10 +68,13 @@ func (s *Store) Connect(ctx context.Context) error {
 		return fmt.Errorf("postgres ping: %w", err)
 	}
 
-	if err := s.ensureSchema(ctx); err != nil {
-		atomic.StoreInt32(&s.connected, 0)
-		return fmt.Errorf("ensure schema: %w", err)
-	}
+	// Create schema and indexes asynchronously — index creation on large
+	// tables can take a long time and should not block service startup.
+	go func() {
+		if err := s.ensureSchema(context.Background()); err != nil {
+			s.logger.Error("failed to ensure schema", "error", err)
+		}
+	}()
 
 	s.logger.Info("connected to PostgreSQL", "table", s.opts.table)
 	return nil

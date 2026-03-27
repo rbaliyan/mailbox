@@ -66,10 +66,13 @@ func (s *Store) Connect(ctx context.Context) error {
 	s.db = s.client.Database(s.opts.database)
 	s.collection = s.db.Collection(s.opts.collection)
 
-	if err := s.ensureIndexes(ctx); err != nil {
-		atomic.StoreInt32(&s.connected, 0)
-		return fmt.Errorf("ensure indexes: %w", err)
-	}
+	// Create indexes asynchronously — index creation on large collections can
+	// take a long time and should not block service startup.
+	go func() {
+		if err := s.ensureIndexes(context.Background()); err != nil {
+			s.logger.Error("failed to ensure indexes", "error", err)
+		}
+	}()
 
 	s.logger.Info("connected to MongoDB", "database", s.opts.database, "collection", s.opts.collection)
 	return nil
