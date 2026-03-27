@@ -103,6 +103,21 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 			break
 		}
 
+		// Check recipient quota (reject mode only — delete-oldest never blocks delivery).
+		if m.service.opts.quotaProvider != nil {
+			policy, pErr := m.service.opts.quotaProvider.GetQuota(ctx, recipientID)
+			if pErr != nil {
+				failedRecipients[recipientID] = fmt.Errorf("check quota: %w", pErr)
+				continue
+			}
+			if policy != nil && policy.ExceedAction == QuotaActionReject {
+				if qErr := m.service.checkQuotaWithPolicy(ctx, recipientID, policy); qErr != nil {
+					failedRecipients[recipientID] = qErr
+					continue
+				}
+			}
+		}
+
 		data := store.MessageData{
 			OwnerID:      recipientID,
 			SenderID:     m.userID,

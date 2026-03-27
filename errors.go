@@ -151,6 +151,10 @@ var (
 	// ErrNotifierNotConfigured is returned when Notifications() is called
 	// without a notifier configured via WithNotifier.
 	ErrNotifierNotConfigured = errors.New("mailbox: notifier not configured")
+
+	// ErrQuotaExceeded is returned when a user's mailbox has reached its message quota.
+	// Use errors.As with *QuotaExceededError to get details (user ID, current count, limit).
+	ErrQuotaExceeded = errors.New("mailbox: quota exceeded")
 )
 
 // PartialDeliveryError provides details about which recipients failed.
@@ -277,6 +281,7 @@ func IsRetryableError(err error) bool {
 		ErrHeaderKeyTooLong,
 		ErrHeaderValueTooLong,
 		ErrHeadersTooLarge,
+		ErrQuotaExceeded,
 	}
 
 	for _, permErr := range permanentErrors {
