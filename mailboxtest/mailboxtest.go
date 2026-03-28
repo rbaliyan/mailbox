@@ -42,7 +42,7 @@ func NewService(t *testing.T, opts ...mailbox.Option) mailbox.Service {
 	if err := svc.Connect(context.Background()); err != nil {
 		t.Fatalf("mailboxtest: connect: %v", err)
 	}
-	t.Cleanup(func() { svc.Close(context.Background()) })
+	t.Cleanup(func() { _ = svc.Close(context.Background()) })
 	return svc
 }
 
@@ -54,7 +54,7 @@ func NewMemoryStore(t *testing.T) *memory.Store {
 	if err := s.Connect(context.Background()); err != nil {
 		t.Fatalf("mailboxtest: connect store: %v", err)
 	}
-	t.Cleanup(func() { s.Close(context.Background()) })
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 	return s
 }
 
@@ -73,7 +73,7 @@ func NewServiceWithStore(t *testing.T, s store.Store, opts ...mailbox.Option) ma
 	if err := svc.Connect(context.Background()); err != nil {
 		t.Fatalf("mailboxtest: connect: %v", err)
 	}
-	t.Cleanup(func() { svc.Close(context.Background()) })
+	t.Cleanup(func() { _ = svc.Close(context.Background()) })
 	return svc
 }
 
