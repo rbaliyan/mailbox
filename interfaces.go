@@ -41,6 +41,11 @@ type Service interface {
 	// longer than the configured retention period. Call this periodically
 	// using your application's scheduler.
 	CleanupTrash(ctx context.Context) (*CleanupTrashResult, error)
+	// CleanupExpiredMessages permanently deletes messages older than the
+	// configured message retention period (based on created_at).
+	// Returns a zero result if message retention is not configured.
+	// Call this periodically using your application's scheduler.
+	CleanupExpiredMessages(ctx context.Context) (*CleanupExpiredMessagesResult, error)
 	// EnforceQuotas evaluates quotas for the given users and applies enforcement
 	// actions. Only users with QuotaActionDeleteOldest policies are processed;
 	// QuotaActionReject is enforced at delivery time. Call this periodically

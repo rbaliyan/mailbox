@@ -50,54 +50,11 @@ func (s *service) CleanupTrash(ctx context.Context) (*CleanupTrashResult, error)
 	result := &CleanupTrashResult{}
 	cutoff := time.Now().UTC().Add(-s.opts.trashRetention)
 
-	// Step 1: Collect message IDs and their attachment IDs from expired trash.
-	// This must happen before deletion so we know which attachment refs to release.
-	// We track per-message attachment IDs so we can verify each message was actually
-	// deleted before releasing its refs (prevents incorrect ref decrements if a
-	// message is restored between the scan and delete steps).
-	messageAttachments := make(map[string][]string) // messageID -> []attachmentID
 	if s.attachments != nil {
-		updatedBeforeFilter, err := store.MessageFilter("UpdatedAt").LessThan(cutoff)
-		if err != nil {
-			return result, fmt.Errorf("create trash filter: %w", err)
-		}
-		filters := []store.Filter{
-			store.InFolder(store.FolderTrash),
-			updatedBeforeFilter,
-		}
-
-		const scanBatchSize = 100
-		var cursor string
-		for {
-			if ctx.Err() != nil {
-				result.Interrupted = true
-				return result, ctx.Err()
-			}
-
-			opts := store.ListOptions{Limit: scanBatchSize, StartAfter: cursor}
-			list, err := s.store.Find(ctx, filters, opts)
-			if err != nil {
-				return result, fmt.Errorf("find expired trash: %w", err)
-			}
-
-			for _, msg := range list.Messages {
-				var ids []string
-				for _, a := range msg.GetAttachments() {
-					ids = append(ids, a.GetID())
-				}
-				if len(ids) > 0 {
-					messageAttachments[msg.GetID()] = ids
-				}
-			}
-
-			if !list.HasMore || len(list.Messages) == 0 {
-				break
-			}
-			cursor = list.Messages[len(list.Messages)-1].GetID()
-		}
+		return s.cleanupTrashWithAttachments(ctx, result, cutoff)
 	}
 
-	// Step 2: Bulk delete all expired trash messages atomically.
+	// Fast path: no attachments, bulk delete by cutoff.
 	deleted, err := s.store.DeleteExpiredTrash(ctx, cutoff)
 	if err != nil {
 		return result, fmt.Errorf("delete expired trash: %w", err)
@@ -107,35 +64,185 @@ func (s *service) CleanupTrash(ctx context.Context) (*CleanupTrashResult, error)
 		s.logger.Debug("deleted expired trash messages", "count", deleted)
 	}
 
-	// Step 3: Release attachment references only for messages confirmed deleted.
-	// A message may have been restored between step 1 and step 2. Verify each
-	// message no longer exists before releasing its attachment refs to prevent
-	// incorrect ref decrements that could cause premature attachment deletion.
-	//
-	// TOCTOU note: There is a small window between Get-check and RemoveRef where
-	// a message could theoretically be re-created with the same attachments, leading
-	// to a double-decrement. In practice this is extremely unlikely (requires exact
-	// same message ID reuse) and the worst case is an orphaned attachment file that
-	// gets cleaned up in the next cycle. True atomic "delete message + release refs"
-	// would require a store-level transaction spanning both stores.
-	if s.attachments != nil {
-		for msgID, attIDs := range messageAttachments {
-			// Verify message was actually deleted (not restored between scan and delete).
-			if _, getErr := s.store.Get(ctx, msgID); getErr == nil {
-				// Message still exists (was restored) - skip releasing its refs.
-				s.logger.Debug("skipping attachment ref release for restored message",
-					"message_id", msgID)
-				continue
-			}
+	return result, nil
+}
 
-			for _, attachmentID := range attIDs {
-				if err := s.attachments.RemoveRef(ctx, attachmentID); err != nil {
-					s.logger.Warn("failed to release attachment ref during cleanup",
-						"error", err, "attachment_id", attachmentID, "message_id", msgID)
-				}
-			}
-		}
+// cleanupTrashWithAttachments handles trash cleanup when attachments are configured.
+// It scans expired messages to collect attachment refs, then uses DeleteMessagesByIDs
+// to atomically determine which messages this instance deleted. Only the winning
+// instance releases attachment refs, preventing double-decrements in multi-instance
+// deployments.
+func (s *service) cleanupTrashWithAttachments(ctx context.Context, result *CleanupTrashResult, cutoff time.Time) (*CleanupTrashResult, error) {
+	// Step 1: Scan expired trash messages and collect their attachment IDs.
+	messageAttachments, scannedIDs, err := s.scanExpiredMessages(ctx, result, []store.Filter{
+		store.InFolder(store.FolderTrash),
+	}, "UpdatedAt", cutoff)
+	if err != nil {
+		return result, err
+	}
+
+	// Step 2: Delete only the scanned messages by ID. The store returns which IDs
+	// this instance actually deleted (the "winners"). This prevents both:
+	// - Deleting messages we didn't scan (no leaked attachment refs)
+	// - Double-decrementing refs in multi-instance deployments
+	deletedIDs, err := s.store.DeleteMessagesByIDs(ctx, scannedIDs)
+	if err != nil {
+		return result, fmt.Errorf("delete expired trash by IDs: %w", err)
+	}
+	result.DeletedCount = len(deletedIDs)
+	if len(deletedIDs) > 0 {
+		s.logger.Debug("deleted expired trash messages", "count", len(deletedIDs))
+	}
+
+	// Step 3: Release attachment refs only for messages this instance deleted.
+	s.releaseAttachmentRefs(ctx, deletedIDs, messageAttachments)
+
+	return result, nil
+}
+
+// CleanupExpiredMessagesResult contains the result of a message retention cleanup.
+type CleanupExpiredMessagesResult struct {
+	// DeletedCount is the number of messages permanently deleted.
+	DeletedCount int
+	// Interrupted indicates if the cleanup was interrupted (e.g., context cancelled).
+	Interrupted bool
+}
+
+// CleanupExpiredMessages permanently deletes messages older than the configured
+// message retention period (based on created_at). Returns a zero result if
+// message retention is not configured (WithMessageRetention was not called).
+//
+// This method should be called periodically by the application using its own
+// scheduler. The library does not automatically run cleanup.
+func (s *service) CleanupExpiredMessages(ctx context.Context) (*CleanupExpiredMessagesResult, error) {
+	if atomic.LoadInt32(&s.state) != stateConnected {
+		return nil, ErrNotConnected
+	}
+
+	result := &CleanupExpiredMessagesResult{}
+
+	// Feature disabled when retention is zero.
+	if s.opts.messageRetention == 0 {
+		return result, nil
+	}
+
+	cutoff := time.Now().UTC().Add(-s.opts.messageRetention)
+
+	if s.attachments != nil {
+		return s.cleanupExpiredWithAttachments(ctx, result, cutoff)
+	}
+
+	// Fast path: no attachments, bulk delete by cutoff.
+	deleted, err := s.store.DeleteExpiredMessages(ctx, cutoff)
+	if err != nil {
+		return result, fmt.Errorf("delete expired messages: %w", err)
+	}
+	result.DeletedCount = int(deleted)
+	if deleted > 0 {
+		s.logger.Debug("deleted expired messages", "count", deleted)
 	}
 
 	return result, nil
+}
+
+// cleanupExpiredWithAttachments handles message retention cleanup when attachments
+// are configured. Same safe pattern as cleanupTrashWithAttachments.
+func (s *service) cleanupExpiredWithAttachments(ctx context.Context, result *CleanupExpiredMessagesResult, cutoff time.Time) (*CleanupExpiredMessagesResult, error) {
+	// Step 1: Scan expired messages and collect their attachment IDs.
+	messageAttachments, scannedIDs, err := s.scanExpiredMessages(ctx, result, []store.Filter{
+		store.IsDraftFilter(false),
+	}, "CreatedAt", cutoff)
+	if err != nil {
+		return result, err
+	}
+
+	// Step 2: Delete only the scanned messages by ID.
+	deletedIDs, err := s.store.DeleteMessagesByIDs(ctx, scannedIDs)
+	if err != nil {
+		return result, fmt.Errorf("delete expired messages by IDs: %w", err)
+	}
+	result.DeletedCount = len(deletedIDs)
+	if len(deletedIDs) > 0 {
+		s.logger.Debug("deleted expired messages", "count", len(deletedIDs))
+	}
+
+	// Step 3: Release attachment refs only for messages this instance deleted.
+	s.releaseAttachmentRefs(ctx, deletedIDs, messageAttachments)
+
+	return result, nil
+}
+
+// interruptible is implemented by result types that track interruption.
+type interruptible interface {
+	setInterrupted()
+}
+
+func (r *CleanupTrashResult) setInterrupted()           { r.Interrupted = true }
+func (r *CleanupExpiredMessagesResult) setInterrupted()  { r.Interrupted = true }
+
+// scanExpiredMessages scans messages matching the given filters and time cutoff,
+// collecting all message IDs and their attachment IDs. Returns the attachment map
+// and the list of all scanned message IDs.
+func (s *service) scanExpiredMessages(ctx context.Context, result interruptible, baseFilters []store.Filter, timeField string, cutoff time.Time) (map[string][]string, []string, error) {
+	timeFilter, err := store.MessageFilter(timeField).LessThan(cutoff)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create time filter: %w", err)
+	}
+	filters := make([]store.Filter, len(baseFilters)+1)
+	copy(filters, baseFilters)
+	filters[len(baseFilters)] = timeFilter
+
+	messageAttachments := make(map[string][]string)
+	var scannedIDs []string
+
+	const scanBatchSize = 100
+	var cursor string
+	for {
+		if ctx.Err() != nil {
+			result.setInterrupted()
+			return messageAttachments, scannedIDs, ctx.Err()
+		}
+
+		opts := store.ListOptions{Limit: scanBatchSize, StartAfter: cursor}
+		list, err := s.store.Find(ctx, filters, opts)
+		if err != nil {
+			return messageAttachments, scannedIDs, fmt.Errorf("find expired messages: %w", err)
+		}
+
+		for _, msg := range list.Messages {
+			scannedIDs = append(scannedIDs, msg.GetID())
+			var ids []string
+			for _, a := range msg.GetAttachments() {
+				ids = append(ids, a.GetID())
+			}
+			if len(ids) > 0 {
+				messageAttachments[msg.GetID()] = ids
+			}
+		}
+
+		if !list.HasMore || len(list.Messages) == 0 {
+			break
+		}
+		cursor = list.Messages[len(list.Messages)-1].GetID()
+	}
+
+	return messageAttachments, scannedIDs, nil
+}
+
+// releaseAttachmentRefs releases attachment references for messages that were
+// confirmed deleted by this instance. Only call this with IDs returned by
+// DeleteMessagesByIDs to prevent double-decrements across instances.
+func (s *service) releaseAttachmentRefs(ctx context.Context, deletedIDs []string, messageAttachments map[string][]string) {
+	for _, msgID := range deletedIDs {
+		attIDs, ok := messageAttachments[msgID]
+		if !ok {
+			continue
+		}
+		for _, attachmentID := range attIDs {
+			if err := s.attachments.RemoveRef(ctx, attachmentID); err != nil {
+				s.logger.Warn("failed to release attachment ref during cleanup",
+					"error", err, "attachment_id", attachmentID, "message_id", msgID)
+			}
+		}
+	}
 }

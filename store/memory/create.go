@@ -179,3 +179,48 @@ func (s *Store) DeleteExpiredTrash(ctx context.Context, cutoff time.Time) (int64
 
 	return deleted, nil
 }
+
+// DeleteExpiredMessages atomically deletes all non-draft messages older than cutoff.
+func (s *Store) DeleteExpiredMessages(ctx context.Context, cutoff time.Time) (int64, error) {
+	if err := s.checkConnected(); err != nil {
+		return 0, err
+	}
+
+	var deleted int64
+	var toDelete []string
+
+	s.messages.Range(func(key, value any) bool {
+		m := value.(*message)
+		if !m.isDraft && m.createdAt.Before(cutoff) {
+			toDelete = append(toDelete, key.(string))
+		}
+		return true
+	})
+
+	for _, id := range toDelete {
+		if _, loaded := s.messages.LoadAndDelete(id); loaded {
+			deleted++
+		}
+	}
+
+	return deleted, nil
+}
+
+// DeleteMessagesByIDs deletes the specified messages and returns the IDs
+// that were actually deleted by this call. Uses LoadAndDelete for atomic
+// winner determination — only the goroutine that successfully removes the
+// entry sees loaded=true.
+func (s *Store) DeleteMessagesByIDs(ctx context.Context, ids []string) ([]string, error) {
+	if err := s.checkConnected(); err != nil {
+		return nil, err
+	}
+
+	deleted := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, loaded := s.messages.LoadAndDelete(id); loaded {
+			deleted = append(deleted, id)
+		}
+	}
+
+	return deleted, nil
+}

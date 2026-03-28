@@ -14,8 +14,10 @@ import (
 
 // Default configuration values.
 const (
-	DefaultTrashRetention  = 30 * 24 * time.Hour // 30 days
-	MinTrashRetention      = 24 * time.Hour      // 1 day minimum
+	DefaultTrashRetention    = 30 * 24 * time.Hour // 30 days
+	MinTrashRetention        = 24 * time.Hour      // 1 day minimum
+	DefaultMessageRetention  time.Duration = 0       // disabled by default
+	MinMessageRetention                   = 24 * time.Hour // 1 day minimum when enabled
 	DefaultShutdownTimeout = 30 * time.Second    // default graceful shutdown timeout
 	MinShutdownTimeout     = 1 * time.Second     // minimum shutdown timeout
 
@@ -55,6 +57,9 @@ type options struct {
 
 	// Trash cleanup configuration (for manual cleanup via CleanupTrash method)
 	trashRetention time.Duration
+
+	// Global message retention (for manual cleanup via CleanupExpiredMessages method)
+	messageRetention time.Duration
 
 	// Message limits
 	maxSubjectLength     int
@@ -128,7 +133,8 @@ func (o *options) safeEventPublishFailure(eventName string, err error) {
 func newOptions(opts ...Option) *options {
 	o := &options{
 		logger:         slog.Default(),
-		trashRetention: DefaultTrashRetention,
+		trashRetention:   DefaultTrashRetention,
+		messageRetention: DefaultMessageRetention,
 		// Message limits defaults
 		maxSubjectLength:   DefaultMaxSubjectLength,
 		maxBodySize:        DefaultMaxBodySize,
@@ -236,6 +242,17 @@ func WithTrashRetention(d time.Duration) Option {
 	return func(o *options) {
 		if d >= MinTrashRetention {
 			o.trashRetention = d
+		}
+	}
+}
+
+// WithMessageRetention sets the global message TTL based on creation time.
+// Messages older than this duration are permanently deleted by CleanupExpiredMessages.
+// Default is 0 (disabled). Minimum is 1 day when enabled.
+func WithMessageRetention(d time.Duration) Option {
+	return func(o *options) {
+		if d >= MinMessageRetention {
+			o.messageRetention = d
 		}
 	}
 }

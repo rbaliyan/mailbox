@@ -306,4 +306,22 @@ type MaintenanceStore interface {
 	//
 	// Returns the number of messages deleted and any error encountered.
 	DeleteExpiredTrash(ctx context.Context, cutoff time.Time) (int64, error)
+
+	// DeleteExpiredMessages atomically deletes all non-draft messages
+	// whose created_at is older than cutoff, regardless of folder.
+	//
+	// This operation is safe to call concurrently from multiple instances.
+	// The database handles atomicity.
+	//
+	// Returns the number of messages deleted and any error encountered.
+	DeleteExpiredMessages(ctx context.Context, cutoff time.Time) (int64, error)
+
+	// DeleteMessagesByIDs deletes the specified messages and returns the IDs
+	// that were actually deleted. In a multi-instance environment, only the
+	// instance that wins the delete for each message will see that ID in the
+	// returned slice. This enables safe attachment ref release: only the winner
+	// releases refs, preventing double-decrements.
+	//
+	// Messages that do not exist or were already deleted are silently skipped.
+	DeleteMessagesByIDs(ctx context.Context, ids []string) ([]string, error)
 }

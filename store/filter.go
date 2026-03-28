@@ -159,6 +159,8 @@ func MessageFieldKey(field string) (string, bool) {
 		return "thread_id", true
 	case "ReplyToID", "reply_to_id":
 		return "reply_to_id", true
+	case "IsDraft", "is_draft":
+		return "is_draft", true
 	default:
 		return "", false
 	}
@@ -248,6 +250,12 @@ func ThreadIs(threadID string) Filter {
 // ReplyToIs returns a filter for messages that are replies to a specific message.
 func ReplyToIs(messageID string) Filter {
 	f, _ := MessageFilter("ReplyToID").Equal(messageID)
+	return f
+}
+
+// IsDraftFilter returns a filter for draft/non-draft messages.
+func IsDraftFilter(isDraft bool) Filter {
+	f, _ := MessageFilter("IsDraft").Equal(isDraft)
 	return f
 }
 

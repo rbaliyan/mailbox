@@ -54,6 +54,8 @@ func matchesFilter(m *message, f store.Filter) bool {
 		fieldValue = m.createdAt
 	case "updated_at":
 		fieldValue = m.updatedAt
+	case "is_draft":
+		fieldValue = m.isDraft
 	default:
 		return true // Unknown field, skip filter
 	}
@@ -193,6 +195,39 @@ func hasAllTags(m *message, tags []string) bool {
 		}
 	}
 	return true
+}
+
+// AgeMessages shifts createdAt and updatedAt backward by the given duration
+// for all non-draft messages in the store. This is intended for testing
+// time-dependent cleanup operations like message retention and trash expiry.
+//
+// This method is NOT safe for concurrent use. Call it only when no other
+// goroutines are reading or writing messages (e.g., between test setup and
+// the operation under test).
+func (s *Store) AgeMessages(d time.Duration) {
+	s.messages.Range(func(key, value any) bool {
+		m := value.(*message)
+		if !m.isDraft {
+			m.createdAt = m.createdAt.Add(-d)
+			m.updatedAt = m.updatedAt.Add(-d)
+		}
+		return true
+	})
+}
+
+// AgeMessagesByID shifts createdAt and updatedAt backward by the given duration
+// for the specified message IDs. This is intended for testing time-dependent
+// cleanup operations where only specific messages should be aged.
+//
+// This method is NOT safe for concurrent use. See AgeMessages for details.
+func (s *Store) AgeMessagesByID(d time.Duration, ids ...string) {
+	for _, id := range ids {
+		if v, ok := s.messages.Load(id); ok {
+			m := v.(*message)
+			m.createdAt = m.createdAt.Add(-d)
+			m.updatedAt = m.updatedAt.Add(-d)
+		}
+	}
 }
 
 func sortMessages(msgs []*message, sortBy string, order store.SortOrder) {

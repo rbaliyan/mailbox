@@ -275,3 +275,71 @@ func (s *Store) DeleteExpiredTrash(ctx context.Context, cutoff time.Time) (int64
 
 	return count, nil
 }
+
+// DeleteExpiredMessages atomically deletes all non-draft messages older than cutoff.
+func (s *Store) DeleteExpiredMessages(ctx context.Context, cutoff time.Time) (int64, error) {
+	if err := s.checkConnected(); err != nil {
+		return 0, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	query := fmt.Sprintf(`
+		DELETE FROM %s
+		WHERE is_draft = false AND created_at < $1
+	`, s.opts.table)
+
+	result, err := s.db.ExecContext(ctx, query, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired messages: %w", err)
+	}
+
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+
+	return count, nil
+}
+
+// DeleteMessagesByIDs deletes the specified messages and returns the IDs
+// that were actually deleted by this call. Uses DELETE ... RETURNING id
+// for atomic winner determination in multi-instance environments.
+func (s *Store) DeleteMessagesByIDs(ctx context.Context, ids []string) ([]string, error) {
+	if err := s.checkConnected(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	query := fmt.Sprintf(`
+		DELETE FROM %s
+		WHERE id = ANY($1)
+		RETURNING id
+	`, s.opts.table)
+
+	rows, err := s.db.QueryContext(ctx, query, pq.Array(ids))
+	if err != nil {
+		return nil, fmt.Errorf("delete messages by IDs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var deleted []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return deleted, fmt.Errorf("scan deleted ID: %w", err)
+		}
+		deleted = append(deleted, id)
+	}
+	if err := rows.Err(); err != nil {
+		return deleted, fmt.Errorf("iterate deleted IDs: %w", err)
+	}
+
+	return deleted, nil
+}
