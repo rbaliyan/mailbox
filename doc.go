@@ -73,6 +73,9 @@
 //
 // Available events:
 //   - MessageSent - when a message is sent
+//   - MessageReceived - when a message is delivered to a recipient
 //   - MessageRead - when a message is marked as read
 //   - MessageDeleted - when a message is permanently deleted
+//   - MessageMoved - when a message is moved between folders
+//   - MarkAllRead - when all messages in a folder are marked as read
 package mailbox

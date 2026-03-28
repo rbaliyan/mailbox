@@ -278,14 +278,13 @@ Draft bulk operations:
 drafts, _ := mb.Drafts(ctx, store.ListOptions{})
 
 // Send all drafts
-sendResult, _ := drafts.SendAll(ctx)
-fmt.Printf("Sent %d messages\n", sendResult.SuccessCount)
-for id, err := range sendResult.Failed {
-    log.Printf("Failed to send %s: %v", id, err)
+sendResult, _ := drafts.Send(ctx)
+for _, msg := range sendResult.SentMessages() {
+    log.Printf("Sent: %s", msg.GetID())
 }
 
 // Delete all drafts
-result, _ := drafts.DeleteAll(ctx)
+result, _ := drafts.Delete(ctx)
 ```
 
 ## Graceful Shutdown
@@ -332,19 +331,18 @@ if err != nil {
 | Method | Description |
 |--------|-------------|
 | `Compose()` | Create a new draft message (returns Draft, error) |
+| `SendMessage(ctx, req)` | Send a message directly without drafts |
 | `Get(ctx, id)` | Get a message by ID |
-| `Inbox(ctx, opts)` | List inbox messages |
-| `Sent(ctx, opts)` | List sent messages |
-| `Archived(ctx, opts)` | List archived messages |
-| `Trash(ctx, opts)` | List trashed messages |
+| `Folder(ctx, folderID, opts)` | List messages in any folder |
 | `Drafts(ctx, opts)` | List draft messages |
-| `Folder(ctx, folderID, opts)` | List messages in folder |
 | `Search(ctx, query)` | Full-text search |
+| `Stream(ctx, filters, opts)` | Iterator-based streaming with filters |
 | `GetThread(ctx, threadID, opts)` | Get thread messages |
 | `GetReplies(ctx, messageID, opts)` | Get message replies |
 | `ListFolders(ctx)` | List all folders with counts |
+| `Stats(ctx)` | Aggregate statistics (total, unread, per-folder) |
+| `UnreadCount(ctx)` | Unread message count |
 | `LoadAttachment(ctx, msgID, attID)` | Download attachment |
-| `ResolveRecipients(ctx, userIDs)` | Resolve recipient info |
 
 ### Message Operations
 

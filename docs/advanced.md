@@ -15,8 +15,8 @@ svc, _ := mailbox.NewService(mailbox.WithStore(cachedStore))
 For cross-deployment synchronization, subscribe to [events](events.md):
 
 ```go
-// Subscribe to events for real-time updates
-mailbox.EventMessageSent.Subscribe(ctx, func(ctx context.Context, ev event.Event[mailbox.MessageSentEvent], data mailbox.MessageSentEvent) error {
+// Subscribe to per-service events for real-time updates
+svc.Events().MessageSent.Subscribe(ctx, func(ctx context.Context, _ event.Event[mailbox.MessageSentEvent], data mailbox.MessageSentEvent) error {
     // Handle new message notification across all deployments
     return nil
 })
@@ -41,8 +41,9 @@ func (p *SpamFilter) BeforeSend(ctx context.Context, userID string, draft store.
     return nil
 }
 
-func (p *SpamFilter) AfterSend(ctx context.Context, userID string, msg store.Message) {
+func (p *SpamFilter) AfterSend(ctx context.Context, userID string, msg store.Message) error {
     log.Printf("Message %s sent by %s", msg.GetID(), userID)
+    return nil
 }
 
 // Register the plugin

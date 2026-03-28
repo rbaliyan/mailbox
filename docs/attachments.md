@@ -21,7 +21,7 @@ attachmentStore := s3store.New(s3Client,
 
 svc, _ := mailbox.NewService(
     mailbox.WithStore(store),
-    mailbox.WithAttachmentStore(attachmentStore),
+    mailbox.WithAttachmentManager(attachmentManager),
 )
 ```
 
