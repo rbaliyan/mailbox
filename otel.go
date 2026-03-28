@@ -82,6 +82,7 @@ type otelInstrumentation struct {
 	update         operationMetrics
 	del            operationMetrics
 	move           operationMetrics
+	notify         operationMetrics
 }
 
 // newOtelInstrumentation creates new OTel instrumentation from options.
@@ -136,6 +137,7 @@ func (o *otelInstrumentation) initMetrics(mp metric.MeterProvider) error {
 		{&o.update, "update", "update operations"},
 		{&o.del, "delete", "delete operations"},
 		{&o.move, "move", "move operations"},
+		{&o.notify, "notify", "notification push operations"},
 	} {
 		*entry.target, err = newOperationMetrics(meter, entry.name, entry.desc)
 		if err != nil {
@@ -233,5 +235,16 @@ func (o *otelInstrumentation) recordMove(ctx context.Context, duration time.Dura
 	}
 	o.move.record(ctx, duration, err,
 		attribute.String("to_folder", toFolder),
+	)
+}
+
+// recordNotify records notification push metrics.
+func (o *otelInstrumentation) recordNotify(ctx context.Context, duration time.Duration, eventType string, recipientCount int, err error) {
+	if !o.metricsEnabled {
+		return
+	}
+	o.notify.record(ctx, duration, err,
+		attribute.String("event_type", eventType),
+		attribute.Int("recipient_count", recipientCount),
 	)
 }

@@ -249,6 +249,23 @@ func (s *Store) CreateMessageIdempotent(ctx context.Context, data store.MessageD
 	}, true, nil
 }
 
+// CreateMessagesIdempotent creates multiple messages with idempotency keys.
+func (s *Store) CreateMessagesIdempotent(ctx context.Context, entries []store.IdempotentCreateEntry) ([]store.IdempotentCreateResult, error) {
+	if err := s.checkConnected(); err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	results := make([]store.IdempotentCreateResult, len(entries))
+	for i, entry := range entries {
+		msg, created, err := s.CreateMessageIdempotent(ctx, entry.Data, entry.IdempotencyKey)
+		results[i] = store.IdempotentCreateResult{Message: msg, Created: created, Err: err}
+	}
+	return results, nil
+}
+
 // DeleteExpiredTrash atomically deletes all messages in trash older than cutoff.
 func (s *Store) DeleteExpiredTrash(ctx context.Context, cutoff time.Time) (int64, error) {
 	if err := s.checkConnected(); err != nil {

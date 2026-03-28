@@ -213,6 +213,19 @@ type MessageStoreCreator interface {
 	//   - (nil, false, error): Operation failed
 	CreateMessageIdempotent(ctx context.Context, data MessageData, idempotencyKey string) (Message, bool, error)
 
+	// CreateMessagesIdempotent creates multiple messages with idempotency keys.
+	//
+	// Each entry pairs a MessageData with an idempotency key. Messages whose
+	// (ownerID, idempotencyKey) already exist are returned as-is (created=false).
+	// New messages are inserted (created=true).
+	//
+	// Unlike CreateMessages, this is NOT necessarily atomic across the batch —
+	// some may succeed while others find existing entries. This matches the
+	// semantics needed for multi-recipient delivery with retry support.
+	//
+	// Returns a result per input entry in the same order.
+	CreateMessagesIdempotent(ctx context.Context, entries []IdempotentCreateEntry) ([]IdempotentCreateResult, error)
+
 	// CreateMessages creates multiple messages atomically in a single transaction.
 	//
 	// This operation MUST be atomic - either all messages are created or none are.
