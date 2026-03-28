@@ -260,3 +260,59 @@ func (s *Store) DeleteExpiredTrash(ctx context.Context, cutoff time.Time) (int64
 
 	return result.DeletedCount, nil
 }
+
+// DeleteMessagesByIDs deletes the specified messages and returns the IDs
+// that were actually deleted by this call. Uses FindOneAndDelete per message
+// for atomic winner determination in multi-instance environments.
+func (s *Store) DeleteMessagesByIDs(ctx context.Context, ids []string) ([]string, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return nil, store.ErrNotConnected
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	deleted := make([]string, 0, len(ids))
+	for _, id := range ids {
+		oid, err := bson.ObjectIDFromHex(id)
+		if err != nil {
+			continue
+		}
+		var doc bson.M
+		err = s.collection.FindOneAndDelete(ctx, bson.M{"_id": oid}).Decode(&doc)
+		if err != nil {
+			if errors.Is(err, mongo.ErrNoDocuments) {
+				continue
+			}
+			return deleted, fmt.Errorf("delete message %s: %w", id, err)
+		}
+		deleted = append(deleted, id)
+	}
+
+	return deleted, nil
+}
+
+// DeleteExpiredMessages atomically deletes all non-draft messages older than cutoff.
+func (s *Store) DeleteExpiredMessages(ctx context.Context, cutoff time.Time) (int64, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return 0, store.ErrNotConnected
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	filter := bson.M{
+		"__is_draft": bson.M{"$ne": true},
+		"created_at": bson.M{"$lt": cutoff},
+	}
+
+	result, err := s.collection.DeleteMany(ctx, filter)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired messages: %w", err)
+	}
+
+	return result.DeletedCount, nil
+}

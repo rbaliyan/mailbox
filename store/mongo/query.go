@@ -305,10 +305,14 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 
 // mapKey translates shared filter keys to MongoDB field names.
 func mapKey(key string) string {
-	if key == "id" {
+	switch key {
+	case "id":
 		return "_id"
+	case "is_draft":
+		return "__is_draft"
+	default:
+		return key
 	}
-	return key
 }
 
 // buildFilter converts a slice of store.Filter to a MongoDB filter document.
