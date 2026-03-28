@@ -327,7 +327,7 @@ func (s *Store) DeleteMessagesByIDs(ctx context.Context, ids []string) ([]string
 	if err != nil {
 		return nil, fmt.Errorf("delete messages by IDs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var deleted []string
 	for rows.Next() {
