@@ -86,24 +86,15 @@ func deduplicateRecipients(recipientIDs []string) []string {
 // Returns lists of successful and failed recipients.
 func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.DraftMessage, threadID, replyToID, senderMsgID string) ([]string, map[string]error) {
 	// Recipients are already deduplicated in sendDraft before validation.
-	// Use sender message ID as idempotency base.
-	// This ensures retries after partial delivery don't create duplicates,
-	// while allowing multiple sends with the same content to create separate messages.
 	idempotencyBase := senderMsgID
 
 	var deliveredTo []string
 	failedRecipients := make(map[string]error)
+	recipientIDs := draft.GetRecipientIDs()
 
-	// Create message for each recipient with idempotency
-	for i, recipientID := range draft.GetRecipientIDs() {
-		if err := ctx.Err(); err != nil {
-			for _, remaining := range draft.GetRecipientIDs()[i:] {
-				failedRecipients[remaining] = err
-			}
-			break
-		}
-
-		// Check recipient quota (reject mode only — delete-oldest never blocks delivery).
+	// Phase 1: Check quotas and collect eligible recipients.
+	var eligible []string
+	for _, recipientID := range recipientIDs {
 		if m.service.opts.quotaProvider != nil {
 			policy, pErr := m.service.opts.quotaProvider.GetQuota(ctx, recipientID)
 			if pErr != nil {
@@ -117,42 +108,61 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 				}
 			}
 		}
+		eligible = append(eligible, recipientID)
+	}
 
-		data := store.MessageData{
-			OwnerID:      recipientID,
-			SenderID:     m.userID,
-			RecipientIDs: draft.GetRecipientIDs(), // Keep original list for display
-			Subject:      draft.GetSubject(),
-			Body:         draft.GetBody(),
-			Headers:      draft.GetHeaders(),
-			Metadata:     draft.GetMetadata(),
-			Status:       store.MessageStatusDelivered,
-			FolderID:     store.FolderInbox,
-			Attachments:  draft.GetAttachments(),
-			ThreadID:     threadID,
-			ReplyToID:    replyToID,
+	if len(eligible) == 0 {
+		return deliveredTo, failedRecipients
+	}
+
+	// Phase 2: Batch create messages for all eligible recipients.
+	entries := make([]store.IdempotentCreateEntry, len(eligible))
+	for i, recipientID := range eligible {
+		entries[i] = store.IdempotentCreateEntry{
+			Data: store.MessageData{
+				OwnerID:      recipientID,
+				SenderID:     m.userID,
+				RecipientIDs: recipientIDs,
+				Subject:      draft.GetSubject(),
+				Body:         draft.GetBody(),
+				Headers:      draft.GetHeaders(),
+				Metadata:     draft.GetMetadata(),
+				Status:       store.MessageStatusDelivered,
+				FolderID:     store.FolderInbox,
+				Attachments:  draft.GetAttachments(),
+				ThreadID:     threadID,
+				ReplyToID:    replyToID,
+			},
+			IdempotencyKey: fmt.Sprintf("%s:%s", idempotencyBase, recipientID),
 		}
+	}
 
-		// Use idempotent create to handle retries after partial delivery
-		idempotencyKey := fmt.Sprintf("%s:%s", idempotencyBase, recipientID)
-		recipientCopy, created, err := m.service.store.CreateMessageIdempotent(ctx, data, idempotencyKey)
-		if err != nil {
+	results, err := m.service.store.CreateMessagesIdempotent(ctx, entries)
+	if err != nil {
+		// Total batch failure — all recipients fail.
+		for _, recipientID := range eligible {
 			failedRecipients[recipientID] = fmt.Errorf("create message: %w", err)
+		}
+		return deliveredTo, failedRecipients
+	}
+
+	// Phase 3: Process results — attachment refs and events.
+	for i, recipientID := range eligible {
+		result := results[i]
+		if result.Err != nil {
+			failedRecipients[recipientID] = fmt.Errorf("create message: %w", result.Err)
 			continue
 		}
 
-		// Only add attachment refs for newly created messages
-		if created {
-			if refErr := m.addAttachmentRefs(ctx, recipientCopy); refErr != nil {
-				// Attachment ref failure means the message won't be fully functional.
-				// Release any partial refs, then delete the message to maintain consistency.
-				if releaseErr := m.releaseAttachmentRefs(ctx, recipientCopy); releaseErr != nil {
+		if result.Created {
+			if refErr := m.addAttachmentRefs(ctx, result.Message); refErr != nil {
+				if releaseErr := m.releaseAttachmentRefs(ctx, result.Message); releaseErr != nil {
 					m.service.logger.Error("failed to release partial attachment refs during rollback",
-						"error", releaseErr, "message_id", recipientCopy.GetID(), "recipient", recipientID)
+						"error", releaseErr, "message_id", result.Message.GetID(), "recipient", recipientID)
 				}
-				if deleteErr := m.service.store.HardDelete(ctx, recipientCopy.GetID()); deleteErr != nil {
+				if deleteErr := m.service.store.HardDelete(ctx, result.Message.GetID()); deleteErr != nil {
 					m.service.logger.Error("failed to rollback recipient message after attachment ref failure",
-						"error", deleteErr, "message_id", recipientCopy.GetID(), "recipient", recipientID)
+						"error", deleteErr, "message_id", result.Message.GetID(), "recipient", recipientID)
 				}
 				failedRecipients[recipientID] = fmt.Errorf("add attachment refs: %w", refErr)
 				continue
@@ -161,9 +171,8 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 
 		deliveredTo = append(deliveredTo, recipientID)
 
-		// Publish per-recipient received event (best-effort, don't fail delivery)
-		if pubErr := m.service.events.MessageReceived.Publish(ctxWithMessageID(ctx, recipientCopy.GetID()), MessageReceivedEvent{
-			MessageID:   recipientCopy.GetID(),
+		if pubErr := m.service.events.MessageReceived.Publish(ctxWithMessageID(ctx, result.Message.GetID()), MessageReceivedEvent{
+			MessageID:   result.Message.GetID(),
 			RecipientID: recipientID,
 			SenderID:    m.userID,
 			Subject:     draft.GetSubject(),

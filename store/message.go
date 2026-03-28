@@ -147,6 +147,20 @@ type MessageData struct {
 	ReplyToID    string
 }
 
+// IdempotentCreateEntry pairs a MessageData with an idempotency key
+// for batch idempotent creation.
+type IdempotentCreateEntry struct {
+	Data           MessageData
+	IdempotencyKey string
+}
+
+// IdempotentCreateResult contains the result of a single idempotent create.
+type IdempotentCreateResult struct {
+	Message Message
+	Created bool  // true if newly created, false if existing
+	Err     error // non-nil if this entry failed
+}
+
 // MessageList represents a paginated list of messages.
 type MessageList struct {
 	Messages   []Message

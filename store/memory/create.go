@@ -66,6 +66,21 @@ func (s *Store) CreateMessage(ctx context.Context, data store.MessageData) (stor
 	return m.clone(), nil
 }
 
+// CreateMessagesIdempotent creates multiple messages with idempotency keys.
+// Delegates to CreateMessageIdempotent per entry.
+func (s *Store) CreateMessagesIdempotent(ctx context.Context, entries []store.IdempotentCreateEntry) ([]store.IdempotentCreateResult, error) {
+	if err := s.checkConnected(); err != nil {
+		return nil, err
+	}
+
+	results := make([]store.IdempotentCreateResult, len(entries))
+	for i, entry := range entries {
+		msg, created, err := s.CreateMessageIdempotent(ctx, entry.Data, entry.IdempotencyKey)
+		results[i] = store.IdempotentCreateResult{Message: msg, Created: created, Err: err}
+	}
+	return results, nil
+}
+
 // CreateMessages creates multiple messages atomically.
 // For the memory store, this uses a simple loop since sync.Map operations
 // are already atomic per-key. In production stores, this should use
