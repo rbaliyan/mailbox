@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/rbaliyan/mailbox/store"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -28,6 +29,10 @@ func (s *Store) CountByFolders(ctx context.Context, ownerID string, folderIDs []
 			"owner_id":   ownerID,
 			"__is_draft": bson.M{"$ne": true},
 			"folder_id":  bson.M{"$in": folderIDs},
+			"$or": bson.A{
+				bson.M{"available_at": nil},
+				bson.M{"available_at": bson.M{"$lte": time.Now().UTC()}},
+			},
 		}},
 		bson.M{"$group": bson.M{
 			"_id":    "$folder_id",
@@ -84,6 +89,10 @@ func (s *Store) ListDistinctFolders(ctx context.Context, ownerID string) ([]stri
 	filter := bson.M{
 		"owner_id":   ownerID,
 		"__is_draft": bson.M{"$ne": true},
+		"$or": bson.A{
+			bson.M{"available_at": nil},
+			bson.M{"available_at": bson.M{"$lte": time.Now().UTC()}},
+		},
 	}
 
 	var folders []string
@@ -112,7 +121,13 @@ func (s *Store) MailboxStats(ctx context.Context, ownerID string) (*store.Mailbo
 		bson.M{"$match": bson.M{"owner_id": ownerID}},
 		bson.M{"$facet": bson.M{
 			"messages": bson.A{
-				bson.M{"$match": bson.M{"__is_draft": bson.M{"$ne": true}}},
+				bson.M{"$match": bson.M{
+					"__is_draft": bson.M{"$ne": true},
+					"$or": bson.A{
+						bson.M{"available_at": nil},
+						bson.M{"available_at": bson.M{"$lte": time.Now().UTC()}},
+					},
+				}},
 				bson.M{"$group": bson.M{
 					"_id":    "$folder_id",
 					"total":  bson.M{"$sum": 1},

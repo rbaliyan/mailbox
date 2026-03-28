@@ -340,7 +340,7 @@ func (s *Store) DeleteTTLExpiredMessages(ctx context.Context, now time.Time) (in
 
 	query := fmt.Sprintf(`
 		DELETE FROM %s
-		WHERE expires_at IS NOT NULL AND expires_at < $1
+		WHERE is_draft = false AND expires_at IS NOT NULL AND expires_at < $1
 	`, s.opts.table)
 
 	result, err := s.db.ExecContext(ctx, query, now)

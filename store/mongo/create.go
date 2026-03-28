@@ -396,6 +396,7 @@ func (s *Store) DeleteTTLExpiredMessages(ctx context.Context, now time.Time) (in
 	defer cancel()
 
 	filter := bson.M{
+		"__is_draft": bson.M{"$ne": true},
 		"expires_at": bson.M{"$ne": nil, "$lt": now},
 	}
 

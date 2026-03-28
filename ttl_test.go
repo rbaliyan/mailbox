@@ -2,6 +2,7 @@ package mailbox
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -264,7 +265,7 @@ func TestSendRequest_TTLAndScheduleAt(t *testing.T) {
 	// Send via SendMessage with TTL and ScheduleAt.
 	future := time.Now().UTC().Add(1 * time.Hour)
 	sender := svc.Client("alice")
-	_, err := sender.SendMessage(ctx, SendRequest{
+	msg, err := sender.SendMessage(ctx, SendRequest{
 		RecipientIDs: []string{"bob"},
 		Subject:      "direct-send",
 		Body:         "body",
@@ -273,6 +274,16 @@ func TestSendRequest_TTLAndScheduleAt(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
+	}
+
+	// Verify TTL+schedule invariant: expires_at = available_at + TTL.
+	// Use the returned message (before any aging).
+	if msg.GetExpiresAt() == nil || msg.GetAvailableAt() == nil {
+		t.Fatal("expected both ExpiresAt and AvailableAt to be set")
+	}
+	ttlDuration := msg.GetExpiresAt().Sub(*msg.GetAvailableAt())
+	if ttlDuration < 1*time.Hour+55*time.Minute || ttlDuration > 2*time.Hour+5*time.Minute {
+		t.Errorf("expected expires_at ~2h after available_at, got %v", ttlDuration)
 	}
 
 	// Should be hidden (scheduled in future).
@@ -295,13 +306,68 @@ func TestSendRequest_TTLAndScheduleAt(t *testing.T) {
 	if len(inbox.All()) != 1 {
 		t.Errorf("expected 1 message after schedule, got %d", len(inbox.All()))
 	}
+}
 
-	// Verify ExpiresAt is set (TTL).
-	bobMsg, err := svc.Client("bob").Get(ctx, inbox.All()[0].GetID())
-	if err != nil {
-		t.Fatalf("get: %v", err)
+func TestTTL_MinTTLValidation(t *testing.T) {
+	ctx := context.Background()
+	memStore := memory.New()
+	svc := setupTTLService(t, memStore, WithMinTTL(1*time.Hour))
+	defer svc.Close(ctx)
+
+	sender := svc.Client("alice")
+	_, err := sender.SendMessage(ctx, SendRequest{
+		RecipientIDs: []string{"bob"},
+		Subject:      "too short TTL",
+		Body:         "body",
+		TTL:          30 * time.Minute, // below 1h minimum
+	})
+	if err == nil {
+		t.Fatal("expected error for TTL below minimum")
 	}
-	if bobMsg.GetExpiresAt() == nil {
-		t.Error("expected ExpiresAt to be set")
+	if !errors.Is(err, ErrInvalidTTL) {
+		t.Errorf("expected ErrInvalidTTL, got %v", err)
+	}
+}
+
+func TestTTL_MaxTTLValidation(t *testing.T) {
+	ctx := context.Background()
+	memStore := memory.New()
+	svc := setupTTLService(t, memStore, WithMaxTTL(24*time.Hour))
+	defer svc.Close(ctx)
+
+	sender := svc.Client("alice")
+	_, err := sender.SendMessage(ctx, SendRequest{
+		RecipientIDs: []string{"bob"},
+		Subject:      "too long TTL",
+		Body:         "body",
+		TTL:          48 * time.Hour, // above 24h maximum
+	})
+	if err == nil {
+		t.Fatal("expected error for TTL above maximum")
+	}
+	if !errors.Is(err, ErrInvalidTTL) {
+		t.Errorf("expected ErrInvalidTTL, got %v", err)
+	}
+}
+
+func TestSchedule_MaxDelayValidation(t *testing.T) {
+	ctx := context.Background()
+	memStore := memory.New()
+	svc := setupTTLService(t, memStore, WithMaxScheduleDelay(7*24*time.Hour))
+	defer svc.Close(ctx)
+
+	future := time.Now().UTC().Add(30 * 24 * time.Hour) // 30 days out
+	sender := svc.Client("alice")
+	_, err := sender.SendMessage(ctx, SendRequest{
+		RecipientIDs: []string{"bob"},
+		Subject:      "too far out",
+		Body:         "body",
+		ScheduleAt:   &future,
+	})
+	if err == nil {
+		t.Fatal("expected error for schedule delay above maximum")
+	}
+	if !errors.Is(err, ErrInvalidSchedule) {
+		t.Errorf("expected ErrInvalidSchedule, got %v", err)
 	}
 }
