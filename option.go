@@ -45,6 +45,11 @@ const (
 
 	// Stats cache
 	DefaultStatsRefreshInterval = 30 * time.Second // TTL for cached stats
+
+	// Orphan message claiming defaults (Redis transport only)
+	DefaultClaimInterval  = 30 * time.Second // scan for orphans every 30s
+	DefaultClaimMinIdle   = 60 * time.Second // claim messages idle for 60s+
+	DefaultClaimBatchSize = int64(100)       // claim up to 100 messages per cycle
 )
 
 // options holds mailbox configuration.
@@ -105,6 +110,12 @@ type options struct {
 	eventTransport        transport.Transport     // Event transport (optional, uses noop if nil)
 	redisClient           redis.UniversalClient   // Redis client for event transport (optional, uses noop if nil)
 	onEventPublishFailure EventPublishFailureFunc // Callback for event publish failures (always set)
+
+	// Redis event transport tuning
+	claimInterval      time.Duration // How often to scan for orphaned messages (default: 30s)
+	claimMinIdle       time.Duration // Min idle time before claiming a message (default: 60s)
+	claimBatchSize     int64         // Max messages to claim per cycle (default: 100)
+	eventStreamMaxLen  int64         // Max entries per event stream, 0 = unlimited (default: 0)
 }
 
 // EventPublishFailureFunc is called when an event fails to publish.
@@ -154,6 +165,10 @@ func newOptions(opts ...Option) *options {
 		maxConcurrentSends: DefaultMaxConcurrentSends,
 		// Shutdown defaults
 		shutdownTimeout: DefaultShutdownTimeout,
+		// Orphan message claiming defaults
+		claimInterval:  DefaultClaimInterval,
+		claimMinIdle:   DefaultClaimMinIdle,
+		claimBatchSize: DefaultClaimBatchSize,
 		// Stats cache defaults
 		statsRefreshInterval: DefaultStatsRefreshInterval,
 	}
@@ -581,6 +596,46 @@ func WithEventPublishFailureHandler(fn EventPublishFailureFunc) Option {
 	return func(o *options) {
 		if fn != nil {
 			o.onEventPublishFailure = fn
+		}
+	}
+}
+
+// --- Redis Event Transport Tuning ---
+
+// WithClaimInterval sets how often the background goroutine scans for orphaned
+// messages in Redis consumer groups, and the minimum idle time before a message
+// is eligible for claiming. Messages from dead consumers (e.g., crashed server
+// instances) are automatically reclaimed via XCLAIM after minIdle.
+// Default: 30s interval, 60s minIdle.
+func WithClaimInterval(interval, minIdle time.Duration) Option {
+	return func(o *options) {
+		if interval > 0 {
+			o.claimInterval = interval
+		}
+		if minIdle > 0 {
+			o.claimMinIdle = minIdle
+		}
+	}
+}
+
+// WithClaimBatchSize sets the maximum number of orphaned messages to claim per
+// cycle. Increase for high-throughput systems where many messages may be
+// orphaned after a consumer crash. Default: 100.
+func WithClaimBatchSize(n int64) Option {
+	return func(o *options) {
+		if n > 0 {
+			o.claimBatchSize = n
+		}
+	}
+}
+
+// WithEventStreamMaxLen sets the approximate maximum number of entries per
+// Redis event stream. Older entries are trimmed via MAXLEN when new events
+// are published. 0 means unlimited (default).
+func WithEventStreamMaxLen(n int64) Option {
+	return func(o *options) {
+		if n >= 0 {
+			o.eventStreamMaxLen = n
 		}
 	}
 }

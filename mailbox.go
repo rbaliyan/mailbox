@@ -154,7 +154,14 @@ func (s *service) initEventBus(ctx context.Context) error {
 		s.statsCacheEnabled = true
 	case s.opts.redisClient != nil:
 		s.logger.Info("initializing event bus with Redis transport")
-		t, transportErr := eventredis.New(s.opts.redisClient)
+		redisOpts := []eventredis.Option{
+			eventredis.WithClaimInterval(s.opts.claimInterval, s.opts.claimMinIdle),
+			eventredis.WithClaimBatchSize(s.opts.claimBatchSize),
+		}
+		if s.opts.eventStreamMaxLen > 0 {
+			redisOpts = append(redisOpts, eventredis.WithMaxLen(s.opts.eventStreamMaxLen))
+		}
+		t, transportErr := eventredis.New(s.opts.redisClient, redisOpts...)
 		if transportErr != nil {
 			return fmt.Errorf("create redis transport: %w", transportErr)
 		}
