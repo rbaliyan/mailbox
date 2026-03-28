@@ -3,7 +3,6 @@ package mailbox
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"github.com/rbaliyan/event/v3"
 	"github.com/rbaliyan/mailbox/notify"
@@ -76,7 +75,7 @@ func (s *service) onNotifyMarkAllRead(ctx context.Context, _ event.Event[MarkAll
 }
 
 // onNotifyMessageSent handles the MessageSent event for notifications.
-// Pushes a notification to each recipient.
+// Uses PushMulti for efficient batch delivery to all recipients.
 func (s *service) onNotifyMessageSent(ctx context.Context, _ event.Event[MessageSentEvent], data MessageSentEvent) error {
 	payload, err := json.Marshal(data)
 	if err != nil {
@@ -87,16 +86,12 @@ func (s *service) onNotifyMessageSent(ctx context.Context, _ event.Event[Message
 		Payload:   payload,
 		Timestamp: data.SentAt,
 	}
-	var failed int
-	for _, recipientID := range data.RecipientIDs {
-		if pushErr := s.notifier.Push(ctx, recipientID, evt); pushErr != nil {
-			failed++
-			s.logger.Warn("notify: failed to push to recipient",
-				"recipient_id", recipientID, "error", pushErr)
-		}
+	failed, err := s.notifier.PushMulti(ctx, data.RecipientIDs, evt)
+	if err != nil {
+		return err
 	}
-	if failed > 0 && failed == len(data.RecipientIDs) {
-		return fmt.Errorf("notify: all %d recipient pushes failed", failed)
+	if failed > 0 {
+		s.logger.Warn("notify: some recipient pushes failed", "failed", failed, "total", len(data.RecipientIDs))
 	}
 	return nil
 }

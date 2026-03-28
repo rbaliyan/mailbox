@@ -331,22 +331,33 @@ func (m *userMailbox) MarkAllRead(ctx context.Context, folderID string) (_ int64
 			return 0, fmt.Errorf("mark all read: %w", err)
 		}
 	} else {
-		// Slow path: individual MarkRead calls.
-		list, err := m.service.store.Find(ctx, []store.Filter{
+		// Slow path: individual MarkRead calls with cursor pagination.
+		filters := []store.Filter{
 			store.OwnerIs(m.userID),
 			store.InFolder(folderID),
 			store.IsReadFilter(false),
-		}, store.ListOptions{Limit: m.service.opts.maxQueryLimit})
-		if err != nil {
-			return 0, fmt.Errorf("find unread: %w", err)
 		}
-		for _, msg := range list.Messages {
-			if err := m.service.store.MarkRead(ctx, msg.GetID(), true); err != nil {
-				m.service.logger.Warn("mark read failed in bulk operation",
-					"error", err, "message_id", msg.GetID())
-			} else {
-				count++
+		var cursor string
+		for {
+			list, err := m.service.store.Find(ctx, filters, store.ListOptions{
+				Limit:      m.service.opts.maxQueryLimit,
+				StartAfter: cursor,
+			})
+			if err != nil {
+				return count, fmt.Errorf("find unread: %w", err)
 			}
+			for _, msg := range list.Messages {
+				if err := m.service.store.MarkRead(ctx, msg.GetID(), true); err != nil {
+					m.service.logger.Warn("mark read failed in bulk operation",
+						"error", err, "message_id", msg.GetID())
+				} else {
+					count++
+				}
+			}
+			if !list.HasMore || len(list.Messages) == 0 {
+				break
+			}
+			cursor = list.Messages[len(list.Messages)-1].GetID()
 		}
 	}
 

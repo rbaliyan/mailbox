@@ -21,6 +21,7 @@ type stream struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	closed       atomic.Bool
+	dropped      atomic.Int64 // events dropped due to slow consumer
 
 	mu     sync.Mutex // Protects lastID
 	lastID string
@@ -54,6 +55,13 @@ func (s *stream) Close() error {
 	}
 	return nil
 }
+
+// Dropped returns the number of events dropped due to slow consumption.
+func (s *stream) Dropped() int64 {
+	return s.dropped.Load()
+}
+
+var _ DroppedCounter = (*stream)(nil)
 
 func (s *stream) getLastID() string {
 	s.mu.Lock()

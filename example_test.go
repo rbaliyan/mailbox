@@ -12,11 +12,16 @@ import (
 
 	"github.com/rbaliyan/event/v3"
 	"github.com/rbaliyan/event/v3/transport/channel"
+	"crypto/rand"
+
 	"github.com/rbaliyan/mailbox"
+	"github.com/rbaliyan/mailbox/compress"
+	"github.com/rbaliyan/mailbox/crypto"
 	"github.com/rbaliyan/mailbox/notify"
 	notifymem "github.com/rbaliyan/mailbox/notify/memory"
 	"github.com/rbaliyan/mailbox/store"
 	"github.com/rbaliyan/mailbox/store/memory"
+	"golang.org/x/crypto/curve25519"
 )
 
 // newTestService creates a connected service for examples using in-memory backends.
@@ -935,4 +940,61 @@ func Example_listFolders() {
 	}
 	// Output:
 	// work-queue: 1 messages (1 unread)
+}
+
+// Example_encryptedMessage demonstrates E2E encryption: send encrypted, receive and decrypt.
+func Example_encryptedMessage() {
+	ctx := context.Background()
+
+	// Generate X25519 keypairs for sender and recipient.
+	keys := crypto.NewStaticKeyResolver()
+	for _, user := range []string{"alice", "bob"} {
+		priv := make([]byte, 32)
+		rand.Read(priv)
+		pub, _ := curve25519.X25519(priv, curve25519.Basepoint)
+		keys.AddUser(user, pub, priv)
+	}
+
+	// Create service with compression + encryption plugins.
+	svc, _ := mailbox.NewService(
+		mailbox.WithStore(memory.New()),
+		mailbox.WithPlugins(
+			compress.NewPlugin(compress.Gzip),  // compress first
+			crypto.NewEncryptionPlugin(keys),    // then encrypt
+		),
+	)
+	svc.Connect(ctx)
+	defer svc.Close(ctx)
+
+	// Alice sends an encrypted message — subject stays searchable.
+	alice := svc.Client("alice")
+	alice.SendMessage(ctx, mailbox.SendRequest{
+		RecipientIDs: []string{"bob"},
+		Subject:      "Confidential report",
+		Body:         "Q3 revenue: $1.2M",
+		Metadata:     map[string]any{"department": "finance"},
+	})
+
+	// Bob receives and decrypts.
+	bob := svc.Client("bob")
+	inbox, _ := bob.Folder(ctx, store.FolderInbox, store.ListOptions{})
+	msg := inbox.All()[0]
+
+	// Subject is plaintext (searchable).
+	fmt.Println("subject:", msg.GetSubject())
+	fmt.Println("encrypted:", crypto.IsEncrypted(msg))
+	fmt.Println("compressed:", compress.IsCompressed(msg))
+
+	// Body is encrypted — decrypt with Open.
+	plaintext, _ := crypto.Open(ctx, msg, "bob", keys)
+	fmt.Println("body:", string(plaintext))
+
+	// Application metadata is preserved.
+	fmt.Println("department:", msg.GetMetadata()["department"])
+	// Output:
+	// subject: Confidential report
+	// encrypted: true
+	// compressed: true
+	// body: Q3 revenue: $1.2M
+	// department: finance
 }

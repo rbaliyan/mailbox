@@ -49,6 +49,14 @@ type Stream interface {
 	Close() error
 }
 
+// DroppedCounter is an optional interface that Stream implementations can
+// provide to expose the number of events dropped due to slow consumption.
+// SSE handlers can check this to detect and disconnect slow clients.
+type DroppedCounter interface {
+	// Dropped returns the number of events dropped since the stream was opened.
+	Dropped() int64
+}
+
 // Router delivers notification events to remote instances.
 // When presence tracking includes routing information, the notifier uses a
 // Router to forward events to the instance holding the user's connection,
@@ -89,6 +97,16 @@ type Store interface {
 
 	// Close releases resources held by the store.
 	Close(ctx context.Context) error
+}
+
+// BatchSaver is an optional interface that Store implementations can
+// implement to support saving multiple events in a single round-trip.
+// When the notifier's store implements BatchSaver, PushMulti uses it
+// for efficient multi-recipient delivery (e.g., Redis pipeline).
+type BatchSaver interface {
+	// SaveBatch persists multiple events atomically or in a pipeline.
+	// Each event may target a different user. The implementation assigns event IDs.
+	SaveBatch(ctx context.Context, events []*Event) error
 }
 
 // StreamStore is an optional interface that Store implementations can
