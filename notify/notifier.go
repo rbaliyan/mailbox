@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 )
@@ -82,6 +83,73 @@ func (n *Notifier) Push(ctx context.Context, userID string, evt Event) error {
 	n.tryRoute(ctx, userID, evt)
 
 	return nil
+}
+
+// PushMulti sends a notification to multiple users efficiently.
+// When the store implements BatchSaver, all events are saved in a single pipeline.
+// Otherwise, falls back to individual Push calls.
+func (n *Notifier) PushMulti(ctx context.Context, userIDs []string, evt Event) (failed int, err error) {
+	if n.closed.Load() {
+		return 0, ErrNotifierClosed
+	}
+
+	// Filter online users if presence is configured.
+	targets := userIDs
+	if n.opts.presence != nil {
+		online, err := n.opts.presence.OnlineUsers(ctx, userIDs)
+		if err != nil {
+			n.opts.logger.Warn("notify: presence check failed, pushing to all",
+				"error", err)
+		} else {
+			targets = online
+		}
+	}
+
+	if len(targets) == 0 {
+		return 0, nil
+	}
+
+	// Persist for backfill — batch if supported.
+	if n.opts.store != nil {
+		events := make([]*Event, len(targets))
+		for i, uid := range targets {
+			e := evt // copy
+			e.UserID = uid
+			events[i] = &e
+		}
+
+		if bs, ok := n.opts.store.(BatchSaver); ok {
+			if err := bs.SaveBatch(ctx, events); err != nil {
+				return len(targets), err
+			}
+		} else {
+			for _, e := range events {
+				if err := n.opts.store.Save(ctx, e); err != nil {
+					failed++
+					n.opts.logger.Warn("notify: save failed", "user_id", e.UserID, "error", err)
+				}
+			}
+			if failed == len(targets) {
+				return failed, fmt.Errorf("notify: all %d saves failed", failed)
+			}
+		}
+	}
+
+	// If store supports native streaming, Save is the delivery mechanism.
+	if _, ok := n.opts.store.(StreamStore); ok {
+		return failed, nil
+	}
+
+	// Local delivery + routing for non-streaming stores.
+	for _, uid := range targets {
+		e := evt
+		e.UserID = uid
+		if !n.deliverLocal(uid, e) {
+			n.tryRoute(ctx, uid, e)
+		}
+	}
+
+	return failed, nil
 }
 
 // Deliver pushes an event directly to a local stream, bypassing presence
@@ -192,7 +260,7 @@ func (n *Notifier) deliverLocal(userID string, evt Event) bool {
 		case s.ch <- evt:
 			delivered = true
 		default:
-			// Consumer is slow — skip, they'll catch up via polling.
+			s.dropped.Add(1)
 		}
 	}
 	return delivered

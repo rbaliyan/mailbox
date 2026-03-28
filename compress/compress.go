@@ -30,6 +30,9 @@ import (
 	"io"
 
 	"github.com/rbaliyan/mailbox/store"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ErrUnsupportedEncoding is returned for unknown compression encodings.
@@ -72,7 +75,12 @@ func (p *Plugin) AfterSend(_ context.Context, _ string, _ store.Message) error {
 }
 
 // BeforeSend compresses the message body and sets the Content-Encoding header.
-func (p *Plugin) BeforeSend(_ context.Context, _ string, draft store.DraftMessage) error {
+func (p *Plugin) BeforeSend(ctx context.Context, _ string, draft store.DraftMessage) error {
+	_, span := otel.Tracer("mailbox.compress").Start(ctx, "compress",
+		trace.WithAttributes(attribute.String("algorithm", p.compressor.Algorithm())),
+	)
+	defer span.End()
+
 	body := draft.GetBody()
 	if len(body) == 0 {
 		return nil

@@ -46,6 +46,9 @@ func New(client redis.UniversalClient, opts ...Option) *Store {
 }
 
 func (s *Store) key(userID string) string {
+	if s.opts.hashTag {
+		return fmt.Sprintf("{%s:%s}", s.opts.prefix, userID)
+	}
 	return fmt.Sprintf("%s:%s", s.opts.prefix, userID)
 }
 
@@ -73,6 +76,45 @@ func (s *Store) Save(ctx context.Context, evt *notify.Event) error {
 	evt.ID = id
 	return nil
 }
+
+// SaveBatch persists multiple notification events via pipelined XADD.
+// This is significantly faster than individual Save calls for multi-recipient delivery.
+func (s *Store) SaveBatch(ctx context.Context, events []*notify.Event) error {
+	if s.closed.Load() {
+		return notify.ErrStoreClosed
+	}
+	if len(events) == 0 {
+		return nil
+	}
+
+	pipe := s.client.Pipeline()
+	cmds := make([]*redis.StringCmd, len(events))
+	for i, evt := range events {
+		cmds[i] = pipe.XAdd(ctx, &redis.XAddArgs{
+			Stream: s.key(evt.UserID),
+			MaxLen: s.opts.maxLen,
+			Approx: true,
+			Values: map[string]any{
+				"type":      evt.Type,
+				"user_id":   evt.UserID,
+				"payload":   string(evt.Payload),
+				"timestamp": evt.Timestamp.Format(time.RFC3339Nano),
+			},
+		})
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("notify: redis pipeline xadd: %w", err)
+	}
+	for i, cmd := range cmds {
+		if id, err := cmd.Result(); err == nil {
+			events[i].ID = id
+		}
+	}
+	return nil
+}
+
+// Compile-time check that Store implements BatchSaver.
+var _ notify.BatchSaver = (*Store)(nil)
 
 // List returns notifications for a user after the given event ID.
 func (s *Store) List(ctx context.Context, userID string, afterID string, limit int) ([]notify.Event, error) {

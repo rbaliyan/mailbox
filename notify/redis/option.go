@@ -18,6 +18,7 @@ type options struct {
 	maxLen       int64         // Approximate max entries per user stream (MAXLEN ~)
 	blockTimeout time.Duration // XREAD BLOCK timeout before retry
 	backfillSize int           // Max events replayed on reconnect
+	hashTag      bool          // Use Redis Cluster hash tags in keys
 	logger       *slog.Logger
 }
 
@@ -76,6 +77,17 @@ func WithBackfillSize(n int) Option {
 		if n > 0 {
 			o.backfillSize = n
 		}
+	}
+}
+
+// WithHashTag enables Redis Cluster hash tags in stream keys.
+// When enabled, keys are formatted as "{prefix}:{userID}" so that each
+// user's stream is deterministically assigned to a cluster slot based on
+// the user ID. This ensures SCAN-based cleanup works per-shard.
+// Default is false (no hash tags).
+func WithHashTag(enabled bool) Option {
+	return func(o *options) {
+		o.hashTag = enabled
 	}
 }
 

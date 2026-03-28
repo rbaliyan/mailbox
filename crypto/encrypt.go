@@ -6,6 +6,9 @@ import (
 	"fmt"
 
 	"github.com/rbaliyan/mailbox/store"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // EncryptionPlugin encrypts message bodies using envelope encryption.
@@ -37,6 +40,14 @@ func (p *EncryptionPlugin) AfterSend(_ context.Context, _ string, _ store.Messag
 
 // BeforeSend encrypts the message body and stores per-recipient wrapped DEKs in metadata.
 func (p *EncryptionPlugin) BeforeSend(ctx context.Context, userID string, draft store.DraftMessage) error {
+	ctx, span := otel.Tracer("mailbox.crypto").Start(ctx, "encrypt",
+		trace.WithAttributes(
+			attribute.String("key_type", string(p.opts.keyType)),
+			attribute.Int("recipient_count", len(draft.GetRecipientIDs())),
+		),
+	)
+	defer span.End()
+
 	body := draft.GetBody()
 	if len(body) == 0 {
 		return nil
