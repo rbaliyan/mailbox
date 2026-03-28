@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/rbaliyan/event/v3"
 	"github.com/rbaliyan/event/v3/transport/noop"
@@ -155,14 +154,14 @@ func (s *service) initEventBus(ctx context.Context) error {
 		s.statsCacheEnabled = true
 	case s.opts.redisClient != nil:
 		s.logger.Info("initializing event bus with Redis transport")
-		t, transportErr := eventredis.New(s.opts.redisClient,
-			// Enable orphan message claiming so that pending messages from
-			// dead consumers (e.g., previous server instances) are automatically
-			// reclaimed and processed by the active consumer. Without this,
-			// the consumer group's last-delivered-id gets stuck behind the
-			// pending entries, blocking delivery of new events.
-			eventredis.WithClaimInterval(30*time.Second, 60*time.Second),
-		)
+		redisOpts := []eventredis.Option{
+			eventredis.WithClaimInterval(s.opts.claimInterval, s.opts.claimMinIdle),
+			eventredis.WithClaimBatchSize(s.opts.claimBatchSize),
+		}
+		if s.opts.eventStreamMaxLen > 0 {
+			redisOpts = append(redisOpts, eventredis.WithMaxLen(s.opts.eventStreamMaxLen))
+		}
+		t, transportErr := eventredis.New(s.opts.redisClient, redisOpts...)
 		if transportErr != nil {
 			return fmt.Errorf("create redis transport: %w", transportErr)
 		}
