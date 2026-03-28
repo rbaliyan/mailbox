@@ -152,6 +152,12 @@ var (
 	// without a notifier configured via WithNotifier.
 	ErrNotifierNotConfigured = errors.New("mailbox: notifier not configured")
 
+	// ErrInvalidTTL is returned when a TTL value is outside configured bounds.
+	ErrInvalidTTL = errors.New("mailbox: invalid TTL")
+
+	// ErrInvalidSchedule is returned when a schedule delay is outside configured bounds.
+	ErrInvalidSchedule = errors.New("mailbox: invalid schedule")
+
 	// ErrQuotaExceeded is returned when a user's mailbox has reached its message quota.
 	// Use errors.As with *QuotaExceededError to get details (user ID, current count, limit).
 	ErrQuotaExceeded = errors.New("mailbox: quota exceeded")

@@ -34,6 +34,8 @@ type messageDoc struct {
 	IdempotencyKey string          `bson:"idempotency_key,omitempty"` // For atomic idempotent creates
 	ThreadID       string          `bson:"thread_id,omitempty"`
 	ReplyToID      string          `bson:"reply_to_id,omitempty"`
+	ExpiresAt      *time.Time      `bson:"expires_at,omitempty"`
+	AvailableAt    *time.Time      `bson:"available_at,omitempty"`
 }
 
 // attachmentDoc is the MongoDB document for attachments.
@@ -67,6 +69,8 @@ type message struct {
 	isDraft      bool
 	threadID     string
 	replyToID    string
+	expiresAt    *time.Time
+	availableAt  *time.Time
 
 	// delta tracking (internal use only)
 	delta messageDelta
@@ -113,6 +117,8 @@ func (m *message) GetCreatedAt() time.Time        { return m.createdAt }
 func (m *message) GetUpdatedAt() time.Time        { return m.updatedAt }
 func (m *message) GetThreadID() string            { return m.threadID }
 func (m *message) GetReplyToID() string           { return m.replyToID }
+func (m *message) GetExpiresAt() *time.Time       { return m.expiresAt }
+func (m *message) GetAvailableAt() *time.Time     { return m.availableAt }
 func (m *message) GetAttachments() []store.Attachment {
 	if m.attachments == nil {
 		return nil
@@ -168,6 +174,26 @@ func (m *message) SetMetadata(key string, value any) store.DraftMessage {
 	}
 	m.metadata[key] = value
 	m.delta.metadata[key] = value
+	return m
+}
+
+func (m *message) SetTTL(d time.Duration) store.DraftMessage {
+	if d <= 0 {
+		m.expiresAt = nil
+	} else {
+		t := time.Now().UTC().Add(d)
+		m.expiresAt = &t
+	}
+	return m
+}
+
+func (m *message) SetScheduleAt(t time.Time) store.DraftMessage {
+	if t.IsZero() {
+		m.availableAt = nil
+	} else {
+		ut := t.UTC()
+		m.availableAt = &ut
+	}
 	return m
 }
 
@@ -237,6 +263,8 @@ func messageToDoc(msg *message) *messageDoc {
 		IsDraft:      msg.isDraft,
 		ThreadID:     msg.threadID,
 		ReplyToID:    msg.replyToID,
+		ExpiresAt:    msg.expiresAt,
+		AvailableAt:  msg.availableAt,
 	}
 
 	if len(msg.attachments) > 0 {
@@ -281,6 +309,8 @@ func docToMessage(doc *messageDoc) *message {
 		isDraft:      doc.IsDraft,
 		threadID:     doc.ThreadID,
 		replyToID:    doc.ReplyToID,
+		expiresAt:    doc.ExpiresAt,
+		availableAt:  doc.AvailableAt,
 	}
 
 	if len(doc.Attachments) > 0 {

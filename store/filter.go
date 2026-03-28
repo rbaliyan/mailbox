@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"time"
 )
 
 // SortOrder represents the sort direction.
@@ -161,6 +162,10 @@ func MessageFieldKey(field string) (string, bool) {
 		return "reply_to_id", true
 	case "IsDraft", "is_draft":
 		return "is_draft", true
+	case "ExpiresAt", "expires_at":
+		return "expires_at", true
+	case "AvailableAt", "available_at":
+		return "available_at", true
 	default:
 		return "", false
 	}
@@ -262,5 +267,21 @@ func IsDraftFilter(isDraft bool) Filter {
 // HasThread returns a filter for messages that belong to any thread.
 func HasThread() Filter {
 	f, _ := MessageFilter("ThreadID").Exists(true)
+	return f
+}
+
+// NotExpired returns a filter for messages whose expires_at is after now.
+// Messages with nil expires_at (no TTL) are not matched by this filter alone;
+// use it in combination with store-level availability checks.
+func NotExpired() Filter {
+	f, _ := MessageFilter("ExpiresAt").GreaterThan(time.Now().UTC())
+	return f
+}
+
+// IsAvailable returns a filter for messages whose available_at is at or before now.
+// Messages with nil available_at (immediately available) are not matched by this
+// filter alone; use it in combination with store-level availability checks.
+func IsAvailable() Filter {
+	f, _ := MessageFilter("AvailableAt").LessThanEqual(time.Now().UTC())
 	return f
 }

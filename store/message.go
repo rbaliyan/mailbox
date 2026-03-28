@@ -94,6 +94,14 @@ type MessageReader interface {
 	GetAttachments() []Attachment
 	GetCreatedAt() time.Time
 	GetUpdatedAt() time.Time
+
+	// GetExpiresAt returns the UTC time after which this message is eligible
+	// for automatic deletion. Returns nil if the message has no TTL.
+	GetExpiresAt() *time.Time
+
+	// GetAvailableAt returns the UTC time before which this message is hidden
+	// from queries. Returns nil if the message is immediately available.
+	GetAvailableAt() *time.Time
 }
 
 // Message is a read-only view of a sent or received message.
@@ -127,6 +135,16 @@ type DraftMessage interface {
 	SetHeader(key, value string) DraftMessage
 	SetMetadata(key string, value any) DraftMessage
 	AddAttachment(attachment Attachment) DraftMessage
+
+	// SetTTL sets the message time-to-live. The message will be eligible for
+	// automatic deletion after this duration from send time. A zero duration
+	// clears any previously set TTL.
+	SetTTL(d time.Duration) DraftMessage
+
+	// SetScheduleAt sets the time at which the message becomes visible to
+	// recipients. Before this time, the message is hidden from queries.
+	// A zero time clears any previously set schedule.
+	SetScheduleAt(t time.Time) DraftMessage
 }
 
 // MessageData contains data for creating a new message.
@@ -145,6 +163,14 @@ type MessageData struct {
 	Tags         []string
 	ThreadID     string
 	ReplyToID    string
+
+	// ExpiresAt is the UTC time after which this message is eligible for
+	// automatic deletion via DeleteTTLExpiredMessages. Nil means no expiry.
+	ExpiresAt *time.Time
+
+	// AvailableAt is the UTC time before which this message is hidden from
+	// queries. Nil means immediately available.
+	AvailableAt *time.Time
 }
 
 // IdempotentCreateEntry pairs a MessageData with an idempotency key

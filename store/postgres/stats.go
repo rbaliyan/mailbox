@@ -23,6 +23,7 @@ func (s *Store) CountByFolders(ctx context.Context, ownerID string, folderIDs []
 			COALESCE(SUM(CASE WHEN NOT is_read THEN 1 ELSE 0 END), 0) AS unread
 		FROM %s
 		WHERE owner_id = $1 AND is_draft = false AND folder_id = ANY($2)
+			AND (available_at IS NULL OR available_at <= NOW())
 		GROUP BY folder_id
 	`, s.opts.table)
 
@@ -74,6 +75,7 @@ func (s *Store) ListDistinctFolders(ctx context.Context, ownerID string) ([]stri
 	query := fmt.Sprintf(`
 		SELECT DISTINCT folder_id FROM %s
 		WHERE owner_id = $1 AND is_draft = false
+			AND (available_at IS NULL OR available_at <= NOW())
 	`, s.opts.table)
 
 	rows, err := s.db.QueryContext(ctx, query, ownerID)
@@ -118,6 +120,7 @@ func (s *Store) MailboxStats(ctx context.Context, ownerID string) (*store.Mailbo
 			SELECT is_draft, is_read, folder_id
 			FROM %s
 			WHERE owner_id = $1
+				AND (available_at IS NULL OR available_at <= NOW() OR is_draft = true)
 		)
 		SELECT '' AS folder_id,
 			COALESCE(SUM(CASE WHEN NOT is_draft THEN 1 ELSE 0 END), 0),

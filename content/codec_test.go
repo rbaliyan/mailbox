@@ -29,6 +29,8 @@ func (m *mockMessage) GetMetadata() map[string]any        { return m.metadata }
 func (m *mockMessage) GetAttachments() []store.Attachment { return nil }
 func (m *mockMessage) GetCreatedAt() time.Time            { return time.Time{} }
 func (m *mockMessage) GetUpdatedAt() time.Time            { return time.Time{} }
+func (m *mockMessage) GetExpiresAt() *time.Time           { return nil }
+func (m *mockMessage) GetAvailableAt() *time.Time         { return nil }
 
 var _ store.MessageReader = (*mockMessage)(nil)
 

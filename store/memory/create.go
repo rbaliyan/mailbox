@@ -50,6 +50,15 @@ func newMessageFromData(data store.MessageData, id string, now time.Time) *messa
 		copy(m.attachments, data.Attachments)
 	}
 
+	if data.ExpiresAt != nil {
+		t := *data.ExpiresAt
+		m.expiresAt = &t
+	}
+	if data.AvailableAt != nil {
+		t := *data.AvailableAt
+		m.availableAt = &t
+	}
+
 	return m
 }
 
@@ -207,6 +216,33 @@ func (s *Store) DeleteExpiredMessages(ctx context.Context, cutoff time.Time) (in
 	s.messages.Range(func(key, value any) bool {
 		m := value.(*message)
 		if !m.isDraft && m.createdAt.Before(cutoff) {
+			toDelete = append(toDelete, key.(string))
+		}
+		return true
+	})
+
+	for _, id := range toDelete {
+		if _, loaded := s.messages.LoadAndDelete(id); loaded {
+			deleted++
+		}
+	}
+
+	return deleted, nil
+}
+
+// DeleteTTLExpiredMessages atomically deletes all non-draft messages whose
+// expires_at is non-null and before the given time.
+func (s *Store) DeleteTTLExpiredMessages(ctx context.Context, now time.Time) (int64, error) {
+	if err := s.checkConnected(); err != nil {
+		return 0, err
+	}
+
+	var deleted int64
+	var toDelete []string
+
+	s.messages.Range(func(key, value any) bool {
+		m := value.(*message)
+		if !m.isDraft && m.expiresAt != nil && m.expiresAt.Before(now) {
 			toDelete = append(toDelete, key.(string))
 		}
 		return true

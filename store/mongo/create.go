@@ -47,6 +47,8 @@ func newMessageDocFromData(data store.MessageData, now time.Time) *messageDoc {
 		IsDraft:      false,
 		ThreadID:     data.ThreadID,
 		ReplyToID:    data.ReplyToID,
+		ExpiresAt:    data.ExpiresAt,
+		AvailableAt:  data.AvailableAt,
 	}
 
 	if len(data.Attachments) > 0 {
@@ -381,6 +383,29 @@ func (s *Store) DeleteMessagesByIDs(ctx context.Context, ids []string) ([]string
 	}
 
 	return deleted, nil
+}
+
+// DeleteTTLExpiredMessages atomically deletes all non-draft messages whose
+// expires_at is non-null and before the given time.
+func (s *Store) DeleteTTLExpiredMessages(ctx context.Context, now time.Time) (int64, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return 0, store.ErrNotConnected
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	filter := bson.M{
+		"__is_draft": bson.M{"$ne": true},
+		"expires_at": bson.M{"$ne": nil, "$lt": now},
+	}
+
+	result, err := s.collection.DeleteMany(ctx, filter)
+	if err != nil {
+		return 0, fmt.Errorf("delete TTL expired messages: %w", err)
+	}
+
+	return result.DeletedCount, nil
 }
 
 // DeleteExpiredMessages atomically deletes all non-draft messages older than cutoff.

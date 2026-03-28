@@ -19,9 +19,59 @@ func (m *userMailbox) Compose() (Draft, error) {
 	return newDraft(m), nil
 }
 
+// computeTTLFields calculates ExpiresAt and AvailableAt from the given TTL,
+// scheduleAt, and service default TTL. Called at send time.
+// Returns validation errors for out-of-range values.
+func (m *userMailbox) computeTTLFields(ttl time.Duration, scheduleAt *time.Time) (expiresAt *time.Time, availableAt *time.Time, err error) {
+	opts := m.service.opts
+
+	// Validate TTL bounds.
+	effectiveTTL := ttl
+	if effectiveTTL <= 0 {
+		effectiveTTL = opts.defaultTTL
+	}
+	if effectiveTTL > 0 {
+		if effectiveTTL < opts.minTTL {
+			return nil, nil, fmt.Errorf("%w: TTL %v is below minimum %v", ErrInvalidTTL, effectiveTTL, opts.minTTL)
+		}
+		if opts.maxTTL > 0 && effectiveTTL > opts.maxTTL {
+			return nil, nil, fmt.Errorf("%w: TTL %v exceeds maximum %v", ErrInvalidTTL, effectiveTTL, opts.maxTTL)
+		}
+	}
+
+	// Validate and set AvailableAt.
+	if scheduleAt != nil && !scheduleAt.IsZero() {
+		now := time.Now().UTC()
+		delay := scheduleAt.Sub(now)
+		if delay > 0 {
+			if opts.minScheduleDelay > 0 && delay < opts.minScheduleDelay {
+				return nil, nil, fmt.Errorf("%w: schedule delay %v is below minimum %v", ErrInvalidSchedule, delay, opts.minScheduleDelay)
+			}
+			if opts.maxScheduleDelay > 0 && delay > opts.maxScheduleDelay {
+				return nil, nil, fmt.Errorf("%w: schedule delay %v exceeds maximum %v", ErrInvalidSchedule, delay, opts.maxScheduleDelay)
+			}
+		}
+		ut := scheduleAt.UTC()
+		availableAt = &ut
+	}
+
+	// Compute ExpiresAt. When both TTL and schedule are set, TTL starts from
+	// the scheduled delivery time, not from now.
+	if effectiveTTL > 0 {
+		base := time.Now().UTC()
+		if availableAt != nil {
+			base = *availableAt
+		}
+		t := base.Add(effectiveTTL)
+		expiresAt = &t
+	}
+
+	return expiresAt, availableAt, nil
+}
+
 // createSenderMessage creates the sender's copy in the outbox.
 // Returns the created message or an error. Handles attachment ref counting and rollback.
-func (m *userMailbox) createSenderMessage(ctx context.Context, draft store.DraftMessage, threadID, replyToID string) (store.Message, error) {
+func (m *userMailbox) createSenderMessage(ctx context.Context, draft store.DraftMessage, threadID, replyToID string, expiresAt, availableAt *time.Time) (store.Message, error) {
 	senderData := store.MessageData{
 		OwnerID:      m.userID,
 		SenderID:     m.userID,
@@ -35,6 +85,8 @@ func (m *userMailbox) createSenderMessage(ctx context.Context, draft store.Draft
 		Attachments:  draft.GetAttachments(),
 		ThreadID:     threadID,
 		ReplyToID:    replyToID,
+		ExpiresAt:    expiresAt,
+		AvailableAt:  availableAt,
 	}
 
 	senderCopy, err := m.service.store.CreateMessage(ctx, senderData)
@@ -84,7 +136,7 @@ func deduplicateRecipients(recipientIDs []string) []string {
 // deliverToRecipients creates message copies for all unique recipients.
 // senderMsgID is used as the idempotency base to prevent duplicates on retry.
 // Returns lists of successful and failed recipients.
-func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.DraftMessage, threadID, replyToID, senderMsgID string) ([]string, map[string]error) {
+func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.DraftMessage, threadID, replyToID, senderMsgID string, expiresAt, availableAt *time.Time) ([]string, map[string]error) {
 	// Recipients are already deduplicated in sendDraft before validation.
 	idempotencyBase := senderMsgID
 
@@ -132,6 +184,8 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 				Attachments:  draft.GetAttachments(),
 				ThreadID:     threadID,
 				ReplyToID:    replyToID,
+				ExpiresAt:    expiresAt,
+				AvailableAt:  availableAt,
 			},
 			IdempotencyKey: fmt.Sprintf("%s:%s", idempotencyBase, recipientID),
 		}
@@ -256,7 +310,7 @@ func (m *userMailbox) finalizeDelivery(ctx context.Context, senderCopy store.Mes
 // sendDraft sends a draft message to recipients.
 // Creates a copy of the message for the sender and each recipient.
 // threadID and replyToID are optional thread context for conversation support.
-func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, threadID, replyToID string) (store.Message, error) {
+func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, threadID, replyToID string, ttl time.Duration, scheduleAt *time.Time) (store.Message, error) {
 	if err := m.checkAccess(); err != nil {
 		return nil, err
 	}
@@ -310,17 +364,24 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 		return nil, sendErr
 	}
 
-	// Step 5: Create sender's copy
-	senderCopy, err := m.createSenderMessage(ctx, draft, threadID, replyToID)
+	// Step 5: Compute TTL fields at send time
+	expiresAt, availableAt, err := m.computeTTLFields(ttl, scheduleAt)
 	if err != nil {
 		sendErr = err
 		return nil, sendErr
 	}
 
-	// Step 6: Deliver to recipients (use sender message ID for idempotency)
-	deliveredTo, failedRecipients := m.deliverToRecipients(ctx, draft, threadID, replyToID, senderCopy.GetID())
+	// Step 6: Create sender's copy
+	senderCopy, err := m.createSenderMessage(ctx, draft, threadID, replyToID, expiresAt, availableAt)
+	if err != nil {
+		sendErr = err
+		return nil, sendErr
+	}
 
-	// Step 7: Handle total delivery failure
+	// Step 7: Deliver to recipients (use sender message ID for idempotency)
+	deliveredTo, failedRecipients := m.deliverToRecipients(ctx, draft, threadID, replyToID, senderCopy.GetID(), expiresAt, availableAt)
+
+	// Step 8: Handle total delivery failure
 	if len(deliveredTo) == 0 {
 		rollbackErr := m.rollbackSenderMessage(ctx, senderCopy)
 		sendErr = fmt.Errorf("send failed: all %d recipients failed delivery", len(draft.GetRecipientIDs()))
@@ -330,7 +391,7 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 		return nil, sendErr
 	}
 
-	// Step 8: Finalize successful delivery
+	// Step 9: Finalize successful delivery
 	now := time.Now().UTC()
 	updatedSenderCopy, eventErr := m.finalizeDelivery(ctx, senderCopy, deliveredTo, draft, now)
 	if eventErr != nil {
@@ -340,13 +401,13 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 		return updatedSenderCopy, sendErr
 	}
 
-	// Step 9: Plugin AfterSend hook (runs even on partial delivery since message was sent)
+	// Step 10: Plugin AfterSend hook (runs even on partial delivery since message was sent)
 	if err := m.service.plugins.afterSend(ctx, m.userID, updatedSenderCopy); err != nil {
 		sendErr = err
 		return updatedSenderCopy, sendErr
 	}
 
-	// Step 10: Handle partial delivery
+	// Step 11: Handle partial delivery
 	if len(failedRecipients) > 0 {
 		sendErr = &PartialDeliveryError{
 			MessageID:        updatedSenderCopy.GetID(),
@@ -393,7 +454,7 @@ func (m *userMailbox) SendMessage(ctx context.Context, req SendRequest) (Message
 	}
 
 	// Send via existing flow — return message even on partial delivery or event error
-	msg, err := m.sendDraft(ctx, draft, req.ThreadID, req.ReplyToID)
+	msg, err := m.sendDraft(ctx, draft, req.ThreadID, req.ReplyToID, req.TTL, req.ScheduleAt)
 	if msg != nil {
 		return newMessage(msg, m), err
 	}

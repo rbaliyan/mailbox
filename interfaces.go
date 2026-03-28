@@ -3,6 +3,7 @@ package mailbox
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/rbaliyan/mailbox/notify"
 	"github.com/rbaliyan/mailbox/store"
@@ -229,6 +230,16 @@ type SendRequest struct {
 	AttachmentIDs []string
 	ThreadID      string
 	ReplyToID     string
+
+	// TTL is an optional message time-to-live. When set, the message will be
+	// eligible for automatic deletion after this duration from send time.
+	// Zero means no per-message TTL (the service default TTL may still apply).
+	TTL time.Duration
+
+	// ScheduleAt is an optional delivery schedule. When set, the message is
+	// hidden from recipient queries until this UTC time.
+	// Nil means the message is immediately available.
+	ScheduleAt *time.Time
 }
 
 // MessageSender provides direct message sending without drafts.

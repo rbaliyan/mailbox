@@ -15,7 +15,8 @@ import (
 // It must match the field order expected by scanMessage / scanMessageFromRows.
 const messageColumns = `id, owner_id, sender_id, subject, body, headers, metadata, status, folder_id,
        is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
-       idempotency_key, thread_id, reply_to_id, created_at, updated_at`
+       idempotency_key, thread_id, reply_to_id, expires_at, available_at,
+       created_at, updated_at`
 
 func (s *Store) Get(ctx context.Context, id string) (store.Message, error) {
 	if err := s.checkConnected(); err != nil {
@@ -66,6 +67,7 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 	// Build WHERE clause
 	where, args := s.buildWhereClause(filters)
 	where = where + " AND is_draft = false"
+	where = where + " AND (available_at IS NULL OR available_at <= NOW())"
 
 	// Count total
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE %s`, s.opts.table, where)
@@ -162,6 +164,7 @@ func (s *Store) Count(ctx context.Context, filters []store.Filter) (int64, error
 
 	where, args := s.buildWhereClause(filters)
 	where = where + " AND is_draft = false"
+	where = where + " AND (available_at IS NULL OR available_at <= NOW())"
 
 	query := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE %s`, s.opts.table, where)
 	var count int64
@@ -223,8 +226,9 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 		argIdx++
 	}
 
-	// Always exclude deleted and drafts
+	// Always exclude deleted, drafts, and not-yet-available messages
 	conditions = append(conditions, "is_draft = false")
+	conditions = append(conditions, "(available_at IS NULL OR available_at <= NOW())")
 
 	where := strings.Join(conditions, " AND ")
 	if where == "" {

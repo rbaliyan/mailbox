@@ -119,6 +119,13 @@ type options struct {
 
 	// Notification coalescing
 	notifyCoalesce bool // If true, coalesce notification events by message ID
+
+	// Per-message TTL and scheduling
+	defaultTTL       time.Duration // Default TTL for messages; 0 means disabled
+	minTTL           time.Duration // Minimum allowed TTL (default: 1 minute)
+	maxTTL           time.Duration // Maximum allowed TTL (0 = unlimited)
+	minScheduleDelay time.Duration // Minimum schedule delay (0 = no minimum)
+	maxScheduleDelay time.Duration // Maximum schedule delay (0 = unlimited)
 }
 
 // EventPublishFailureFunc is called when an event fails to publish.
@@ -149,6 +156,8 @@ func newOptions(opts ...Option) *options {
 		logger:         slog.Default(),
 		trashRetention:   DefaultTrashRetention,
 		messageRetention: DefaultMessageRetention,
+		// TTL defaults
+		minTTL: 1 * time.Minute, // 1 minute minimum TTL
 		// Message limits defaults
 		maxSubjectLength:   DefaultMaxSubjectLength,
 		maxBodySize:        DefaultMaxBodySize,
@@ -271,6 +280,58 @@ func WithMessageRetention(d time.Duration) Option {
 	return func(o *options) {
 		if d >= MinMessageRetention {
 			o.messageRetention = d
+		}
+	}
+}
+
+// WithDefaultTTL sets the default per-message time-to-live. When a message is
+// sent without an explicit TTL, this default is applied. The message will be
+// eligible for automatic deletion after this duration from send time.
+// Default is 0 (disabled — messages do not expire unless explicitly set).
+func WithDefaultTTL(d time.Duration) Option {
+	return func(o *options) {
+		if d >= 0 {
+			o.defaultTTL = d
+		}
+	}
+}
+
+// WithMinTTL sets the minimum allowed TTL. Messages with a shorter TTL
+// are rejected. Default is 1 minute.
+func WithMinTTL(d time.Duration) Option {
+	return func(o *options) {
+		if d > 0 {
+			o.minTTL = d
+		}
+	}
+}
+
+// WithMaxTTL sets the maximum allowed TTL. Messages with a longer TTL
+// are rejected. Default is 0 (unlimited).
+func WithMaxTTL(d time.Duration) Option {
+	return func(o *options) {
+		if d > 0 {
+			o.maxTTL = d
+		}
+	}
+}
+
+// WithMinScheduleDelay sets the minimum allowed schedule delay from now.
+// Default is 0 (no minimum).
+func WithMinScheduleDelay(d time.Duration) Option {
+	return func(o *options) {
+		if d > 0 {
+			o.minScheduleDelay = d
+		}
+	}
+}
+
+// WithMaxScheduleDelay sets the maximum allowed schedule delay from now.
+// Default is 0 (unlimited).
+func WithMaxScheduleDelay(d time.Duration) Option {
+	return func(o *options) {
+		if d > 0 {
+			o.maxScheduleDelay = d
 		}
 	}
 }
