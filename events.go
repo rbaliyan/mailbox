@@ -9,6 +9,19 @@ import (
 	"github.com/rbaliyan/event/v3"
 )
 
+// MetadataMessageID is the event metadata key used for coalescing.
+// When notification coalescing is enabled, events with the same message_id
+// in metadata are collapsed so only the latest is delivered.
+const MetadataMessageID = "message_id"
+
+// ctxWithMessageID returns a context with message_id set in event metadata.
+// This enables WithCoalesceByMetadata to extract the key without decoding the payload.
+func ctxWithMessageID(ctx context.Context, messageID string) context.Context {
+	return event.ContextWithMetadata(ctx, map[string]string{
+		MetadataMessageID: messageID,
+	})
+}
+
 // Event names for mailbox events.
 const (
 	EventNameMessageSent     = "mailbox.message.sent"

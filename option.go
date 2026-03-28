@@ -116,6 +116,9 @@ type options struct {
 	claimMinIdle       time.Duration // Min idle time before claiming a message (default: 60s)
 	claimBatchSize     int64         // Max messages to claim per cycle (default: 100)
 	eventStreamMaxLen  int64         // Max entries per event stream, 0 = unlimited (default: 0)
+
+	// Notification coalescing
+	notifyCoalesce bool // If true, coalesce notification events by message ID
 }
 
 // EventPublishFailureFunc is called when an event fails to publish.
@@ -637,6 +640,20 @@ func WithEventStreamMaxLen(n int64) Option {
 		if n >= 0 {
 			o.eventStreamMaxLen = n
 		}
+	}
+}
+
+// WithNotificationCoalescing enables event coalescing for notification handlers.
+// When enabled, multiple events for the same message ID within the coalescing
+// window are collapsed — only the latest event is delivered to the notification
+// stream. This reduces SSE noise for rapidly-updated messages (e.g., a message
+// that is sent, then immediately moved or read).
+//
+// Requires message_id metadata on published events (automatically added).
+// Default is disabled.
+func WithNotificationCoalescing(enabled bool) Option {
+	return func(o *options) {
+		o.notifyCoalesce = enabled
 	}
 }
 

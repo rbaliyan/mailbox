@@ -162,7 +162,7 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 		deliveredTo = append(deliveredTo, recipientID)
 
 		// Publish per-recipient received event (best-effort, don't fail delivery)
-		if pubErr := m.service.events.MessageReceived.Publish(ctx, MessageReceivedEvent{
+		if pubErr := m.service.events.MessageReceived.Publish(ctxWithMessageID(ctx, recipientCopy.GetID()), MessageReceivedEvent{
 			MessageID:   recipientCopy.GetID(),
 			RecipientID: recipientID,
 			SenderID:    m.userID,
@@ -223,7 +223,7 @@ func (m *userMailbox) finalizeDelivery(ctx context.Context, senderCopy store.Mes
 	}
 
 	// Publish event - do this AFTER we have the updated copy so we can return it even on error
-	if err := m.service.events.MessageSent.Publish(ctx, MessageSentEvent{
+	if err := m.service.events.MessageSent.Publish(ctxWithMessageID(ctx, senderCopy.GetID()), MessageSentEvent{
 		MessageID:    senderCopy.GetID(),
 		SenderID:     senderCopy.GetSenderID(),
 		RecipientIDs: deliveredTo,
