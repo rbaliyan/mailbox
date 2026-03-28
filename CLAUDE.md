@@ -108,7 +108,7 @@ mailbox/
 - `Connect(ctx)` / `Close(ctx)` - lifecycle management
 - `Client(userID)` - returns a Mailbox for a specific user
 - `CleanupTrash(ctx)` - manual trash cleanup
-- `CleanupExpiredMessages(ctx)` - manual message retention cleanup
+- `CleanupExpiredMessages(ctx)` - deletes globally expired + per-message TTL-expired messages
 - `EnforceQuotas(ctx, userIDs)` - enforce delete-oldest quotas
 - `Events()` - per-service event instances
 - `Notifications(ctx, userID, lastEventID)` - notification stream
@@ -141,6 +141,7 @@ mailbox/
 *MaintenanceStore* - background task operations:
 - `DeleteExpiredTrash(ctx, cutoff)` - atomic trash cleanup
 - `DeleteExpiredMessages(ctx, cutoff)` - atomic message retention cleanup
+- `DeleteTTLExpiredMessages(ctx, now)` - atomic per-message TTL cleanup
 - `DeleteMessagesByIDs(ctx, ids)` - atomic delete with winner reporting
 
 **AttachmentStore** (file storage):
@@ -289,7 +290,7 @@ All configuration is done via the functional options pattern.
 | `WithMaxBodySize(int)` | 10MB | Max body size in bytes |
 | `WithMaxAttachmentSize(int64)` | 25MB | Max attachment size in bytes |
 | `WithMaxAttachmentCount(int)` | 20 | Max attachments per message |
-| `WithMaxRecipientCount(int)` | 100 | Max recipients per message |
+| `WithMaxRecipients(int)` | 100 | Max recipients per message |
 | `WithMaxMetadataSize(int)` | 64KB | Max total metadata size |
 | `WithMaxMetadataKeys(int)` | 100 | Max metadata keys |
 
@@ -314,6 +315,22 @@ All configuration is done via the functional options pattern.
 | `WithTrashRetention(time.Duration)` | 30 days | Time before trash cleanup eligibility |
 | `WithMessageRetention(time.Duration)` | 0 (disabled) | Global message TTL based on created_at. Min 1 day |
 
+### Per-Message TTL and Scheduling
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithDefaultTTL(time.Duration)` | 0 (disabled) | Default TTL applied when no explicit TTL set |
+| `WithMinTTL(time.Duration)` | 1 minute | Minimum allowed TTL; shorter values rejected with `ErrInvalidTTL` |
+| `WithMaxTTL(time.Duration)` | 0 (unlimited) | Maximum allowed TTL; longer values rejected with `ErrInvalidTTL` |
+| `WithMinScheduleDelay(time.Duration)` | 0 (no min) | Minimum schedule delay from now |
+| `WithMaxScheduleDelay(time.Duration)` | 0 (unlimited) | Maximum schedule delay; rejected with `ErrInvalidSchedule` |
+
+Messages support two optional time fields:
+- **TTL** (`SendRequest.TTL` / `draft.SetTTL(d)`): message auto-deleted after expiry via `CleanupExpiredMessages`
+- **Schedule** (`SendRequest.ScheduleAt` / `draft.SetScheduleAt(t)`): message hidden from queries until the scheduled time
+
+When both are set, the TTL starts from the scheduled delivery time, not from send time. A message scheduled for 1h with 30m TTL expires at 1h30m.
+
 ### Observability
 
 | Option | Default | Description |
@@ -330,6 +347,8 @@ All configuration is done via the functional options pattern.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `WithNotifier(*notify.Notifier)` | nil | Per-user notification system |
+| `WithNotificationCoalescing(bool)` | false | Coalesce events by message ID (latest wins) |
+| `WithStatsRefreshInterval(time.Duration)` | 30s | TTL for cached stats (event-driven invalidation) |
 
 Notifier options (`notify.NewNotifier(...)`):
 
@@ -388,7 +407,7 @@ svc, err := mailbox.NewService(
     // Optional: Limits
     mailbox.WithMaxBodySize(5 * 1024 * 1024), // 5MB
     mailbox.WithMaxAttachmentSize(50 * 1024 * 1024), // 50MB
-    mailbox.WithMaxRecipientCount(500),
+    mailbox.WithMaxRecipients(500),
 
     // Optional: Trash
     mailbox.WithTrashRetention(7 * 24 * time.Hour), // 7 days
