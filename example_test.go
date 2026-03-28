@@ -769,7 +769,10 @@ func Example_partialDelivery() {
 // Example_stats demonstrates aggregate statistics.
 func Example_stats() {
 	ctx := context.Background()
-	svc := newTestService()
+	// Use a plain service (no event transport) to avoid stats cache interference
+	// from other examples running in the same process.
+	svc, _ := mailbox.NewService(mailbox.WithStore(memory.New()))
+	svc.Connect(ctx)
 	defer svc.Close(ctx)
 
 	alice := svc.Client("alice")
