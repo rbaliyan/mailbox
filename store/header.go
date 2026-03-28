@@ -36,4 +36,8 @@ const (
 
 	// HeaderCustomID is a caller-defined external identifier.
 	HeaderCustomID = "Custom-ID"
+
+	// HeaderEncryption indicates the message body is encrypted.
+	// Example: "aes-256-gcm".
+	HeaderEncryption = "X-Encryption"
 )
