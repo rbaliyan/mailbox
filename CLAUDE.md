@@ -85,6 +85,17 @@ mailbox/
 │       ├── gcs/        # GCS attachment store
 │       ├── cached/     # Caching wrapper
 │       └── otel/       # OpenTelemetry wrapper
+├── compress/
+│   └── compress.go     # Gzip compression plugin (SendHook) + Decompress/Open helpers
+├── crypto/
+│   ├── crypto.go       # E2E encryption constants, errors, KeyType
+│   ├── encrypt.go      # EncryptionPlugin (SendHook)
+│   ├── decrypt.go      # Decrypt, Open (client-side helpers)
+│   ├── envelope.go     # AES-256-GCM, X25519/RSA-OAEP key wrapping
+│   ├── key_resolver.go # KeyResolver, PrivateKeyProvider, StaticKeyResolver
+│   └── option.go       # WithKeyType option
+├── content/
+│   └── codec.go        # Content encoding/decoding with schema support
 └── resolver/
     └── static.go       # Static recipient resolver
 ```
@@ -97,14 +108,21 @@ mailbox/
 - `Connect(ctx)` / `Close(ctx)` - lifecycle management
 - `Client(userID)` - returns a Mailbox for a specific user
 - `CleanupTrash(ctx)` - manual trash cleanup
+- `CleanupExpiredMessages(ctx)` - manual message retention cleanup
+- `EnforceQuotas(ctx, userIDs)` - enforce delete-oldest quotas
+- `Events()` - per-service event instances
+- `Notifications(ctx, userID, lastEventID)` - notification stream
 
 **Mailbox** (user-facing API):
 - `UserID()` - returns the mailbox owner's user ID
 - `Compose()` - start a new draft
+- `SendMessage(ctx, req)` - send without draft workflow
 - `Get(ctx, id)` - retrieve a message
-- `Inbox(ctx, opts)` / `Sent(ctx, opts)` / `Trash(ctx, opts)` - list messages
+- `Folder(ctx, folderID, opts)` - list messages in any folder
 - `Search(ctx, query)` - full-text search
+- `Stream(ctx, filters, opts)` - iterator-based streaming
 - `GetThread(ctx, threadID, opts)` / `GetReplies(ctx, messageID, opts)` - thread support
+- `Stats(ctx)` / `UnreadCount(ctx)` - aggregate statistics
 
 **Store** (storage backend - composed of three sub-interfaces):
 
@@ -122,6 +140,8 @@ mailbox/
 
 *MaintenanceStore* - background task operations:
 - `DeleteExpiredTrash(ctx, cutoff)` - atomic trash cleanup
+- `DeleteExpiredMessages(ctx, cutoff)` - atomic message retention cleanup
+- `DeleteMessagesByIDs(ctx, ids)` - atomic delete with winner reporting
 
 **AttachmentStore** (file storage):
 - `Upload(ctx, ownerID, filename, reader)` / `Download(ctx, id)` / `Delete(ctx, id)`
@@ -159,12 +179,12 @@ svc, err := mailbox.NewService(
 - `Close(ctx)` marks store as disconnected (caller closes client)
 
 **Soft Delete:**
-- Messages use `Deleted` field (stored as `__deleted` in MongoDB)
-- All queries automatically filter deleted messages
+- Messages are moved to `__trash` folder (not a separate deleted flag)
+- All inbox/sent/archive queries automatically exclude trash
 
 **Type-Safe Filters:**
 ```go
-filter := store.MessageFilter("SenderID").Is("user123")
+filter, _ := store.MessageFilter("SenderID").Equal("user123")
 filter2 := store.OwnerIs("user456")
 filter3 := store.InFolder(store.FolderInbox)
 ```
@@ -178,16 +198,15 @@ filter3 := store.InFolder(store.FolderInbox)
 
 ### Events
 
-When events are registered via `RegisterEvents`, mailbox publishes events:
+Events are automatically registered during `Connect()` when a Redis client or event transport is provided. Use per-service events via `svc.Events()`:
 
 ```go
-// Register events with an event bus
-mailbox.RegisterEvents(ctx, bus)
-
-// Subscribe to events
-mailbox.EventMessageSent.Subscribe(ctx, handler)
-mailbox.EventMessageRead.Subscribe(ctx, handler)
-mailbox.EventMessageDeleted.Subscribe(ctx, handler)
+svc.Events().MessageSent.Subscribe(ctx, handler)
+svc.Events().MessageReceived.Subscribe(ctx, handler)
+svc.Events().MessageRead.Subscribe(ctx, handler)
+svc.Events().MessageDeleted.Subscribe(ctx, handler)
+svc.Events().MessageMoved.Subscribe(ctx, handler)
+svc.Events().MarkAllRead.Subscribe(ctx, handler)
 ```
 
 Events are published after successful operations. Event payloads include message ID, user ID, and timestamps.
@@ -260,9 +279,7 @@ All configuration is done via the functional options pattern.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `WithStore(store.Store)` | **required** | Storage backend (MongoDB, PostgreSQL, or memory) |
-| `WithResolver(RecipientResolver)` | nil | Maps user IDs to contact info |
 | `WithLogger(*slog.Logger)` | slog.Default() | Structured logger |
-| `WithDefaultTimeout(time.Duration)` | 30s | Default operation timeout |
 
 ### Message Limits
 
@@ -290,11 +307,12 @@ All configuration is done via the functional options pattern.
 | `WithMaxConcurrentSends(int)` | 10 | Max concurrent send operations |
 | `WithShutdownTimeout(time.Duration)` | 30s | Graceful shutdown timeout |
 
-### Trash Management
+### Trash and Retention
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `WithTrashRetention(time.Duration)` | 30 days | Time before cleanup eligibility |
+| `WithTrashRetention(time.Duration)` | 30 days | Time before trash cleanup eligibility |
+| `WithMessageRetention(time.Duration)` | 0 (disabled) | Global message TTL based on created_at. Min 1 day |
 
 ### Observability
 
@@ -323,6 +341,30 @@ Notifier options (`notify.NewNotifier(...)`):
 | `notify.WithInstanceID(string)` | "" | This instance's ID for routing |
 | `notify.WithPollInterval(time.Duration)` | 2s | Store poll interval for cross-instance events |
 | `notify.WithBufferSize(int)` | 64 | Channel buffer size for local delivery |
+
+### Quota
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithQuotaProvider(QuotaProvider)` | nil | Custom per-user quota provider |
+| `WithGlobalQuota(QuotaPolicy)` | - | Uniform quota for all users |
+
+### Events
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithRedisClient(redis.UniversalClient)` | nil | Redis Streams event transport |
+| `WithEventTransport(transport.Transport)` | nil | Custom event transport |
+| `WithEventErrorsFatal(bool)` | false | Fail operations on event publish error |
+| `WithEventPublishFailureHandler(fn)` | logger.Error | Callback for event publish failures |
+
+### Redis Event Transport Tuning
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithClaimInterval(interval, minIdle)` | 30s, 60s | Orphan message claiming from dead consumers |
+| `WithClaimBatchSize(int64)` | 100 | Max messages to claim per cycle |
+| `WithEventStreamMaxLen(int64)` | 0 (unlimited) | Max entries per Redis event stream |
 
 ### Extensions
 

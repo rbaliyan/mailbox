@@ -1,25 +1,16 @@
-// Package crypto provides optional E2E encryption and compression for mailbox messages.
+// Package crypto provides optional E2E encryption for mailbox messages.
 //
-// Encryption and compression are implemented as mailbox plugins (SendHook) that
-// transform the message body during send. Decryption is a client-side operation
-// performed after retrieving a message.
+// The EncryptionPlugin implements mailbox.SendHook and encrypts the message
+// body during send. Decryption is a client-side operation performed after
+// retrieving a message via [Open] or [Decrypt].
 //
-// # Architecture
-//
-// The processing pipeline on send is:
-//
-//	plaintext -> compress -> encrypt -> base64 -> store
-//
-// On read:
-//
-//	body -> base64-decode -> decrypt -> decompress -> plaintext
-//
-// Plugins are executed in registration order, so register compression before encryption:
+// For compression, use the separate [github.com/rbaliyan/mailbox/compress] package.
+// Register compression before encryption for compress-then-encrypt:
 //
 //	svc, _ := mailbox.NewService(
 //	    mailbox.WithStore(store),
 //	    mailbox.WithPlugins(
-//	        crypto.NewCompressionPlugin(crypto.Gzip),
+//	        compress.NewPlugin(compress.Gzip),
 //	        crypto.NewEncryptionPlugin(keys, crypto.WithKeyType(crypto.X25519)),
 //	    ),
 //	)
