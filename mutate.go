@@ -79,7 +79,7 @@ func (m *userMailbox) UpdateFlags(ctx context.Context, messageID string, flags F
 
 	// Publish read event (only for marking as read, not unread)
 	if flags.Read != nil && *flags.Read {
-		if err := m.service.events.MessageRead.Publish(ctx, MessageReadEvent{
+		if err := m.service.events.MessageRead.Publish(ctxWithMessageID(ctx, messageID), MessageReadEvent{
 			MessageID: messageID,
 			UserID:    m.userID,
 			FolderID:  currentFolderID,
@@ -197,7 +197,7 @@ func (m *userMailbox) PermanentlyDelete(ctx context.Context, messageID string) (
 	}
 
 	// Publish event
-	if err := m.service.events.MessageDeleted.Publish(ctx, MessageDeletedEvent{
+	if err := m.service.events.MessageDeleted.Publish(ctxWithMessageID(ctx, messageID), MessageDeletedEvent{
 		MessageID: messageID,
 		UserID:    m.userID,
 		FolderID:  msg.GetFolderID(),
@@ -368,7 +368,7 @@ func (m *userMailbox) MarkAllRead(ctx context.Context, folderID string) (_ int64
 		})
 
 		// Publish MarkAllRead event
-		if err := m.service.events.MarkAllRead.Publish(ctx, MarkAllReadEvent{
+		if err := m.service.events.MarkAllRead.Publish(ctxWithMessageID(ctx, folderID), MarkAllReadEvent{
 			UserID:   m.userID,
 			FolderID: folderID,
 			Count:    count,
@@ -414,7 +414,7 @@ func (m *userMailbox) publishMessageMoved(ctx context.Context, messageID, userID
 	if fromFolderID == toFolderID {
 		return nil
 	}
-	if err := m.service.events.MessageMoved.Publish(ctx, MessageMovedEvent{
+	if err := m.service.events.MessageMoved.Publish(ctxWithMessageID(ctx, messageID), MessageMovedEvent{
 		MessageID:    messageID,
 		UserID:       userID,
 		FromFolderID: fromFolderID,

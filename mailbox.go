@@ -215,28 +215,31 @@ func (s *service) initEventBus(ctx context.Context) error {
 
 	// Subscribe notification handlers with AsWorker (worker model).
 	// Each event is processed by exactly one instance in the consumer group.
+	// When notification coalescing is enabled, events with the same message_id
+	// in metadata are collapsed so only the latest is delivered.
 	if s.notifier != nil {
-		if err := events.MessageSent.Subscribe(ctx, s.onNotifyMessageSent, event.AsWorker[MessageSentEvent]()); err != nil {
+		coalesce := s.opts.notifyCoalesce
+		if err := events.MessageSent.Subscribe(ctx, s.onNotifyMessageSent, notifySubOpts[MessageSentEvent](coalesce)...); err != nil {
 			_ = bus.Close(ctx)
 			return fmt.Errorf("subscribe notify MessageSent: %w", err)
 		}
-		if err := events.MessageReceived.Subscribe(ctx, s.onNotifyMessageReceived, event.AsWorker[MessageReceivedEvent]()); err != nil {
+		if err := events.MessageReceived.Subscribe(ctx, s.onNotifyMessageReceived, notifySubOpts[MessageReceivedEvent](coalesce)...); err != nil {
 			_ = bus.Close(ctx)
 			return fmt.Errorf("subscribe notify MessageReceived: %w", err)
 		}
-		if err := events.MessageRead.Subscribe(ctx, s.onNotifyMessageRead, event.AsWorker[MessageReadEvent]()); err != nil {
+		if err := events.MessageRead.Subscribe(ctx, s.onNotifyMessageRead, notifySubOpts[MessageReadEvent](coalesce)...); err != nil {
 			_ = bus.Close(ctx)
 			return fmt.Errorf("subscribe notify MessageRead: %w", err)
 		}
-		if err := events.MessageDeleted.Subscribe(ctx, s.onNotifyMessageDeleted, event.AsWorker[MessageDeletedEvent]()); err != nil {
+		if err := events.MessageDeleted.Subscribe(ctx, s.onNotifyMessageDeleted, notifySubOpts[MessageDeletedEvent](coalesce)...); err != nil {
 			_ = bus.Close(ctx)
 			return fmt.Errorf("subscribe notify MessageDeleted: %w", err)
 		}
-		if err := events.MessageMoved.Subscribe(ctx, s.onNotifyMessageMoved, event.AsWorker[MessageMovedEvent]()); err != nil {
+		if err := events.MessageMoved.Subscribe(ctx, s.onNotifyMessageMoved, notifySubOpts[MessageMovedEvent](coalesce)...); err != nil {
 			_ = bus.Close(ctx)
 			return fmt.Errorf("subscribe notify MessageMoved: %w", err)
 		}
-		if err := events.MarkAllRead.Subscribe(ctx, s.onNotifyMarkAllRead, event.AsWorker[MarkAllReadEvent]()); err != nil {
+		if err := events.MarkAllRead.Subscribe(ctx, s.onNotifyMarkAllRead, notifySubOpts[MarkAllReadEvent](coalesce)...); err != nil {
 			_ = bus.Close(ctx)
 			return fmt.Errorf("subscribe notify MarkAllRead: %w", err)
 		}
@@ -246,6 +249,16 @@ func (s *service) initEventBus(ctx context.Context) error {
 	s.eventBus = bus
 	s.events = events
 	return nil
+}
+
+// notifySubOpts returns subscribe options for notification handlers.
+// Always uses AsWorker. Adds WithCoalesceByMetadata when coalescing is enabled.
+func notifySubOpts[T any](coalesce bool) []event.SubscribeOption[T] {
+	opts := []event.SubscribeOption[T]{event.AsWorker[T]()}
+	if coalesce {
+		opts = append(opts, event.WithCoalesceByMetadata[T](MetadataMessageID))
+	}
+	return opts
 }
 
 // Close closes connections to storage backends.
