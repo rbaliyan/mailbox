@@ -114,6 +114,8 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 			idempotency_key VARCHAR(255),
 			thread_id VARCHAR(255),
 			reply_to_id VARCHAR(255),
+			expires_at TIMESTAMPTZ,
+			available_at TIMESTAMPTZ,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)
@@ -127,6 +129,16 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 	addHeaders := fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS headers JSONB DEFAULT '{}'`, s.opts.table)
 	if _, err := s.db.ExecContext(ctx, addHeaders); err != nil {
 		s.logger.Warn("failed to add headers column (may already exist)", "error", err)
+	}
+
+	// Schema migration: add expires_at and available_at columns for existing tables
+	addExpiresAt := fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`, s.opts.table)
+	if _, err := s.db.ExecContext(ctx, addExpiresAt); err != nil {
+		s.logger.Warn("failed to add expires_at column (may already exist)", "error", err)
+	}
+	addAvailableAt := fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS available_at TIMESTAMPTZ`, s.opts.table)
+	if _, err := s.db.ExecContext(ctx, addAvailableAt); err != nil {
+		s.logger.Warn("failed to add available_at column (may already exist)", "error", err)
 	}
 
 	// Create indexes
@@ -146,6 +158,8 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_owner_folder ON %s(owner_id, folder_id, created_at DESC)`, s.opts.table, s.opts.table),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_owner_draft ON %s(owner_id, is_draft, created_at DESC)`, s.opts.table, s.opts.table),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_folder_updated ON %s(folder_id, updated_at)`, s.opts.table, s.opts.table),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_expires_at ON %s(expires_at) WHERE expires_at IS NOT NULL`, s.opts.table, s.opts.table),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_available_at ON %s(available_at) WHERE available_at IS NOT NULL`, s.opts.table, s.opts.table),
 	}
 
 	for _, idx := range indexes {

@@ -121,28 +121,90 @@ func (s *service) CleanupExpiredMessages(ctx context.Context) (*CleanupExpiredMe
 
 	result := &CleanupExpiredMessagesResult{}
 
-	// Feature disabled when retention is zero.
-	if s.opts.messageRetention == 0 {
-		return result, nil
+	// Global retention cleanup (based on created_at).
+	if s.opts.messageRetention > 0 {
+		cutoff := time.Now().UTC().Add(-s.opts.messageRetention)
+
+		if s.attachments != nil {
+			retentionResult, err := s.cleanupExpiredWithAttachments(ctx, &CleanupExpiredMessagesResult{}, cutoff)
+			if err != nil {
+				return result, err
+			}
+			result.DeletedCount += retentionResult.DeletedCount
+			result.Interrupted = retentionResult.Interrupted
+		} else {
+			deleted, err := s.store.DeleteExpiredMessages(ctx, cutoff)
+			if err != nil {
+				return result, fmt.Errorf("delete expired messages: %w", err)
+			}
+			result.DeletedCount += int(deleted)
+			if deleted > 0 {
+				s.logger.Debug("deleted expired messages", "count", deleted)
+			}
+		}
 	}
 
-	cutoff := time.Now().UTC().Add(-s.opts.messageRetention)
+	// Per-message TTL cleanup (based on expires_at).
+	if ctx.Err() != nil {
+		result.Interrupted = true
+		return result, ctx.Err()
+	}
 
 	if s.attachments != nil {
-		return s.cleanupExpiredWithAttachments(ctx, result, cutoff)
-	}
-
-	// Fast path: no attachments, bulk delete by cutoff.
-	deleted, err := s.store.DeleteExpiredMessages(ctx, cutoff)
-	if err != nil {
-		return result, fmt.Errorf("delete expired messages: %w", err)
-	}
-	result.DeletedCount = int(deleted)
-	if deleted > 0 {
-		s.logger.Debug("deleted expired messages", "count", deleted)
+		ttlResult, err := s.cleanupTTLExpiredWithAttachments(ctx)
+		if err != nil {
+			return result, err
+		}
+		result.DeletedCount += ttlResult
+	} else {
+		ttlDeleted, err := s.store.DeleteTTLExpiredMessages(ctx, time.Now().UTC())
+		if err != nil {
+			return result, fmt.Errorf("delete TTL expired messages: %w", err)
+		}
+		result.DeletedCount += int(ttlDeleted)
+		if ttlDeleted > 0 {
+			s.logger.Debug("deleted TTL expired messages", "count", ttlDeleted)
+		}
 	}
 
 	return result, nil
+}
+
+// cleanupTTLExpiredWithAttachments handles per-message TTL cleanup when
+// attachments are configured. Same safe pattern as cleanupTrashWithAttachments.
+func (s *service) cleanupTTLExpiredWithAttachments(ctx context.Context) (int, error) {
+	now := time.Now().UTC()
+
+	// The exists filter ensures we only scan messages that have expires_at set.
+	// scanExpiredMessages will add the ExpiresAt < now condition.
+	existsFilter, err := store.MessageFilter("ExpiresAt").Exists(true)
+	if err != nil {
+		return 0, fmt.Errorf("create expires_at exists filter: %w", err)
+	}
+
+	dummyResult := &CleanupExpiredMessagesResult{}
+	messageAttachments, scannedIDs, err := s.scanExpiredMessages(ctx, dummyResult, []store.Filter{
+		existsFilter,
+	}, "ExpiresAt", now)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(scannedIDs) == 0 {
+		return 0, nil
+	}
+
+	deletedIDs, err := s.store.DeleteMessagesByIDs(ctx, scannedIDs)
+	if err != nil {
+		return 0, fmt.Errorf("delete TTL expired messages by IDs: %w", err)
+	}
+	if len(deletedIDs) > 0 {
+		s.logger.Debug("deleted TTL expired messages", "count", len(deletedIDs))
+	}
+
+	s.releaseAttachmentRefs(ctx, deletedIDs, messageAttachments)
+
+	return len(deletedIDs), nil
 }
 
 // cleanupExpiredWithAttachments handles message retention cleanup when attachments

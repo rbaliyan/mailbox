@@ -56,6 +56,30 @@ func matchesFilter(m *message, f store.Filter) bool {
 		fieldValue = m.updatedAt
 	case "is_draft":
 		fieldValue = m.isDraft
+	case "expires_at":
+		// nil means "never expires" — comparison filters should not match nil.
+		if m.expiresAt == nil {
+			switch op {
+			case "exists":
+				exists, _ := value.(bool)
+				return !exists // nil means does not exist
+			default:
+				return false // nil never matches comparison operators
+			}
+		}
+		fieldValue = *m.expiresAt
+	case "available_at":
+		// nil means "immediately available" — comparison filters should not match nil.
+		if m.availableAt == nil {
+			switch op {
+			case "exists":
+				exists, _ := value.(bool)
+				return !exists
+			default:
+				return false
+			}
+		}
+		fieldValue = *m.availableAt
 	default:
 		return true // Unknown field, skip filter
 	}
@@ -226,6 +250,70 @@ func (s *Store) AgeMessagesByID(d time.Duration, ids ...string) {
 			m := v.(*message)
 			m.createdAt = m.createdAt.Add(-d)
 			m.updatedAt = m.updatedAt.Add(-d)
+		}
+	}
+}
+
+// AgeTTLByID shifts expiresAt backward by the given duration for the specified
+// message IDs. This is intended for testing per-message TTL cleanup.
+//
+// This method is NOT safe for concurrent use. See AgeMessages for details.
+func (s *Store) AgeTTLByID(d time.Duration, ids ...string) {
+	for _, id := range ids {
+		if v, ok := s.messages.Load(id); ok {
+			m := v.(*message)
+			if m.expiresAt != nil {
+				t := m.expiresAt.Add(-d)
+				m.expiresAt = &t
+			}
+		}
+	}
+}
+
+// AgeScheduleAll shifts availableAt backward by the given duration for all
+// non-draft messages that have availableAt set. This is intended for testing
+// scheduled delivery.
+//
+// This method is NOT safe for concurrent use. See AgeMessages for details.
+func (s *Store) AgeScheduleAll(d time.Duration) {
+	s.messages.Range(func(key, value any) bool {
+		m := value.(*message)
+		if !m.isDraft && m.availableAt != nil {
+			t := m.availableAt.Add(-d)
+			m.availableAt = &t
+		}
+		return true
+	})
+}
+
+// AgeTTLAll shifts expiresAt backward by the given duration for all
+// non-draft messages that have expiresAt set. This is intended for testing
+// per-message TTL cleanup.
+//
+// This method is NOT safe for concurrent use. See AgeMessages for details.
+func (s *Store) AgeTTLAll(d time.Duration) {
+	s.messages.Range(func(key, value any) bool {
+		m := value.(*message)
+		if !m.isDraft && m.expiresAt != nil {
+			t := m.expiresAt.Add(-d)
+			m.expiresAt = &t
+		}
+		return true
+	})
+}
+
+// AgeScheduleByID shifts availableAt backward by the given duration for the
+// specified message IDs. This is intended for testing scheduled delivery.
+//
+// This method is NOT safe for concurrent use. See AgeMessages for details.
+func (s *Store) AgeScheduleByID(d time.Duration, ids ...string) {
+	for _, id := range ids {
+		if v, ok := s.messages.Load(id); ok {
+			m := v.(*message)
+			if m.availableAt != nil {
+				t := m.availableAt.Add(-d)
+				m.availableAt = &t
+			}
 		}
 	}
 }

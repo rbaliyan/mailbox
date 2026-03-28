@@ -337,4 +337,13 @@ type MaintenanceStore interface {
 	//
 	// Messages that do not exist or were already deleted are silently skipped.
 	DeleteMessagesByIDs(ctx context.Context, ids []string) ([]string, error)
+
+	// DeleteTTLExpiredMessages atomically deletes all non-draft messages
+	// whose expires_at is non-null and before the given time.
+	//
+	// This handles per-message TTL cleanup, as opposed to DeleteExpiredMessages
+	// which handles global retention based on created_at.
+	//
+	// Returns the number of messages deleted and any error encountered.
+	DeleteTTLExpiredMessages(ctx context.Context, now time.Time) (int64, error)
 }

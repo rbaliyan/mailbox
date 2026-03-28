@@ -21,7 +21,7 @@ func (s *Store) CountByFolders(ctx context.Context, ownerID string, folderIDs []
 	counts := make(map[string]store.FolderCounts, len(folderIDs))
 	s.messages.Range(func(_, v any) bool {
 		m := v.(*message)
-		if m.isDraft || m.ownerID != ownerID {
+		if m.isDraft || m.ownerID != ownerID || !isAvailableNow(m) {
 			return true
 		}
 		if !folderSet[m.folderID] {
@@ -63,7 +63,7 @@ func (s *Store) ListDistinctFolders(ctx context.Context, ownerID string) ([]stri
 	seen := make(map[string]bool)
 	s.messages.Range(func(_, v any) bool {
 		m := v.(*message)
-		if m.isDraft || m.ownerID != ownerID {
+		if m.isDraft || m.ownerID != ownerID || !isAvailableNow(m) {
 			return true
 		}
 		seen[m.folderID] = true
@@ -94,6 +94,9 @@ func (s *Store) MailboxStats(ctx context.Context, ownerID string) (*store.Mailbo
 		}
 		if m.isDraft {
 			stats.DraftCount++
+			return true
+		}
+		if !isAvailableNow(m) {
 			return true
 		}
 		stats.TotalMessages++

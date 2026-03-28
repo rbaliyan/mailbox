@@ -3,9 +3,17 @@ package memory
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/rbaliyan/mailbox/store"
 )
+
+// isAvailableNow returns true if the message is currently visible.
+// Messages with nil availableAt are immediately available.
+// Messages with a future availableAt are hidden.
+func isAvailableNow(m *message) bool {
+	return m.availableAt == nil || !m.availableAt.After(time.Now().UTC())
+}
 
 // Get retrieves a message by ID.
 func (s *Store) Get(ctx context.Context, id string) (store.Message, error) {
@@ -38,7 +46,7 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 	var all []*message
 	s.messages.Range(func(_, v any) bool {
 		m := v.(*message)
-		if !m.isDraft && matchesFilters(m, filters) {
+		if !m.isDraft && isAvailableNow(m) && matchesFilters(m, filters) {
 			all = append(all, m)
 		}
 		return true
@@ -101,7 +109,7 @@ func (s *Store) Count(ctx context.Context, filters []store.Filter) (int64, error
 	var count int64
 	s.messages.Range(func(_, v any) bool {
 		m := v.(*message)
-		if !m.isDraft && matchesFilters(m, filters) {
+		if !m.isDraft && isAvailableNow(m) && matchesFilters(m, filters) {
 			count++
 		}
 		return true
@@ -121,6 +129,9 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 	s.messages.Range(func(_, v any) bool {
 		m := v.(*message)
 		if m.isDraft {
+			return true
+		}
+		if !isAvailableNow(m) {
 			return true
 		}
 		if query.OwnerID != "" && m.ownerID != query.OwnerID {

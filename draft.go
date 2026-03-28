@@ -3,6 +3,7 @@ package mailbox
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/rbaliyan/mailbox/store"
 )
@@ -33,6 +34,16 @@ type DraftComposer interface {
 	SetBody(body string) DraftComposer
 	SetHeader(key, value string) DraftComposer
 	SetMetadata(key string, value any) DraftComposer
+
+	// SetTTL sets the message time-to-live. The message will be eligible for
+	// automatic deletion after this duration from send time. A zero duration
+	// clears any previously set TTL.
+	SetTTL(d time.Duration) DraftComposer
+
+	// SetScheduleAt sets the time at which the message becomes visible to
+	// recipients. Before this time, the message is hidden from queries.
+	// A zero time clears any previously set schedule.
+	SetScheduleAt(t time.Time) DraftComposer
 }
 
 // DraftPreparer provides draft preparation methods that can fail.
@@ -111,11 +122,13 @@ type Draft interface {
 
 // draft is the internal implementation of Draft.
 type draft struct {
-	mailbox   *userMailbox
-	message   store.DraftMessage
-	saved     bool
-	threadID  string
-	replyToID string
+	mailbox    *userMailbox
+	message    store.DraftMessage
+	saved      bool
+	threadID   string
+	replyToID  string
+	ttl        time.Duration
+	scheduleAt *time.Time
 }
 
 // newDraft creates a new draft for the given mailbox.
@@ -191,6 +204,25 @@ func (d *draft) SetHeader(key, value string) DraftComposer {
 // SetMetadata sets a metadata key-value pair.
 func (d *draft) SetMetadata(key string, value any) DraftComposer {
 	d.message.SetMetadata(key, value)
+	return d
+}
+
+// SetTTL sets the message time-to-live.
+func (d *draft) SetTTL(dur time.Duration) DraftComposer {
+	d.ttl = dur
+	d.message.SetTTL(dur)
+	return d
+}
+
+// SetScheduleAt sets the scheduled delivery time.
+func (d *draft) SetScheduleAt(t time.Time) DraftComposer {
+	if t.IsZero() {
+		d.scheduleAt = nil
+	} else {
+		ut := t.UTC()
+		d.scheduleAt = &ut
+	}
+	d.message.SetScheduleAt(t)
 	return d
 }
 
@@ -303,7 +335,7 @@ func (d *draft) ReplyToID() string {
 // On partial delivery, returns both the sent message and a PartialDeliveryError.
 // On event publish failure, returns both the sent message and an EventPublishError.
 func (d *draft) Send(ctx context.Context) (Message, error) {
-	msg, err := d.mailbox.sendDraft(ctx, d.message, d.threadID, d.replyToID)
+	msg, err := d.mailbox.sendDraft(ctx, d.message, d.threadID, d.replyToID, d.ttl, d.scheduleAt)
 	if msg != nil {
 		d.saved = true
 		return newMessage(msg, d.mailbox), err

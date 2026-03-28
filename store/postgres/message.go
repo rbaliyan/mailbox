@@ -39,6 +39,8 @@ type message struct {
 	idempotencyKey string
 	threadID       string
 	replyToID      string
+	expiresAt      *time.Time
+	availableAt    *time.Time
 	createdAt      time.Time
 	updatedAt      time.Time
 }
@@ -62,6 +64,8 @@ func (m *message) GetCreatedAt() time.Time            { return m.createdAt }
 func (m *message) GetUpdatedAt() time.Time            { return m.updatedAt }
 func (m *message) GetThreadID() string                { return m.threadID }
 func (m *message) GetReplyToID() string               { return m.replyToID }
+func (m *message) GetExpiresAt() *time.Time           { return m.expiresAt }
+func (m *message) GetAvailableAt() *time.Time         { return m.availableAt }
 
 // Draft setters (fluent)
 func (m *message) SetSubject(subject string) store.DraftMessage {
@@ -97,6 +101,26 @@ func (m *message) SetMetadata(key string, value any) store.DraftMessage {
 
 func (m *message) AddAttachment(attachment store.Attachment) store.DraftMessage {
 	m.attachments = append(m.attachments, attachment)
+	return m
+}
+
+func (m *message) SetTTL(d time.Duration) store.DraftMessage {
+	if d <= 0 {
+		m.expiresAt = nil
+	} else {
+		t := time.Now().UTC().Add(d)
+		m.expiresAt = &t
+	}
+	return m
+}
+
+func (m *message) SetScheduleAt(t time.Time) store.DraftMessage {
+	if t.IsZero() {
+		m.availableAt = nil
+	} else {
+		ut := t.UTC()
+		m.availableAt = &ut
+	}
 	return m
 }
 
@@ -140,7 +164,7 @@ type rowScanner interface {
 func (s *Store) scanMessage(row rowScanner) (*message, error) {
 	var msg message
 	var headersJSON, metadataJSON, attachmentsJSON []byte
-	var readAt sql.NullTime
+	var readAt, expiresAt, availableAt sql.NullTime
 	var idempotencyKey, threadID, replyToID sql.NullString
 
 	err := row.Scan(
@@ -148,6 +172,7 @@ func (s *Store) scanMessage(row rowScanner) (*message, error) {
 		&headersJSON, &metadataJSON, &msg.status, &msg.folderID, &msg.isRead, &readAt,
 		pq.Array(&msg.recipientIDs), pq.Array(&msg.tags), &attachmentsJSON,
 		&msg.isDeleted, &msg.isDraft, &idempotencyKey, &threadID, &replyToID,
+		&expiresAt, &availableAt,
 		&msg.createdAt, &msg.updatedAt,
 	)
 	if err != nil {
@@ -165,6 +190,12 @@ func (s *Store) scanMessage(row rowScanner) (*message, error) {
 	}
 	if replyToID.Valid {
 		msg.replyToID = replyToID.String
+	}
+	if expiresAt.Valid {
+		msg.expiresAt = &expiresAt.Time
+	}
+	if availableAt.Valid {
+		msg.availableAt = &availableAt.Time
 	}
 
 	// Unmarshal JSON fields

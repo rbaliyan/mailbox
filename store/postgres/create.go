@@ -41,8 +41,8 @@ func (s *Store) CreateMessage(ctx context.Context, data store.MessageData) (stor
 	query := fmt.Sprintf(`
 		INSERT INTO %s (id, owner_id, sender_id, subject, body, headers, metadata, status, folder_id,
 		                recipient_ids, tags, attachments, is_draft, thread_id, reply_to_id,
-		                created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		                expires_at, available_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 		RETURNING id
 	`, s.opts.table)
 
@@ -50,7 +50,8 @@ func (s *Store) CreateMessage(ctx context.Context, data store.MessageData) (stor
 	err = s.db.QueryRowContext(ctx, query,
 		id, data.OwnerID, data.SenderID, data.Subject, data.Body, headersJSON, metadataJSON,
 		data.Status, data.FolderID, pq.Array(data.RecipientIDs), pq.Array(data.Tags),
-		attachmentsJSON, false, data.ThreadID, data.ReplyToID, now, now,
+		attachmentsJSON, false, data.ThreadID, data.ReplyToID,
+		data.ExpiresAt, data.AvailableAt, now, now,
 	).Scan(&returnedID)
 	if err != nil {
 		return nil, fmt.Errorf("insert message: %w", err)
@@ -71,6 +72,8 @@ func (s *Store) CreateMessage(ctx context.Context, data store.MessageData) (stor
 		attachments:  data.Attachments,
 		threadID:     data.ThreadID,
 		replyToID:    data.ReplyToID,
+		expiresAt:    data.ExpiresAt,
+		availableAt:  data.AvailableAt,
 		createdAt:    now,
 		updatedAt:    now,
 	}, nil
@@ -119,14 +122,15 @@ func (s *Store) CreateMessages(ctx context.Context, data []store.MessageData) ([
 		query := fmt.Sprintf(`
 			INSERT INTO %s (id, owner_id, sender_id, subject, body, headers, metadata, status, folder_id,
 			                recipient_ids, tags, attachments, is_draft, thread_id, reply_to_id,
-			                created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+			                expires_at, available_at, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 		`, s.opts.table)
 
 		_, err = tx.ExecContext(ctx, query,
 			id, d.OwnerID, d.SenderID, d.Subject, d.Body, headersJSON, metadataJSON,
 			d.Status, d.FolderID, pq.Array(d.RecipientIDs), pq.Array(d.Tags),
-			attachmentsJSON, false, d.ThreadID, d.ReplyToID, now, now,
+			attachmentsJSON, false, d.ThreadID, d.ReplyToID,
+			d.ExpiresAt, d.AvailableAt, now, now,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("insert message: %w", err)
@@ -147,6 +151,8 @@ func (s *Store) CreateMessages(ctx context.Context, data []store.MessageData) ([
 			attachments:  d.Attachments,
 			threadID:     d.ThreadID,
 			replyToID:    d.ReplyToID,
+			expiresAt:    d.ExpiresAt,
+			availableAt:  d.AvailableAt,
 			createdAt:    now,
 			updatedAt:    now,
 		})
@@ -194,8 +200,8 @@ func (s *Store) CreateMessageIdempotent(ctx context.Context, data store.MessageD
 	insertQuery := fmt.Sprintf(`
 		INSERT INTO %s (id, owner_id, sender_id, subject, body, headers, metadata, status, folder_id,
 		                recipient_ids, tags, attachments, is_draft, idempotency_key,
-		                thread_id, reply_to_id, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+		                thread_id, reply_to_id, expires_at, available_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 		ON CONFLICT (owner_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
 		RETURNING id, created_at
 	`, s.opts.table)
@@ -206,7 +212,7 @@ func (s *Store) CreateMessageIdempotent(ctx context.Context, data store.MessageD
 		id, data.OwnerID, data.SenderID, data.Subject, data.Body, headersJSON, metadataJSON,
 		data.Status, data.FolderID, pq.Array(data.RecipientIDs), pq.Array(data.Tags),
 		attachmentsJSON, false, idempotencyKey, data.ThreadID, data.ReplyToID,
-		now, now,
+		data.ExpiresAt, data.AvailableAt, now, now,
 	).Scan(&returnedID, &createdAt)
 
 	if err == sql.ErrNoRows {
@@ -244,6 +250,8 @@ func (s *Store) CreateMessageIdempotent(ctx context.Context, data store.MessageD
 		idempotencyKey: idempotencyKey,
 		threadID:       data.ThreadID,
 		replyToID:      data.ReplyToID,
+		expiresAt:      data.ExpiresAt,
+		availableAt:    data.AvailableAt,
 		createdAt:      createdAt,
 		updatedAt:      now,
 	}, true, nil
@@ -310,6 +318,34 @@ func (s *Store) DeleteExpiredMessages(ctx context.Context, cutoff time.Time) (in
 	result, err := s.db.ExecContext(ctx, query, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("delete expired messages: %w", err)
+	}
+
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+
+	return count, nil
+}
+
+// DeleteTTLExpiredMessages atomically deletes all non-draft messages whose
+// expires_at is non-null and before the given time.
+func (s *Store) DeleteTTLExpiredMessages(ctx context.Context, now time.Time) (int64, error) {
+	if err := s.checkConnected(); err != nil {
+		return 0, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	query := fmt.Sprintf(`
+		DELETE FROM %s
+		WHERE expires_at IS NOT NULL AND expires_at < $1
+	`, s.opts.table)
+
+	result, err := s.db.ExecContext(ctx, query, now)
+	if err != nil {
+		return 0, fmt.Errorf("delete TTL expired messages: %w", err)
 	}
 
 	count, err := result.RowsAffected()

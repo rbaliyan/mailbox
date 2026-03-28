@@ -27,6 +27,8 @@ type message struct {
 	isDraft      bool // true for drafts, false for sent messages
 	threadID     string
 	replyToID    string
+	expiresAt    *time.Time
+	availableAt  *time.Time
 }
 
 // clone creates a deep copy of the message.
@@ -75,6 +77,14 @@ func (m *message) clone() *message {
 		t := *m.readAt
 		c.readAt = &t
 	}
+	if m.expiresAt != nil {
+		t := *m.expiresAt
+		c.expiresAt = &t
+	}
+	if m.availableAt != nil {
+		t := *m.availableAt
+		c.availableAt = &t
+	}
 	return c
 }
 
@@ -97,6 +107,8 @@ func (m *message) GetCreatedAt() time.Time            { return m.createdAt }
 func (m *message) GetUpdatedAt() time.Time            { return m.updatedAt }
 func (m *message) GetThreadID() string                { return m.threadID }
 func (m *message) GetReplyToID() string               { return m.replyToID }
+func (m *message) GetExpiresAt() *time.Time           { return m.expiresAt }
+func (m *message) GetAvailableAt() *time.Time         { return m.availableAt }
 
 // Draft setters (implements store.DraftMessage fluent API)
 func (m *message) SetSubject(subject string) store.DraftMessage {
@@ -137,6 +149,28 @@ func (m *message) SetMetadata(key string, value any) store.DraftMessage {
 
 func (m *message) AddAttachment(attachment store.Attachment) store.DraftMessage {
 	m.attachments = append(m.attachments, attachment)
+	m.updatedAt = time.Now().UTC()
+	return m
+}
+
+func (m *message) SetTTL(d time.Duration) store.DraftMessage {
+	if d <= 0 {
+		m.expiresAt = nil
+	} else {
+		t := time.Now().UTC().Add(d)
+		m.expiresAt = &t
+	}
+	m.updatedAt = time.Now().UTC()
+	return m
+}
+
+func (m *message) SetScheduleAt(t time.Time) store.DraftMessage {
+	if t.IsZero() {
+		m.availableAt = nil
+	} else {
+		ut := t.UTC()
+		m.availableAt = &ut
+	}
 	m.updatedAt = time.Now().UTC()
 	return m
 }

@@ -6,12 +6,34 @@ import (
 	"fmt"
 	"regexp"
 	"sync/atomic"
+	"time"
 
 	"github.com/rbaliyan/mailbox/store"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	mongoopts "go.mongodb.org/mongo-driver/v2/mongo/options"
 )
+
+// addAvailabilityFilter adds the scheduled-delivery availability condition
+// to a MongoDB filter. Messages with nil available_at are immediately available.
+// Messages with a future available_at are hidden.
+//
+// Uses $and to avoid conflicts with $or used by cursor-based pagination or
+// text search. The condition is: available_at is null/missing OR available_at <= now.
+func addAvailabilityFilter(filter bson.M) {
+	now := time.Now().UTC()
+	availCond := bson.M{"$or": []bson.M{
+		{"available_at": nil},
+		{"available_at": bson.M{"$exists": false}},
+		{"available_at": bson.M{"$lte": now}},
+	}}
+
+	if existingAnd, hasAnd := filter["$and"]; hasAnd {
+		filter["$and"] = append(existingAnd.([]bson.M), availCond)
+	} else {
+		filter["$and"] = []bson.M{availCond}
+	}
+}
 
 // regexMetaChars matches regex metacharacters that need escaping.
 var regexMetaChars = regexp.MustCompile(`[\\^$.|?*+()[\]{}]`)
@@ -63,6 +85,7 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 
 	filter := buildFilter(filters)
 	filter["__is_draft"] = bson.M{"$ne": true}
+	addAvailabilityFilter(filter)
 
 	// Determine sort key and direction
 	sortKey := "created_at"
@@ -171,6 +194,7 @@ func (s *Store) Count(ctx context.Context, filters []store.Filter) (int64, error
 
 	filter := buildFilter(filters)
 	filter["__is_draft"] = bson.M{"$ne": true}
+	addAvailabilityFilter(filter)
 
 	count, err := s.collection.CountDocuments(ctx, filter)
 	if err != nil {
@@ -191,6 +215,7 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 
 	filter := buildFilter(query.Filters)
 	filter["__is_draft"] = bson.M{"$ne": true}
+	addAvailabilityFilter(filter)
 
 	if query.OwnerID != "" {
 		filter["owner_id"] = query.OwnerID
