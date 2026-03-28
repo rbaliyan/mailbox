@@ -1001,3 +1001,83 @@ func Example_encryptedMessage() {
 	// body: Q3 revenue: $1.2M
 	// department: finance
 }
+
+// Example_messageTTL demonstrates per-message TTL (time-to-live).
+// Messages with TTL are automatically deleted by CleanupExpiredMessages.
+func Example_messageTTL() {
+	ctx := context.Background()
+	memStore := memory.New()
+	svc, _ := mailbox.NewService(
+		mailbox.WithStore(memStore),
+		mailbox.WithMessageRetention(24*time.Hour), // also enables TTL cleanup
+	)
+	svc.Connect(ctx)
+	defer svc.Close(ctx)
+
+	// Send a message with 2-hour TTL.
+	alice := svc.Client("alice")
+	alice.SendMessage(ctx, mailbox.SendRequest{
+		RecipientIDs: []string{"bob"},
+		Subject:      "Ephemeral message",
+		Body:         "This self-destructs in 2 hours.",
+		TTL:          2 * time.Hour,
+	})
+
+	// Message is visible now.
+	bob := svc.Client("bob")
+	inbox, _ := bob.Folder(ctx, store.FolderInbox, store.ListOptions{})
+	fmt.Println("before expiry:", len(inbox.All()))
+
+	// Age messages past TTL.
+	memStore.AgeTTLAll(3 * time.Hour)
+
+	// CleanupExpiredMessages deletes TTL-expired messages.
+	result, _ := svc.CleanupExpiredMessages(ctx)
+	fmt.Println("cleaned:", result.DeletedCount)
+
+	inbox, _ = bob.Folder(ctx, store.FolderInbox, store.ListOptions{})
+	fmt.Println("after expiry:", len(inbox.All()))
+	// Output:
+	// before expiry: 1
+	// cleaned: 2
+	// after expiry: 0
+}
+
+// Example_scheduledDelivery demonstrates scheduled message delivery.
+// Messages with ScheduleAt are hidden until the scheduled time.
+func Example_scheduledDelivery() {
+	ctx := context.Background()
+	memStore := memory.New()
+	svc, _ := mailbox.NewService(mailbox.WithStore(memStore))
+	svc.Connect(ctx)
+	defer svc.Close(ctx)
+
+	// Schedule a message for 1 hour from now.
+	future := time.Now().UTC().Add(1 * time.Hour)
+	alice := svc.Client("alice")
+	alice.SendMessage(ctx, mailbox.SendRequest{
+		RecipientIDs: []string{"bob"},
+		Subject:      "Good morning!",
+		Body:         "Scheduled for 9am.",
+		ScheduleAt:   &future,
+	})
+
+	// Bob's inbox is empty — message not yet available.
+	bob := svc.Client("bob")
+	inbox, _ := bob.Folder(ctx, store.FolderInbox, store.ListOptions{})
+	fmt.Println("before schedule:", len(inbox.All()))
+
+	// Age schedule past availability.
+	memStore.AgeScheduleAll(2 * time.Hour)
+
+	// Now visible.
+	inbox, _ = bob.Folder(ctx, store.FolderInbox, store.ListOptions{})
+	fmt.Println("after schedule:", len(inbox.All()))
+	if len(inbox.All()) > 0 {
+		fmt.Println("subject:", inbox.All()[0].GetSubject())
+	}
+	// Output:
+	// before schedule: 0
+	// after schedule: 1
+	// subject: Good morning!
+}

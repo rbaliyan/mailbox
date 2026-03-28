@@ -227,12 +227,11 @@ msg, _ := draft.
 
 // Reply to the message (joins the thread)
 replyDraft, _ := mb.Compose()
-reply, _ := replyDraft.
-    SetSubject("Re: Project Discussion").
+replyDraft.SetSubject("Re: Project Discussion").
     SetBody("Sounds good, I have some ideas.").
-    SetRecipients("user123").
-    ReplyTo(msg.GetID()).
-    Send(ctx)
+    SetRecipients("user123")
+replyDraft.ReplyTo(ctx, msg.GetID()) // separate call — returns error
+reply, _ := replyDraft.Send(ctx)
 
 // Get all messages in a thread
 thread, _ := mb.GetThread(ctx, msg.GetThreadID(), store.ListOptions{})
@@ -360,14 +359,19 @@ if err != nil {
 
 ```go
 draft, _ := mb.Compose()
-draft.
-    SetSubject("Meeting Tomorrow").
+
+// Fluent setters (chainable)
+draft.SetSubject("Meeting Tomorrow").
     SetBody("Let's discuss the project.").
     SetRecipients("user456", "user789").
     SetHeader(store.HeaderPriority, "high").
     SetMetadata("category", "meetings").
-    AddAttachment(attachment).
-    ReplyTo(parentMessageID)
+    SetTTL(7 * 24 * time.Hour)                  // expires in 7 days
+    // SetScheduleAt(time.Now().Add(time.Hour))  // optional: deliver in 1 hour
+
+// Failable operations (separate calls — return error)
+draft.AddAttachment(attachment)
+draft.ReplyTo(ctx, parentMessageID)
 
 // Send immediately
 msg, err := draft.Send(ctx)
