@@ -14,16 +14,19 @@ const (
 
 // options holds PostgreSQL store configuration.
 type options struct {
-	table   string
-	timeout time.Duration
-	logger  *slog.Logger
+	table         string
+	outboxTable   string
+	timeout       time.Duration
+	logger        *slog.Logger
+	outboxEnabled bool
 }
 
 func newOptions(opts ...Option) *options {
 	o := &options{
-		table:   DefaultTable,
-		timeout: DefaultTimeout,
-		logger:  slog.Default(),
+		table:       DefaultTable,
+		outboxTable: "outbox",
+		timeout:     DefaultTimeout,
+		logger:      slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(o)
@@ -53,6 +56,22 @@ func WithTimeout(d time.Duration) Option {
 	return func(o *options) {
 		if d > 0 {
 			o.timeout = d
+		}
+	}
+}
+
+// WithOutbox enables transactional outbox.
+func WithOutbox(enabled bool) Option {
+	return func(o *options) {
+		o.outboxEnabled = enabled
+	}
+}
+
+// WithOutboxTable sets the outbox table name. Default is "outbox".
+func WithOutboxTable(name string) Option {
+	return func(o *options) {
+		if name != "" && validIdentifier.MatchString(name) {
+			o.outboxTable = name
 		}
 	}
 }

@@ -27,7 +27,7 @@ func (s *Store) CountByFolders(ctx context.Context, ownerID string, folderIDs []
 		GROUP BY folder_id
 	`, s.opts.table)
 
-	rows, err := s.db.QueryContext(ctx, query, ownerID, pq.Array(folderIDs))
+	rows, err := s.exec(ctx).QueryContext(ctx, query, ownerID, pq.Array(folderIDs))
 	if err != nil {
 		return nil, fmt.Errorf("count by folders: %w", err)
 	}
@@ -78,7 +78,7 @@ func (s *Store) ListDistinctFolders(ctx context.Context, ownerID string) ([]stri
 			AND (available_at IS NULL OR available_at <= NOW())
 	`, s.opts.table)
 
-	rows, err := s.db.QueryContext(ctx, query, ownerID)
+	rows, err := s.exec(ctx).QueryContext(ctx, query, ownerID)
 	if err != nil {
 		return nil, fmt.Errorf("list distinct folders: %w", err)
 	}
@@ -137,7 +137,7 @@ func (s *Store) MailboxStats(ctx context.Context, ownerID string) (*store.Mailbo
 		GROUP BY folder_id
 	`, s.opts.table)
 
-	rows, err := s.db.QueryContext(ctx, query, ownerID)
+	rows, err := s.exec(ctx).QueryContext(ctx, query, ownerID)
 	if err != nil {
 		return nil, fmt.Errorf("query mailbox stats: %w", err)
 	}
