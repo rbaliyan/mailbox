@@ -302,6 +302,19 @@ type BulkReadMarker interface {
 	MarkAllRead(ctx context.Context, ownerID string, folderID string) (int64, error)
 }
 
+// TransactionalStore is an optional interface for stores that support
+// database transactions. When implemented, the service can wrap DB writes
+// and outbox inserts in a single atomic transaction.
+//
+// The fn receives a context that carries the transaction. Store operations
+// called with this context automatically participate in the transaction.
+//   - MongoDB: context carries a session; operations use the session
+//   - PostgreSQL: context carries a *sql.Tx; operations use the tx
+//   - Memory: no-op wrapper (just calls fn directly)
+type TransactionalStore interface {
+	WithTransaction(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
 // BulkUpdater provides filter-based bulk mutation operations.
 // Implementations use native database bulk operations (updateMany, UPDATE WHERE)
 // for single-round-trip efficiency. When a store implements this interface,

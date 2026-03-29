@@ -18,10 +18,11 @@ import (
 
 // Compile-time checks
 var (
-	_ store.Store           = (*Store)(nil)
-	_ store.FolderCounter   = (*Store)(nil)
-	_ store.FindWithCounter = (*Store)(nil)
-	_ store.FolderLister    = (*Store)(nil)
+	_ store.Store              = (*Store)(nil)
+	_ store.TransactionalStore = (*Store)(nil)
+	_ store.FolderCounter      = (*Store)(nil)
+	_ store.FindWithCounter    = (*Store)(nil)
+	_ store.FolderLister       = (*Store)(nil)
 )
 
 // Store implements store.Store using PostgreSQL.
@@ -180,6 +181,21 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// WithTransaction executes fn within a PostgreSQL transaction.
+// The transaction is committed if fn returns nil, rolled back otherwise.
+func (s *Store) WithTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := fn(ctx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // checkConnected returns error if not connected.

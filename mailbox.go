@@ -38,6 +38,7 @@ type service struct {
 	events            *ServiceEvents      // Per-service event instances
 	statsCache        sync.Map            // map[ownerID string]*statsEntry
 	statsCacheEnabled bool                // true when event transport is configured
+	txpub             *txPublisher        // transactional event publisher
 }
 
 // NewService creates a new mailbox service.
@@ -124,6 +125,9 @@ func (s *service) Connect(ctx context.Context) error {
 		_ = s.store.Close(ctx)
 		return fmt.Errorf("init plugins: %w", err)
 	}
+
+	// Initialize transactional event publisher.
+	s.txpub = newTxPublisher(s)
 
 	success = true
 	s.logger.Info("mailbox service connected")

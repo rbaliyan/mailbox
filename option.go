@@ -120,6 +120,9 @@ type options struct {
 	// Notification coalescing
 	notifyCoalesce bool // If true, coalesce notification events by message ID
 
+	// Transactional outbox
+	outboxEnabled bool // If true, events are written to outbox in same DB transaction
+
 	// Per-message TTL and scheduling
 	defaultTTL       time.Duration // Default TTL for messages; 0 means disabled
 	minTTL           time.Duration // Minimum allowed TTL (default: 1 minute)
@@ -712,6 +715,20 @@ func WithEventStreamMaxLen(n int64) Option {
 //
 // Requires message_id metadata on published events (automatically added).
 // Default is disabled.
+// WithOutbox enables the transactional outbox pattern for event publishing.
+// When enabled, DB writes and event publishes are wrapped in a single
+// database transaction — if the DB write succeeds, the event is guaranteed
+// to be published (via a background relay). Requires the store to implement
+// store.TransactionalStore.
+//
+// When disabled (default), events are published directly after DB writes
+// (best-effort, current behavior). This is fully backward compatible.
+func WithOutbox(enabled bool) Option {
+	return func(o *options) {
+		o.outboxEnabled = enabled
+	}
+}
+
 func WithNotificationCoalescing(enabled bool) Option {
 	return func(o *options) {
 		o.notifyCoalesce = enabled

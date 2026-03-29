@@ -225,15 +225,19 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 
 		deliveredTo = append(deliveredTo, recipientID)
 
-		if pubErr := m.service.events.MessageReceived.Publish(ctxWithMessageID(ctx, result.Message.GetID()), MessageReceivedEvent{
-			MessageID:   result.Message.GetID(),
-			RecipientID: recipientID,
-			SenderID:    m.userID,
-			Subject:     draft.GetSubject(),
-			ReceivedAt:  time.Now().UTC(),
-		}); pubErr != nil {
-			m.service.opts.safeEventPublishFailure("MessageReceived", pubErr)
-		}
+		_ = m.service.txpub.withEvents(ctx, func(_ context.Context) error {
+			return nil
+		}, PendingEvent{
+			Name:      EventNameMessageReceived,
+			MessageID: result.Message.GetID(),
+			Data: MessageReceivedEvent{
+				MessageID:   result.Message.GetID(),
+				RecipientID: recipientID,
+				SenderID:    m.userID,
+				Subject:     draft.GetSubject(),
+				ReceivedAt:  time.Now().UTC(),
+			},
+		})
 	}
 
 	return deliveredTo, failedRecipients
@@ -285,21 +289,22 @@ func (m *userMailbox) finalizeDelivery(ctx context.Context, senderCopy store.Mes
 		return senderCopy, fmt.Errorf("fetch updated sender copy: %w", err)
 	}
 
-	// Publish event - do this AFTER we have the updated copy so we can return it even on error
-	if err := m.service.events.MessageSent.Publish(ctxWithMessageID(ctx, senderCopy.GetID()), MessageSentEvent{
-		MessageID:    senderCopy.GetID(),
-		SenderID:     senderCopy.GetSenderID(),
-		RecipientIDs: deliveredTo,
-		Subject:      senderCopy.GetSubject(),
-		SentAt:       sentAt,
+	// Publish MessageSent event via txpublisher.
+	if err := m.service.txpub.withEvents(ctx, func(_ context.Context) error {
+		return nil // DB writes already done above
+	}, PendingEvent{
+		Name:      EventNameMessageSent,
+		MessageID: senderCopy.GetID(),
+		Data: MessageSentEvent{
+			MessageID:    senderCopy.GetID(),
+			SenderID:     senderCopy.GetSenderID(),
+			RecipientIDs: deliveredTo,
+			Subject:      senderCopy.GetSubject(),
+			SentAt:       sentAt,
+		},
 	}); err != nil {
-		if m.service.opts.eventErrorsFatal {
-			// Return the message WITH an error - message was sent but event failed
-			return updatedCopy, &EventPublishError{
-				Event:     "MessageSent",
-				MessageID: updatedCopy.GetID(),
-				Err:       err,
-			}
+		if _, ok := err.(*EventPublishError); ok {
+			return updatedCopy, err
 		}
 		m.service.opts.safeEventPublishFailure("MessageSent", err)
 	}

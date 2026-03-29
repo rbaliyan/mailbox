@@ -79,21 +79,19 @@ func (m *userMailbox) UpdateFlags(ctx context.Context, messageID string, flags F
 
 	// Publish read event (only for marking as read, not unread)
 	if flags.Read != nil && *flags.Read {
-		if err := m.service.events.MessageRead.Publish(ctxWithMessageID(ctx, messageID), MessageReadEvent{
+		if err := m.service.txpub.withEvents(ctx, func(_ context.Context) error {
+			return nil
+		}, PendingEvent{
+			Name:      EventNameMessageRead,
 			MessageID: messageID,
-			UserID:    m.userID,
-			FolderID:  currentFolderID,
-			ReadAt:    time.Now().UTC(),
+			Data: MessageReadEvent{
+				MessageID: messageID,
+				UserID:    m.userID,
+				FolderID:  currentFolderID,
+				ReadAt:    time.Now().UTC(),
+			},
 		}); err != nil {
-			if m.service.opts.eventErrorsFatal {
-				// Operation succeeded but event failed - return EventPublishError
-				return &EventPublishError{
-					Event:     "MessageRead",
-					MessageID: messageID,
-					Err:       err,
-				}
-			}
-			m.service.opts.safeEventPublishFailure("MessageRead", err)
+			return err
 		}
 	}
 
@@ -197,22 +195,20 @@ func (m *userMailbox) PermanentlyDelete(ctx context.Context, messageID string) (
 	}
 
 	// Publish event
-	if err := m.service.events.MessageDeleted.Publish(ctxWithMessageID(ctx, messageID), MessageDeletedEvent{
+	if err := m.service.txpub.withEvents(ctx, func(_ context.Context) error {
+		return nil
+	}, PendingEvent{
+		Name:      EventNameMessageDeleted,
 		MessageID: messageID,
-		UserID:    m.userID,
-		FolderID:  msg.GetFolderID(),
-		WasUnread: !msg.GetIsRead(),
-		DeletedAt: time.Now().UTC(),
+		Data: MessageDeletedEvent{
+			MessageID: messageID,
+			UserID:    m.userID,
+			FolderID:  msg.GetFolderID(),
+			WasUnread: !msg.GetIsRead(),
+			DeletedAt: time.Now().UTC(),
+		},
 	}); err != nil {
-		if m.service.opts.eventErrorsFatal {
-			// Operation succeeded but event failed - return EventPublishError
-			return &EventPublishError{
-				Event:     "MessageDeleted",
-				MessageID: messageID,
-				Err:       err,
-			}
-		}
-		m.service.opts.safeEventPublishFailure("MessageDeleted", err)
+		return err
 	}
 
 	return nil
@@ -379,20 +375,19 @@ func (m *userMailbox) MarkAllRead(ctx context.Context, folderID string) (_ int64
 		})
 
 		// Publish MarkAllRead event
-		if err := m.service.events.MarkAllRead.Publish(ctxWithMessageID(ctx, folderID), MarkAllReadEvent{
-			UserID:   m.userID,
-			FolderID: folderID,
-			Count:    count,
-			MarkedAt: time.Now().UTC(),
+		if err := m.service.txpub.withEvents(ctx, func(_ context.Context) error {
+			return nil
+		}, PendingEvent{
+			Name:      EventNameMarkAllRead,
+			MessageID: folderID,
+			Data: MarkAllReadEvent{
+				UserID:   m.userID,
+				FolderID: folderID,
+				Count:    count,
+				MarkedAt: time.Now().UTC(),
+			},
 		}); err != nil {
-			if m.service.opts.eventErrorsFatal {
-				return count, &EventPublishError{
-					Event:     "MarkAllRead",
-					MessageID: folderID,
-					Err:       err,
-				}
-			}
-			m.service.opts.safeEventPublishFailure("MarkAllRead", err)
+			return count, err
 		}
 	}
 
@@ -425,24 +420,20 @@ func (m *userMailbox) publishMessageMoved(ctx context.Context, messageID, userID
 	if fromFolderID == toFolderID {
 		return nil
 	}
-	if err := m.service.events.MessageMoved.Publish(ctxWithMessageID(ctx, messageID), MessageMovedEvent{
-		MessageID:    messageID,
-		UserID:       userID,
-		FromFolderID: fromFolderID,
-		ToFolderID:   toFolderID,
-		WasUnread:    wasUnread,
-		MovedAt:      time.Now().UTC(),
-	}); err != nil {
-		if m.service.opts.eventErrorsFatal {
-			return &EventPublishError{
-				Event:     "MessageMoved",
-				MessageID: messageID,
-				Err:       err,
-			}
-		}
-		m.service.opts.safeEventPublishFailure("MessageMoved", err)
-	}
-	return nil
+	return m.service.txpub.withEvents(ctx, func(_ context.Context) error {
+		return nil
+	}, PendingEvent{
+		Name:      EventNameMessageMoved,
+		MessageID: messageID,
+		Data: MessageMovedEvent{
+			MessageID:    messageID,
+			UserID:       userID,
+			FromFolderID: fromFolderID,
+			ToFolderID:   toFolderID,
+			WasUnread:    wasUnread,
+			MovedAt:      time.Now().UTC(),
+		},
+	})
 }
 
 // --- Filter-based bulk operations ---

@@ -218,10 +218,17 @@ func (s *Store) ListDrafts(ctx context.Context, ownerID string, opts store.ListO
 	}, nil
 }
 
+// WithTransaction implements store.TransactionalStore.
+// Memory store has no real transactions — just calls fn directly.
+func (s *Store) WithTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
+	return fn(ctx)
+}
+
 // Compile-time check that Store implements store.Store.
 var (
-	_ store.Store           = (*Store)(nil)
-	_ store.FolderCounter   = (*Store)(nil)
-	_ store.FindWithCounter = (*Store)(nil)
-	_ store.FolderLister    = (*Store)(nil)
+	_ store.Store              = (*Store)(nil)
+	_ store.TransactionalStore = (*Store)(nil)
+	_ store.FolderCounter      = (*Store)(nil)
+	_ store.FindWithCounter    = (*Store)(nil)
+	_ store.FolderLister       = (*Store)(nil)
 )

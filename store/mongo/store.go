@@ -17,10 +17,11 @@ import (
 
 // Compile-time checks
 var (
-	_ store.Store           = (*Store)(nil)
-	_ store.FolderCounter   = (*Store)(nil)
-	_ store.FindWithCounter = (*Store)(nil)
-	_ store.FolderLister    = (*Store)(nil)
+	_ store.Store              = (*Store)(nil)
+	_ store.TransactionalStore = (*Store)(nil)
+	_ store.FolderCounter      = (*Store)(nil)
+	_ store.FindWithCounter    = (*Store)(nil)
+	_ store.FolderLister       = (*Store)(nil)
 )
 
 // Store implements store.Store using MongoDB.
@@ -142,6 +143,27 @@ func (s *Store) ensureIndexes(ctx context.Context) error {
 
 	_, err := s.collection.Indexes().CreateMany(ctx, indexes)
 	return err
+}
+
+// WithTransaction executes fn within a MongoDB session transaction.
+// Operations called with the returned context automatically participate
+// in the transaction. Falls back to calling fn directly if the deployment
+// does not support transactions (standalone MongoDB).
+func (s *Store) WithTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
+	session, err := s.client.StartSession()
+	if err != nil {
+		// Fallback: no transaction support (standalone MongoDB)
+		return fn(ctx)
+	}
+	defer session.EndSession(ctx)
+
+	_, txErr := session.WithTransaction(ctx, func(sessCtx context.Context) (any, error) {
+		return nil, fn(sessCtx)
+	})
+	if txErr != nil && isTransactionNotSupported(txErr) {
+		return fn(ctx)
+	}
+	return txErr
 }
 
 // =============================================================================
