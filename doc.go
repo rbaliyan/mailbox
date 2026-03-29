@@ -78,4 +78,13 @@
 //   - MessageDeleted - when a message is permanently deleted
 //   - MessageMoved - when a message is moved between folders
 //   - MarkAllRead - when all messages in a folder are marked as read
+//
+// # Transactional Outbox
+//
+// For guaranteed event delivery, enable the transactional outbox on your store:
+//
+//	store := mongostore.New(client, mongostore.WithOutbox(true))
+//
+// Events are then persisted atomically with DB writes and published via a relay.
+// See store.OutboxPersister for the interface.
 package mailbox

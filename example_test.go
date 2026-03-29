@@ -1002,6 +1002,41 @@ func Example_encryptedMessage() {
 	// department: finance
 }
 
+// Example_filterBulkOps demonstrates filter-based bulk operations.
+func Example_filterBulkOps() {
+	ctx := context.Background()
+	svc, _ := mailbox.NewService(mailbox.WithStore(memory.New()))
+	svc.Connect(ctx)
+	defer svc.Close(ctx)
+
+	// Send 5 messages to bob.
+	for i := 0; i < 5; i++ {
+		svc.Client("alice").SendMessage(ctx, mailbox.SendRequest{
+			RecipientIDs: []string{"bob"},
+			Subject:      fmt.Sprintf("Msg %d", i),
+			Body:         "body",
+		})
+	}
+
+	bob := svc.Client("bob")
+
+	// Mark all unread in inbox as read using filter.
+	count, _ := bob.UpdateByFilter(ctx, []store.Filter{
+		store.InFolder(store.FolderInbox),
+		store.IsReadFilter(false),
+	}, mailbox.MarkRead())
+	fmt.Println("marked read:", count)
+
+	// Move all from alice to archive.
+	moved, _ := bob.MoveByFilter(ctx, []store.Filter{
+		store.SenderIs("alice"),
+	}, store.FolderArchived)
+	fmt.Println("archived:", moved)
+	// Output:
+	// marked read: 5
+	// archived: 5
+}
+
 // Example_messageTTL demonstrates per-message TTL (time-to-live).
 // Messages with TTL are automatically deleted by CleanupExpiredMessages.
 func Example_messageTTL() {
