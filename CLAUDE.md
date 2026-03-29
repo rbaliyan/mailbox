@@ -96,6 +96,8 @@ mailbox/
 │   └── option.go       # WithKeyType option
 ├── content/
 │   └── codec.go        # Content encoding/decoding with schema support
+├── mailboxtest/
+│   └── mailboxtest.go  # Test helpers (NewService, SendMessage, X25519Keypair)
 └── resolver/
     └── static.go       # Static recipient resolver
 ```
@@ -112,6 +114,7 @@ mailbox/
 - `EnforceQuotas(ctx, userIDs)` - enforce delete-oldest quotas
 - `Events()` - per-service event instances
 - `Notifications(ctx, userID, lastEventID)` - notification stream
+- `PublishOutboxEvent(ctx, evt)` - publish pending outbox event (for relay)
 
 **Mailbox** (user-facing API):
 - `UserID()` - returns the mailbox owner's user ID
@@ -123,6 +126,10 @@ mailbox/
 - `Stream(ctx, filters, opts)` - iterator-based streaming
 - `GetThread(ctx, threadID, opts)` / `GetReplies(ctx, messageID, opts)` - thread support
 - `Stats(ctx)` / `UnreadCount(ctx)` - aggregate statistics
+- `UpdateByFilter(ctx, filters, flags)` - bulk mark read/unread by filter
+- `MoveByFilter(ctx, filters, folderID)` - bulk move by filter
+- `DeleteByFilter(ctx, filters)` - bulk soft-delete by filter
+- `TagByFilter(ctx, filters, tagID)` / `UntagByFilter(ctx, filters, tagID)` - bulk tag/untag
 
 **Store** (storage backend - composed of three sub-interfaces):
 
@@ -392,6 +399,40 @@ Notifier options (`notify.NewNotifier(...)`):
 | `WithPlugin(Plugin)` | - | Register a single plugin |
 | `WithPlugins(...Plugin)` | - | Register multiple plugins |
 | `WithAttachmentManager(store.AttachmentManager)` | nil | Reference-counted attachments |
+
+### Transactional Outbox
+
+Outbox is configured per-store, not per-service:
+
+```go
+// MongoDB
+store := mongostore.New(client, mongostore.WithOutbox(true))
+
+// PostgreSQL
+store := pgstore.New(db, pgstore.WithOutbox(true))
+```
+
+When enabled, mutation methods atomically persist events to an outbox table/collection
+in the same database transaction. `PublishOutboxEvent(ctx, evt)` on `Service` dispatches
+outbox events to the event bus (for relay implementations).
+
+Store interface: `store.OutboxPersister` (`OutboxEnabled`, `WithOutboxCtx`, `PersistOutboxEvents`)
+
+### Filter-Based Bulk Operations
+
+All filter-based bulk ops auto-scope to the user's non-draft messages. Uses `store.BulkUpdater`
+fast path (native `updateMany`/`UPDATE WHERE`) when available, falls back to paginated iteration.
+
+```go
+bob.UpdateByFilter(ctx, []store.Filter{
+    store.InFolder(store.FolderInbox),
+    store.IsReadFilter(false),
+}, mailbox.MarkRead())
+
+bob.MoveByFilter(ctx, []store.Filter{
+    store.SenderIs("alice"),
+}, store.FolderArchived)
+```
 
 ### Example Configuration
 
