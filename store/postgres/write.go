@@ -327,14 +327,11 @@ func (s *Store) Restore(ctx context.Context, id string) error {
 var _ store.BulkUpdater = (*Store)(nil)
 
 func (s *Store) bulkWhere(ownerID string, filters []store.Filter) (string, []any) {
-	argIdx := 2 // $1 is ownerID
-	where, args := s.buildWhereClause(filters)
-	// Offset the filter args
+	where, args := s.buildWhereClauseFrom(filters, 2) // $1 is ownerID
 	fullWhere := "owner_id = $1 AND is_draft = false AND (available_at IS NULL OR available_at <= NOW())"
 	if where != "1=1" {
 		fullWhere += " AND " + where
 	}
-	_ = argIdx
 	return fullWhere, append([]any{ownerID}, args...)
 }
 

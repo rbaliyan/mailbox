@@ -319,13 +319,19 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 }
 
 func (s *Store) buildWhereClause(filters []store.Filter) (string, []any) {
+	return s.buildWhereClauseFrom(filters, 1)
+}
+
+// buildWhereClauseFrom builds a WHERE clause with arg indices starting from startIdx.
+// This is needed when preceding args are already bound (e.g., $1 = ownerID in bulkWhere).
+func (s *Store) buildWhereClauseFrom(filters []store.Filter, startIdx int) (string, []any) {
 	if len(filters) == 0 {
 		return "1=1", nil
 	}
 
 	var conditions []string
 	var args []any
-	argIdx := 1
+	argIdx := startIdx
 
 	for _, f := range filters {
 		cond, arg := s.filterToCondition(f, &argIdx)
