@@ -225,15 +225,19 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 
 		deliveredTo = append(deliveredTo, recipientID)
 
-		if pubErr := m.service.events.MessageReceived.Publish(ctxWithMessageID(ctx, result.Message.GetID()), MessageReceivedEvent{
-			MessageID:   result.Message.GetID(),
-			RecipientID: recipientID,
-			SenderID:    m.userID,
-			Subject:     draft.GetSubject(),
-			ReceivedAt:  time.Now().UTC(),
-		}); pubErr != nil {
-			m.service.opts.safeEventPublishFailure("MessageReceived", pubErr)
-		}
+		// Publish per-recipient received event.
+		// publishOnly already handles non-fatal errors internally (via safeEventPublishFailure)
+		// and returns nil. It only returns an error for fatal event failures or outbox errors,
+		// which we intentionally ignore here since delivery already succeeded.
+		_ = m.service.publishOnly(ctx, EventNameMessageReceived, result.Message.GetID(),
+			MessageReceivedEvent{
+				MessageID:   result.Message.GetID(),
+				RecipientID: recipientID,
+				SenderID:    m.userID,
+				Subject:     draft.GetSubject(),
+				ReceivedAt:  time.Now().UTC(),
+			},
+		)
 	}
 
 	return deliveredTo, failedRecipients
@@ -285,23 +289,17 @@ func (m *userMailbox) finalizeDelivery(ctx context.Context, senderCopy store.Mes
 		return senderCopy, fmt.Errorf("fetch updated sender copy: %w", err)
 	}
 
-	// Publish event - do this AFTER we have the updated copy so we can return it even on error
-	if err := m.service.events.MessageSent.Publish(ctxWithMessageID(ctx, senderCopy.GetID()), MessageSentEvent{
-		MessageID:    senderCopy.GetID(),
-		SenderID:     senderCopy.GetSenderID(),
-		RecipientIDs: deliveredTo,
-		Subject:      senderCopy.GetSubject(),
-		SentAt:       sentAt,
-	}); err != nil {
-		if m.service.opts.eventErrorsFatal {
-			// Return the message WITH an error - message was sent but event failed
-			return updatedCopy, &EventPublishError{
-				Event:     "MessageSent",
-				MessageID: updatedCopy.GetID(),
-				Err:       err,
-			}
-		}
-		m.service.opts.safeEventPublishFailure("MessageSent", err)
+	// Publish MessageSent event (DB writes already done above).
+	if err := m.service.publishOnly(ctx, EventNameMessageSent, senderCopy.GetID(),
+		MessageSentEvent{
+			MessageID:    senderCopy.GetID(),
+			SenderID:     senderCopy.GetSenderID(),
+			RecipientIDs: deliveredTo,
+			Subject:      senderCopy.GetSubject(),
+			SentAt:       sentAt,
+		},
+	); err != nil {
+		return updatedCopy, err
 	}
 
 	return updatedCopy, nil

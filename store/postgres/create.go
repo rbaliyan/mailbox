@@ -47,7 +47,7 @@ func (s *Store) CreateMessage(ctx context.Context, data store.MessageData) (stor
 	`, s.opts.table)
 
 	var returnedID string
-	err = s.db.QueryRowContext(ctx, query,
+	err = s.exec(ctx).QueryRowContext(ctx, query,
 		id, data.OwnerID, data.SenderID, data.Subject, data.Body, headersJSON, metadataJSON,
 		data.Status, data.FolderID, pq.Array(data.RecipientIDs), pq.Array(data.Tags),
 		attachmentsJSON, false, data.ThreadID, data.ReplyToID,
@@ -91,12 +91,20 @@ func (s *Store) CreateMessages(ctx context.Context, data []store.MessageData) ([
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	// Use a transaction for atomic batch insert
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin transaction: %w", err)
+	// Use existing transaction from context (outbox path) or start a new one.
+	var tx *sql.Tx
+	var ownsTx bool
+	if existingTx, ok := ctx.Value(txCtxKey{}).(*sql.Tx); ok {
+		tx = existingTx
+	} else {
+		ownsTx = true
+		var err error
+		tx, err = s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, fmt.Errorf("begin transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
 	}
-	defer func() { _ = tx.Rollback() }()
 
 	now := time.Now().UTC()
 	messages := make([]store.Message, 0, len(data))
@@ -158,8 +166,10 @@ func (s *Store) CreateMessages(ctx context.Context, data []store.MessageData) ([
 		})
 	}
 
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit transaction: %w", err)
+	if ownsTx {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit transaction: %w", err)
+		}
 	}
 
 	return messages, nil
@@ -208,7 +218,7 @@ func (s *Store) CreateMessageIdempotent(ctx context.Context, data store.MessageD
 
 	var returnedID string
 	var createdAt time.Time
-	err = s.db.QueryRowContext(ctx, insertQuery,
+	err = s.exec(ctx).QueryRowContext(ctx, insertQuery,
 		id, data.OwnerID, data.SenderID, data.Subject, data.Body, headersJSON, metadataJSON,
 		data.Status, data.FolderID, pq.Array(data.RecipientIDs), pq.Array(data.Tags),
 		attachmentsJSON, false, idempotencyKey, data.ThreadID, data.ReplyToID,
@@ -223,7 +233,7 @@ func (s *Store) CreateMessageIdempotent(ctx context.Context, data store.MessageD
 			WHERE owner_id = $1 AND idempotency_key = $2
 		`, messageColumns, s.opts.table)
 
-		msg, err := s.scanMessage(s.db.QueryRowContext(ctx, selectQuery, data.OwnerID, idempotencyKey))
+		msg, err := s.scanMessage(s.exec(ctx).QueryRowContext(ctx, selectQuery, data.OwnerID, idempotencyKey))
 		if err != nil {
 			return nil, false, fmt.Errorf("fetch existing: %w", err)
 		}
@@ -288,7 +298,7 @@ func (s *Store) DeleteExpiredTrash(ctx context.Context, cutoff time.Time) (int64
 		WHERE folder_id = $1 AND updated_at < $2
 	`, s.opts.table)
 
-	result, err := s.db.ExecContext(ctx, query, store.FolderTrash, cutoff)
+	result, err := s.exec(ctx).ExecContext(ctx, query, store.FolderTrash, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("delete expired trash: %w", err)
 	}
@@ -315,7 +325,7 @@ func (s *Store) DeleteExpiredMessages(ctx context.Context, cutoff time.Time) (in
 		WHERE is_draft = false AND created_at < $1
 	`, s.opts.table)
 
-	result, err := s.db.ExecContext(ctx, query, cutoff)
+	result, err := s.exec(ctx).ExecContext(ctx, query, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("delete expired messages: %w", err)
 	}
@@ -343,7 +353,7 @@ func (s *Store) DeleteTTLExpiredMessages(ctx context.Context, now time.Time) (in
 		WHERE is_draft = false AND expires_at IS NOT NULL AND expires_at < $1
 	`, s.opts.table)
 
-	result, err := s.db.ExecContext(ctx, query, now)
+	result, err := s.exec(ctx).ExecContext(ctx, query, now)
 	if err != nil {
 		return 0, fmt.Errorf("delete TTL expired messages: %w", err)
 	}
@@ -376,7 +386,7 @@ func (s *Store) DeleteMessagesByIDs(ctx context.Context, ids []string) ([]string
 		RETURNING id
 	`, s.opts.table)
 
-	rows, err := s.db.QueryContext(ctx, query, pq.Array(ids))
+	rows, err := s.exec(ctx).QueryContext(ctx, query, pq.Array(ids))
 	if err != nil {
 		return nil, fmt.Errorf("delete messages by IDs: %w", err)
 	}

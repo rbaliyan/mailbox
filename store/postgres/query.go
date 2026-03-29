@@ -36,7 +36,7 @@ func (s *Store) Get(ctx context.Context, id string) (store.Message, error) {
 		WHERE id = $1 AND is_draft = false
 	`, messageColumns, s.opts.table)
 
-	msg, err := s.scanMessage(s.db.QueryRowContext(ctx, query, id))
+	msg, err := s.scanMessage(s.exec(ctx).QueryRowContext(ctx, query, id))
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, store.ErrNotFound
@@ -72,7 +72,7 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 	// Count total
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE %s`, s.opts.table, where)
 	var total int64
-	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := s.exec(ctx).QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, fmt.Errorf("count messages: %w", err)
 	}
 
@@ -121,7 +121,7 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 		args = append(args, opts.Limit+1, opts.Offset)
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.exec(ctx).QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query messages: %w", err)
 	}
@@ -168,7 +168,7 @@ func (s *Store) Count(ctx context.Context, filters []store.Filter) (int64, error
 
 	query := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE %s`, s.opts.table, where)
 	var count int64
-	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+	if err := s.exec(ctx).QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
 		return 0, fmt.Errorf("count: %w", err)
 	}
 
@@ -259,7 +259,7 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 		countArgs = countArgs[:len(countArgs)-1]
 	}
 	var total int64
-	if err := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+	if err := s.exec(ctx).QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 		return nil, fmt.Errorf("count search: %w", err)
 	}
 
@@ -285,7 +285,7 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 		args = append(args, query.Options.Limit+1, query.Options.Offset)
 	}
 
-	rows, err := s.db.QueryContext(ctx, sqlQuery, args...)
+	rows, err := s.exec(ctx).QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search query: %w", err)
 	}

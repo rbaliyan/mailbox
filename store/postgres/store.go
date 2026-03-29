@@ -92,6 +92,12 @@ func (s *Store) Close(ctx context.Context) error {
 
 // ensureSchema creates the required table and indexes.
 func (s *Store) ensureSchema(ctx context.Context) error {
+	// Defense-in-depth: validate table names before interpolation into SQL.
+	// Option setters already validate, but this catches direct struct construction.
+	if !validIdentifier.MatchString(s.opts.table) {
+		return fmt.Errorf("invalid table name: %q", s.opts.table)
+	}
+
 	// Create table
 	createTable := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
@@ -179,6 +185,29 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 		s.logger.Warn("failed to create idempotency index", "error", err)
 	}
 
+	// Create outbox table if outbox is enabled.
+	if s.opts.outboxEnabled {
+		if !validIdentifier.MatchString(s.opts.outboxTable) {
+			return fmt.Errorf("invalid outbox table name: %q", s.opts.outboxTable)
+		}
+		outboxDDL := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
+			id BIGSERIAL PRIMARY KEY,
+			name TEXT NOT NULL,
+			message_id TEXT NOT NULL,
+			payload JSONB NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`, s.opts.outboxTable)
+		if _, err := s.db.ExecContext(ctx, outboxDDL); err != nil {
+			return fmt.Errorf("create outbox table: %w", err)
+		}
+		outboxIdx := fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_status_created ON %s(status, created_at)`,
+			s.opts.outboxTable, s.opts.outboxTable)
+		if _, err := s.db.ExecContext(ctx, outboxIdx); err != nil {
+			s.logger.Warn("failed to create outbox index", "error", err)
+		}
+	}
+
 	return nil
 }
 
@@ -188,6 +217,25 @@ func (s *Store) checkConnected() error {
 		return store.ErrNotConnected
 	}
 	return nil
+}
+
+// txCtxKey carries a *sql.Tx through context for transaction propagation.
+type txCtxKey struct{}
+
+// dbExecutor is the common interface between *sqlx.DB and *sql.Tx for query execution.
+type dbExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// exec returns the transaction from context if available, otherwise the connection pool.
+// All store mutation methods should use this instead of s.db directly.
+func (s *Store) exec(ctx context.Context) dbExecutor {
+	if tx, ok := ctx.Value(txCtxKey{}).(*sql.Tx); ok {
+		return tx
+	}
+	return s.db
 }
 
 // =============================================================================
@@ -223,7 +271,7 @@ func (s *Store) GetDraft(ctx context.Context, id string) (store.DraftMessage, er
 		WHERE id = $1 AND is_draft = true
 	`, messageColumns, s.opts.table)
 
-	msg, err := s.scanMessage(s.db.QueryRowContext(ctx, query, id))
+	msg, err := s.scanMessage(s.exec(ctx).QueryRowContext(ctx, query, id))
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, store.ErrNotFound
@@ -294,7 +342,7 @@ func (s *Store) SaveDraft(ctx context.Context, draft store.DraftMessage) (store.
 			RETURNING id
 		`, s.opts.table)
 
-		err := s.db.QueryRowContext(ctx, query,
+		err := s.exec(ctx).QueryRowContext(ctx, query,
 			msg.id, msg.ownerID, msg.senderID, msg.subject, msg.body, headersJSON, metadataJSON,
 			msg.status, msg.folderID, pq.Array(msg.recipientIDs), pq.Array(msg.tags),
 			attachmentsJSON, true, msg.createdAt, msg.updatedAt,
@@ -313,7 +361,7 @@ func (s *Store) SaveDraft(ctx context.Context, draft store.DraftMessage) (store.
 		`, s.opts.table)
 
 		var returnedID string
-		err := s.db.QueryRowContext(ctx, query,
+		err := s.exec(ctx).QueryRowContext(ctx, query,
 			msg.subject, msg.body, headersJSON, metadataJSON, pq.Array(msg.recipientIDs),
 			attachmentsJSON, msg.updatedAt, msg.id,
 		).Scan(&returnedID)
@@ -341,7 +389,7 @@ func (s *Store) DeleteDraft(ctx context.Context, id string) error {
 	defer cancel()
 
 	query := fmt.Sprintf(`DELETE FROM %s WHERE id = $1 AND is_draft = true`, s.opts.table)
-	result, err := s.db.ExecContext(ctx, query, id)
+	result, err := s.exec(ctx).ExecContext(ctx, query, id)
 	if err != nil {
 		return fmt.Errorf("delete draft: %w", err)
 	}
@@ -373,7 +421,7 @@ func (s *Store) ListDrafts(ctx context.Context, ownerID string, opts store.ListO
 	// Count total
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE owner_id = $1 AND is_draft = true`, s.opts.table)
 	var total int64
-	if err := s.db.QueryRowContext(ctx, countQuery, ownerID).Scan(&total); err != nil {
+	if err := s.exec(ctx).QueryRowContext(ctx, countQuery, ownerID).Scan(&total); err != nil {
 		return nil, fmt.Errorf("count drafts: %w", err)
 	}
 
@@ -386,7 +434,7 @@ func (s *Store) ListDrafts(ctx context.Context, ownerID string, opts store.ListO
 		LIMIT $2 OFFSET $3
 	`, messageColumns, s.opts.table)
 
-	rows, err := s.db.QueryContext(ctx, query, ownerID, opts.Limit+1, opts.Offset)
+	rows, err := s.exec(ctx).QueryContext(ctx, query, ownerID, opts.Limit+1, opts.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("query drafts: %w", err)
 	}

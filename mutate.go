@@ -49,25 +49,12 @@ func (m *userMailbox) UpdateFlags(ctx context.Context, messageID string, flags F
 		} else {
 			folderID = defaultFolderForMessage(msg)
 		}
-		if err := m.service.store.MoveToFolder(ctx, messageID, folderID); err != nil {
+		if err := m.moveAndPublish(ctx, messageID, m.userID, oldFolderID, folderID, !msg.GetIsRead()); err != nil {
 			return fmt.Errorf("move to folder: %w", err)
-		}
-
-		// Publish move event
-		if err := m.publishMessageMoved(ctx, messageID, m.userID, oldFolderID, folderID, !msg.GetIsRead()); err != nil {
-			return err
-		}
-	}
-
-	// Apply read flag after archive (less severe failure mode if this fails)
-	if flags.Read != nil {
-		if err := m.service.store.MarkRead(ctx, messageID, *flags.Read); err != nil {
-			return fmt.Errorf("mark read: %w", err)
 		}
 	}
 
 	// Track the current folder ID for the read event.
-	// If the archive flag changed the folder above, use the new folder.
 	currentFolderID := msg.GetFolderID()
 	if flags.Archived != nil {
 		if *flags.Archived {
@@ -77,23 +64,29 @@ func (m *userMailbox) UpdateFlags(ctx context.Context, messageID string, flags F
 		}
 	}
 
-	// Publish read event (only for marking as read, not unread)
-	if flags.Read != nil && *flags.Read {
-		if err := m.service.events.MessageRead.Publish(ctxWithMessageID(ctx, messageID), MessageReadEvent{
-			MessageID: messageID,
-			UserID:    m.userID,
-			FolderID:  currentFolderID,
-			ReadAt:    time.Now().UTC(),
-		}); err != nil {
-			if m.service.opts.eventErrorsFatal {
-				// Operation succeeded but event failed - return EventPublishError
-				return &EventPublishError{
-					Event:     "MessageRead",
-					MessageID: messageID,
-					Err:       err,
-				}
+	// Apply read flag with atomic event publishing.
+	// Event only fires on mark-as-read (not unread) — MessageReadEvent has no IsRead field.
+	if flags.Read != nil {
+		var events []any
+		if *flags.Read {
+			events = []any{MessageReadEvent{
+				MessageID: messageID,
+				UserID:    m.userID,
+				FolderID:  currentFolderID,
+				ReadAt:    time.Now().UTC(),
+			}}
+		}
+		op := func(txCtx context.Context) error {
+			return m.service.store.MarkRead(txCtx, messageID, *flags.Read)
+		}
+		if len(events) > 0 {
+			if err := m.service.opAndPublish(ctx, EventNameMessageRead, messageID, events[0], op); err != nil {
+				return fmt.Errorf("mark read: %w", err)
 			}
-			m.service.opts.safeEventPublishFailure("MessageRead", err)
+		} else {
+			if err := op(ctx); err != nil {
+				return fmt.Errorf("mark unread: %w", err)
+			}
 		}
 	}
 
@@ -119,15 +112,9 @@ func (m *userMailbox) Delete(ctx context.Context, messageID string) (retErr erro
 	}
 
 	oldFolderID := msg.GetFolderID()
-	if err := m.service.store.MoveToFolder(ctx, messageID, store.FolderTrash); err != nil {
+	if err := m.moveAndPublish(ctx, messageID, m.userID, oldFolderID, store.FolderTrash, !msg.GetIsRead()); err != nil {
 		return fmt.Errorf("move to trash: %w", err)
 	}
-
-	// Publish move event
-	if err := m.publishMessageMoved(ctx, messageID, m.userID, oldFolderID, store.FolderTrash, !msg.GetIsRead()); err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -151,15 +138,9 @@ func (m *userMailbox) Restore(ctx context.Context, messageID string) (retErr err
 
 	folderID := defaultFolderForMessage(msg)
 
-	if err := m.service.store.MoveToFolder(ctx, messageID, folderID); err != nil {
+	if err := m.moveAndPublish(ctx, messageID, m.userID, store.FolderTrash, folderID, !msg.GetIsRead()); err != nil {
 		return fmt.Errorf("restore message: %w", err)
 	}
-
-	// Publish move event
-	if err := m.publishMessageMoved(ctx, messageID, m.userID, store.FolderTrash, folderID, !msg.GetIsRead()); err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -181,38 +162,26 @@ func (m *userMailbox) PermanentlyDelete(ctx context.Context, messageID string) (
 		return ErrNotInTrash
 	}
 
-	// Hard delete the message FIRST to avoid race condition.
-	// If we released attachment refs first and then delete failed,
-	// another process could see refs=0 and delete the attachments
-	// while the message still exists.
-	if err := m.service.store.HardDelete(ctx, messageID); err != nil {
+	// Hard delete + event atomically.
+	if err := m.service.opAndPublish(ctx, EventNameMessageDeleted, messageID,
+		MessageDeletedEvent{
+			MessageID: messageID,
+			UserID:    m.userID,
+			FolderID:  msg.GetFolderID(),
+			WasUnread: !msg.GetIsRead(),
+			DeletedAt: time.Now().UTC(),
+		},
+		func(txCtx context.Context) error {
+			return m.service.store.HardDelete(txCtx, messageID)
+		},
+	); err != nil {
 		return fmt.Errorf("hard delete message: %w", err)
 	}
 
 	// Release attachment references AFTER successful delete.
-	// If this fails, we have orphaned attachments (better than missing attachments on existing messages).
 	if err := m.releaseAttachmentRefs(ctx, msg); err != nil {
 		m.service.logger.Error("failed to release attachment refs during permanent delete - attachments may be orphaned",
 			"error", err, "message_id", messageID)
-	}
-
-	// Publish event
-	if err := m.service.events.MessageDeleted.Publish(ctxWithMessageID(ctx, messageID), MessageDeletedEvent{
-		MessageID: messageID,
-		UserID:    m.userID,
-		FolderID:  msg.GetFolderID(),
-		WasUnread: !msg.GetIsRead(),
-		DeletedAt: time.Now().UTC(),
-	}); err != nil {
-		if m.service.opts.eventErrorsFatal {
-			// Operation succeeded but event failed - return EventPublishError
-			return &EventPublishError{
-				Event:     "MessageDeleted",
-				MessageID: messageID,
-				Err:       err,
-			}
-		}
-		m.service.opts.safeEventPublishFailure("MessageDeleted", err)
 	}
 
 	return nil
@@ -244,16 +213,7 @@ func (m *userMailbox) MoveToFolder(ctx context.Context, messageID, folderID stri
 	}
 
 	oldFolderID := msg.GetFolderID()
-	if err := m.service.store.MoveToFolder(ctx, messageID, folderID, opts...); err != nil {
-		return fmt.Errorf("move to folder: %w", err)
-	}
-
-	// Publish move event
-	if err := m.publishMessageMoved(ctx, messageID, m.userID, oldFolderID, folderID, !msg.GetIsRead()); err != nil {
-		return err
-	}
-
-	return nil
+	return m.moveAndPublish(ctx, messageID, m.userID, oldFolderID, folderID, !msg.GetIsRead(), opts...)
 }
 
 // AddTag adds a tag to a message.
@@ -378,21 +338,16 @@ func (m *userMailbox) MarkAllRead(ctx context.Context, folderID string) (_ int64
 			stats.Folders[folderID] = c
 		})
 
-		// Publish MarkAllRead event
-		if err := m.service.events.MarkAllRead.Publish(ctxWithMessageID(ctx, folderID), MarkAllReadEvent{
-			UserID:   m.userID,
-			FolderID: folderID,
-			Count:    count,
-			MarkedAt: time.Now().UTC(),
-		}); err != nil {
-			if m.service.opts.eventErrorsFatal {
-				return count, &EventPublishError{
-					Event:     "MarkAllRead",
-					MessageID: folderID,
-					Err:       err,
-				}
-			}
-			m.service.opts.safeEventPublishFailure("MarkAllRead", err)
+		// Publish MarkAllRead event (DB write already done above).
+		if err := m.service.publishOnly(ctx, EventNameMarkAllRead, folderID,
+			MarkAllReadEvent{
+				UserID:   m.userID,
+				FolderID: folderID,
+				Count:    count,
+				MarkedAt: time.Now().UTC(),
+			},
+		); err != nil {
+			return count, err
 		}
 	}
 
@@ -418,31 +373,26 @@ func (m *userMailbox) getAndVerify(ctx context.Context, messageID string) (store
 	return msg, nil
 }
 
-// publishMessageMoved publishes a MessageMoved event.
-// Returns an EventPublishError when eventErrorsFatal is true and publishing fails.
-// Otherwise, logs the failure and returns nil.
-func (m *userMailbox) publishMessageMoved(ctx context.Context, messageID, userID, fromFolderID, toFolderID string, wasUnread bool) error {
+// moveAndPublish moves a message to a folder and publishes the MessageMoved event.
+// When the store supports outbox, both operations are atomic (single transaction).
+// Otherwise, the event is published directly (best-effort, current behavior).
+func (m *userMailbox) moveAndPublish(ctx context.Context, messageID, userID, fromFolderID, toFolderID string, wasUnread bool, opts ...store.MoveOption) error {
 	if fromFolderID == toFolderID {
 		return nil
 	}
-	if err := m.service.events.MessageMoved.Publish(ctxWithMessageID(ctx, messageID), MessageMovedEvent{
-		MessageID:    messageID,
-		UserID:       userID,
-		FromFolderID: fromFolderID,
-		ToFolderID:   toFolderID,
-		WasUnread:    wasUnread,
-		MovedAt:      time.Now().UTC(),
-	}); err != nil {
-		if m.service.opts.eventErrorsFatal {
-			return &EventPublishError{
-				Event:     "MessageMoved",
-				MessageID: messageID,
-				Err:       err,
-			}
-		}
-		m.service.opts.safeEventPublishFailure("MessageMoved", err)
-	}
-	return nil
+	return m.service.opAndPublish(ctx, EventNameMessageMoved, messageID,
+		MessageMovedEvent{
+			MessageID:    messageID,
+			UserID:       userID,
+			FromFolderID: fromFolderID,
+			ToFolderID:   toFolderID,
+			WasUnread:    wasUnread,
+			MovedAt:      time.Now().UTC(),
+		},
+		func(txCtx context.Context) error {
+			return m.service.store.MoveToFolder(txCtx, messageID, toFolderID, opts...)
+		},
+	)
 }
 
 // --- Filter-based bulk operations ---

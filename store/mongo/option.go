@@ -14,19 +14,22 @@ const (
 
 // options holds MongoDB store configuration.
 type options struct {
-	database    string
-	collection  string
-	timeout     time.Duration
-	logger      *slog.Logger
-	enableRegex bool // Enable regex-based text search (disabled by default for security)
+	database       string
+	collection     string
+	outboxCollection string // collection for outbox events (default: "outbox")
+	timeout        time.Duration
+	logger         *slog.Logger
+	enableRegex    bool // Enable regex-based text search (disabled by default for security)
+	outboxEnabled  bool // Enable transactional outbox for atomic event persistence
 }
 
 func newOptions(opts ...Option) *options {
 	o := &options{
-		database:   DefaultDatabase,
-		collection: DefaultCollection,
-		timeout:    DefaultTimeout,
-		logger:     slog.Default(),
+		database:         DefaultDatabase,
+		collection:       DefaultCollection,
+		outboxCollection: "outbox",
+		timeout:          DefaultTimeout,
+		logger:           slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(o)
@@ -69,6 +72,26 @@ func WithLogger(l *slog.Logger) Option {
 	return func(o *options) {
 		if l != nil {
 			o.logger = l
+		}
+	}
+}
+
+// WithOutbox enables transactional outbox for atomic event persistence.
+// When enabled, mutation methods check the context for pending events
+// (attached via store.WithOutboxEvents) and write them to an outbox
+// collection in the same MongoDB transaction as the main operation.
+// A background relay reads from the outbox and publishes to the event transport.
+func WithOutbox(enabled bool) Option {
+	return func(o *options) {
+		o.outboxEnabled = enabled
+	}
+}
+
+// WithOutboxCollection sets the outbox collection name. Default is "outbox".
+func WithOutboxCollection(name string) Option {
+	return func(o *options) {
+		if name != "" {
+			o.outboxCollection = name
 		}
 	}
 }

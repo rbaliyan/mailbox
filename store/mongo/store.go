@@ -141,7 +141,25 @@ func (s *Store) ensureIndexes(ctx context.Context) error {
 	}
 
 	_, err := s.collection.Indexes().CreateMany(ctx, indexes)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Create outbox collection index if outbox is enabled.
+	if s.opts.outboxEnabled {
+		outboxColl := s.db.Collection(s.opts.outboxCollection)
+		outboxIndexes := []mongo.IndexModel{
+			{Keys: bson.D{
+				bson.E{Key: "status", Value: 1},
+				bson.E{Key: "created_at", Value: 1},
+			}},
+		}
+		if _, err := outboxColl.Indexes().CreateMany(ctx, outboxIndexes); err != nil {
+			s.logger.Warn("failed to create outbox indexes", "error", err)
+		}
+	}
+
+	return nil
 }
 
 // =============================================================================
