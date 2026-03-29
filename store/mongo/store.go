@@ -131,6 +131,9 @@ func (s *Store) ensureIndexes(ctx context.Context) error {
 			bson.E{Key: "__is_draft", Value: 1},
 			bson.E{Key: "created_at", Value: -1},
 		}},
+		// Thread and reply indexes (sparse)
+		{Keys: bson.D{bson.E{Key: "thread_id", Value: 1}}, Options: mongoopts.Index().SetSparse(true)},
+		{Keys: bson.D{bson.E{Key: "reply_to_id", Value: 1}}, Options: mongoopts.Index().SetSparse(true)},
 		// Per-message TTL index (sparse - only indexes documents with expires_at set)
 		{Keys: bson.D{bson.E{Key: "expires_at", Value: 1}}, Options: mongoopts.Index().SetSparse(true)},
 		// Scheduled delivery index (sparse - only indexes documents with available_at set)

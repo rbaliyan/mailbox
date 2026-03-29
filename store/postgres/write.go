@@ -321,3 +321,116 @@ func (s *Store) Restore(ctx context.Context, id string) error {
 
 	return nil
 }
+
+// --- BulkUpdater implementation ---
+
+var _ store.BulkUpdater = (*Store)(nil)
+
+func (s *Store) bulkWhere(ownerID string, filters []store.Filter) (string, []any) {
+	argIdx := 2 // $1 is ownerID
+	where, args := s.buildWhereClause(filters)
+	// Offset the filter args
+	fullWhere := fmt.Sprintf("owner_id = $1 AND is_draft = false AND (available_at IS NULL OR available_at <= NOW())")
+	if where != "1=1" {
+		fullWhere += " AND " + where
+	}
+	_ = argIdx
+	return fullWhere, append([]any{ownerID}, args...)
+}
+
+func (s *Store) MarkReadByFilter(ctx context.Context, ownerID string, filters []store.Filter, read bool) (int64, error) {
+	if err := s.checkConnected(); err != nil {
+		return 0, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	where, args := s.bulkWhere(ownerID, filters)
+	n := len(args)
+	var query string
+	if read {
+		query = fmt.Sprintf("UPDATE %s SET is_read = $%d, read_at = $%d, updated_at = $%d WHERE %s",
+			s.opts.table, n+1, n+2, n+3, where)
+		now := time.Now().UTC()
+		args = append(args, true, now, now)
+	} else {
+		query = fmt.Sprintf("UPDATE %s SET is_read = $%d, read_at = NULL, updated_at = $%d WHERE %s",
+			s.opts.table, n+1, n+2, where)
+		args = append(args, false, time.Now().UTC())
+	}
+
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("mark read by filter: %w", err)
+	}
+	count, _ := result.RowsAffected()
+	return count, nil
+}
+
+func (s *Store) MoveByFilter(ctx context.Context, ownerID string, filters []store.Filter, folderID string) (int64, error) {
+	if err := s.checkConnected(); err != nil {
+		return 0, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	where, args := s.bulkWhere(ownerID, filters)
+	n := len(args)
+	query := fmt.Sprintf("UPDATE %s SET folder_id = $%d, updated_at = $%d WHERE %s",
+		s.opts.table, n+1, n+2, where)
+	args = append(args, folderID, time.Now().UTC())
+
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("move by filter: %w", err)
+	}
+	count, _ := result.RowsAffected()
+	return count, nil
+}
+
+func (s *Store) DeleteByFilter(ctx context.Context, ownerID string, filters []store.Filter) (int64, error) {
+	return s.MoveByFilter(ctx, ownerID, filters, store.FolderTrash)
+}
+
+func (s *Store) AddTagByFilter(ctx context.Context, ownerID string, filters []store.Filter, tagID string) (int64, error) {
+	if err := s.checkConnected(); err != nil {
+		return 0, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	where, args := s.bulkWhere(ownerID, filters)
+	n := len(args)
+	query := fmt.Sprintf("UPDATE %s SET tags = array_append(tags, $%d), updated_at = $%d WHERE %s AND NOT ($%d = ANY(tags))",
+		s.opts.table, n+1, n+2, where, n+3)
+	now := time.Now().UTC()
+	args = append(args, tagID, now, tagID)
+
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("add tag by filter: %w", err)
+	}
+	count, _ := result.RowsAffected()
+	return count, nil
+}
+
+func (s *Store) RemoveTagByFilter(ctx context.Context, ownerID string, filters []store.Filter, tagID string) (int64, error) {
+	if err := s.checkConnected(); err != nil {
+		return 0, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	where, args := s.bulkWhere(ownerID, filters)
+	n := len(args)
+	query := fmt.Sprintf("UPDATE %s SET tags = array_remove(tags, $%d), updated_at = $%d WHERE %s",
+		s.opts.table, n+1, n+2, where)
+	args = append(args, tagID, time.Now().UTC())
+
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("remove tag by filter: %w", err)
+	}
+	count, _ := result.RowsAffected()
+	return count, nil
+}

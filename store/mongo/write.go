@@ -350,3 +350,96 @@ func (s *Store) Restore(ctx context.Context, id string) error {
 
 	return nil
 }
+
+// --- BulkUpdater implementation ---
+
+var _ store.BulkUpdater = (*Store)(nil)
+
+func (s *Store) bulkFilter(ownerID string, filters []store.Filter) bson.M {
+	filter := bson.M{
+		"owner_id":   ownerID,
+		"__is_draft": bson.M{"$ne": true},
+	}
+	for k, v := range buildFilter(filters) {
+		filter[k] = v
+	}
+	addAvailabilityFilter(filter)
+	return filter
+}
+
+func (s *Store) MarkReadByFilter(ctx context.Context, ownerID string, filters []store.Filter, read bool) (int64, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return 0, store.ErrNotConnected
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	now := time.Now().UTC()
+	update := bson.M{"$set": bson.M{"is_read": read, "updated_at": now}}
+	if read {
+		update["$set"].(bson.M)["read_at"] = now
+	} else {
+		update["$unset"] = bson.M{"read_at": ""}
+	}
+
+	result, err := s.collection.UpdateMany(ctx, s.bulkFilter(ownerID, filters), update)
+	if err != nil {
+		return 0, fmt.Errorf("mark read by filter: %w", err)
+	}
+	return result.ModifiedCount, nil
+}
+
+func (s *Store) MoveByFilter(ctx context.Context, ownerID string, filters []store.Filter, folderID string) (int64, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return 0, store.ErrNotConnected
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	update := bson.M{"$set": bson.M{"folder_id": folderID, "updated_at": time.Now().UTC()}}
+	result, err := s.collection.UpdateMany(ctx, s.bulkFilter(ownerID, filters), update)
+	if err != nil {
+		return 0, fmt.Errorf("move by filter: %w", err)
+	}
+	return result.ModifiedCount, nil
+}
+
+func (s *Store) DeleteByFilter(ctx context.Context, ownerID string, filters []store.Filter) (int64, error) {
+	return s.MoveByFilter(ctx, ownerID, filters, store.FolderTrash)
+}
+
+func (s *Store) AddTagByFilter(ctx context.Context, ownerID string, filters []store.Filter, tagID string) (int64, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return 0, store.ErrNotConnected
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	update := bson.M{
+		"$addToSet": bson.M{"tags": tagID},
+		"$set":      bson.M{"updated_at": time.Now().UTC()},
+	}
+	result, err := s.collection.UpdateMany(ctx, s.bulkFilter(ownerID, filters), update)
+	if err != nil {
+		return 0, fmt.Errorf("add tag by filter: %w", err)
+	}
+	return result.ModifiedCount, nil
+}
+
+func (s *Store) RemoveTagByFilter(ctx context.Context, ownerID string, filters []store.Filter, tagID string) (int64, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return 0, store.ErrNotConnected
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	update := bson.M{
+		"$pull": bson.M{"tags": tagID},
+		"$set":  bson.M{"updated_at": time.Now().UTC()},
+	}
+	result, err := s.collection.UpdateMany(ctx, s.bulkFilter(ownerID, filters), update)
+	if err != nil {
+		return 0, fmt.Errorf("remove tag by filter: %w", err)
+	}
+	return result.ModifiedCount, nil
+}
