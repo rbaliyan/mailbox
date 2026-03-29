@@ -444,3 +444,175 @@ func (m *userMailbox) publishMessageMoved(ctx context.Context, messageID, userID
 	}
 	return nil
 }
+
+// --- Filter-based bulk operations ---
+
+// scopedFilters prepends owner and non-draft filters to the caller's filters.
+func (m *userMailbox) scopedFilters(filters []store.Filter) []store.Filter {
+	scoped := make([]store.Filter, 0, len(filters)+2)
+	scoped = append(scoped, store.OwnerIs(m.userID), store.IsDraftFilter(false))
+	scoped = append(scoped, filters...)
+	return scoped
+}
+
+func (m *userMailbox) UpdateByFilter(ctx context.Context, filters []store.Filter, flags Flags) (int64, error) {
+	if err := m.checkAccess(); err != nil {
+		return 0, err
+	}
+	scoped := m.scopedFilters(filters)
+
+	// Fast path: native bulk update.
+	if bu, ok := m.service.store.(store.BulkUpdater); ok && flags.Read != nil {
+		return bu.MarkReadByFilter(ctx, m.userID, scoped, *flags.Read)
+	}
+
+	// Slow path: paginated iteration.
+	var count int64
+	var cursor string
+	for {
+		list, err := m.service.store.Find(ctx, scoped, store.ListOptions{
+			Limit: m.service.opts.maxQueryLimit, StartAfter: cursor,
+		})
+		if err != nil {
+			return count, err
+		}
+		for _, msg := range list.Messages {
+			if err := m.service.store.MarkRead(ctx, msg.GetID(), flags.Read != nil && *flags.Read); err == nil {
+				count++
+			}
+		}
+		if !list.HasMore || len(list.Messages) == 0 {
+			break
+		}
+		cursor = list.Messages[len(list.Messages)-1].GetID()
+	}
+	return count, nil
+}
+
+func (m *userMailbox) MoveByFilter(ctx context.Context, filters []store.Filter, folderID string) (int64, error) {
+	if err := m.checkAccess(); err != nil {
+		return 0, err
+	}
+	scoped := m.scopedFilters(filters)
+
+	if bu, ok := m.service.store.(store.BulkUpdater); ok {
+		return bu.MoveByFilter(ctx, m.userID, scoped, folderID)
+	}
+
+	var count int64
+	var cursor string
+	for {
+		list, err := m.service.store.Find(ctx, scoped, store.ListOptions{
+			Limit: m.service.opts.maxQueryLimit, StartAfter: cursor,
+		})
+		if err != nil {
+			return count, err
+		}
+		for _, msg := range list.Messages {
+			if err := m.service.store.MoveToFolder(ctx, msg.GetID(), folderID); err == nil {
+				count++
+			}
+		}
+		if !list.HasMore || len(list.Messages) == 0 {
+			break
+		}
+		cursor = list.Messages[len(list.Messages)-1].GetID()
+	}
+	return count, nil
+}
+
+func (m *userMailbox) DeleteByFilter(ctx context.Context, filters []store.Filter) (int64, error) {
+	if err := m.checkAccess(); err != nil {
+		return 0, err
+	}
+	scoped := m.scopedFilters(filters)
+
+	if bu, ok := m.service.store.(store.BulkUpdater); ok {
+		return bu.DeleteByFilter(ctx, m.userID, scoped)
+	}
+
+	var count int64
+	var cursor string
+	for {
+		list, err := m.service.store.Find(ctx, scoped, store.ListOptions{
+			Limit: m.service.opts.maxQueryLimit, StartAfter: cursor,
+		})
+		if err != nil {
+			return count, err
+		}
+		for _, msg := range list.Messages {
+			if err := m.service.store.MoveToFolder(ctx, msg.GetID(), store.FolderTrash); err == nil {
+				count++
+			}
+		}
+		if !list.HasMore || len(list.Messages) == 0 {
+			break
+		}
+		cursor = list.Messages[len(list.Messages)-1].GetID()
+	}
+	return count, nil
+}
+
+func (m *userMailbox) TagByFilter(ctx context.Context, filters []store.Filter, tagID string) (int64, error) {
+	if err := m.checkAccess(); err != nil {
+		return 0, err
+	}
+	scoped := m.scopedFilters(filters)
+
+	if bu, ok := m.service.store.(store.BulkUpdater); ok {
+		return bu.AddTagByFilter(ctx, m.userID, scoped, tagID)
+	}
+
+	var count int64
+	var cursor string
+	for {
+		list, err := m.service.store.Find(ctx, scoped, store.ListOptions{
+			Limit: m.service.opts.maxQueryLimit, StartAfter: cursor,
+		})
+		if err != nil {
+			return count, err
+		}
+		for _, msg := range list.Messages {
+			if err := m.service.store.AddTag(ctx, msg.GetID(), tagID); err == nil {
+				count++
+			}
+		}
+		if !list.HasMore || len(list.Messages) == 0 {
+			break
+		}
+		cursor = list.Messages[len(list.Messages)-1].GetID()
+	}
+	return count, nil
+}
+
+func (m *userMailbox) UntagByFilter(ctx context.Context, filters []store.Filter, tagID string) (int64, error) {
+	if err := m.checkAccess(); err != nil {
+		return 0, err
+	}
+	scoped := m.scopedFilters(filters)
+
+	if bu, ok := m.service.store.(store.BulkUpdater); ok {
+		return bu.RemoveTagByFilter(ctx, m.userID, scoped, tagID)
+	}
+
+	var count int64
+	var cursor string
+	for {
+		list, err := m.service.store.Find(ctx, scoped, store.ListOptions{
+			Limit: m.service.opts.maxQueryLimit, StartAfter: cursor,
+		})
+		if err != nil {
+			return count, err
+		}
+		for _, msg := range list.Messages {
+			if err := m.service.store.RemoveTag(ctx, msg.GetID(), tagID); err == nil {
+				count++
+			}
+		}
+		if !list.HasMore || len(list.Messages) == 0 {
+			break
+		}
+		cursor = list.Messages[len(list.Messages)-1].GetID()
+	}
+	return count, nil
+}

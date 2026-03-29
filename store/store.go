@@ -302,6 +302,19 @@ type BulkReadMarker interface {
 	MarkAllRead(ctx context.Context, ownerID string, folderID string) (int64, error)
 }
 
+// BulkUpdater provides filter-based bulk mutation operations.
+// Implementations use native database bulk operations (updateMany, UPDATE WHERE)
+// for single-round-trip efficiency. When a store implements this interface,
+// the service layer uses it as a fast path; otherwise it falls back to
+// paginated iteration with per-message operations.
+type BulkUpdater interface {
+	MarkReadByFilter(ctx context.Context, ownerID string, filters []Filter, read bool) (int64, error)
+	MoveByFilter(ctx context.Context, ownerID string, filters []Filter, folderID string) (int64, error)
+	DeleteByFilter(ctx context.Context, ownerID string, filters []Filter) (int64, error)
+	AddTagByFilter(ctx context.Context, ownerID string, filters []Filter, tagID string) (int64, error)
+	RemoveTagByFilter(ctx context.Context, ownerID string, filters []Filter, tagID string) (int64, error)
+}
+
 // MaintenanceStore provides operations for background maintenance tasks.
 // These operations are designed to be safely called concurrently from
 // multiple service instances without requiring distributed coordination.

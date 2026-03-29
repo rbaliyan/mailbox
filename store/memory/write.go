@@ -313,3 +313,93 @@ func (s *Store) Restore(ctx context.Context, id string) error {
 	s.messages.Store(id, m)
 	return nil
 }
+
+// --- BulkUpdater implementation ---
+
+var _ store.BulkUpdater = (*Store)(nil)
+
+func (s *Store) iterateFiltered(ownerID string, filters []store.Filter, fn func(m *message)) int64 {
+	var count int64
+	now := time.Now().UTC()
+	s.messages.Range(func(key, value any) bool {
+		m := value.(*message)
+		if m.isDraft || m.ownerID != ownerID {
+			return true
+		}
+		if m.availableAt != nil && m.availableAt.After(now) {
+			return true
+		}
+		if !matchesFilters(m, filters) {
+			return true
+		}
+		lock := s.getMsgLock(key.(string))
+		lock.Lock()
+		fn(m)
+		m.updatedAt = now
+		lock.Unlock()
+		count++
+		return true
+	})
+	return count
+}
+
+func (s *Store) MarkReadByFilter(_ context.Context, ownerID string, filters []store.Filter, read bool) (int64, error) {
+	if err := s.checkConnected(); err != nil {
+		return 0, err
+	}
+	now := time.Now().UTC()
+	return s.iterateFiltered(ownerID, filters, func(m *message) {
+		m.isRead = read
+		if read {
+			m.readAt = &now
+		} else {
+			m.readAt = nil
+		}
+	}), nil
+}
+
+func (s *Store) MoveByFilter(_ context.Context, ownerID string, filters []store.Filter, folderID string) (int64, error) {
+	if err := s.checkConnected(); err != nil {
+		return 0, err
+	}
+	return s.iterateFiltered(ownerID, filters, func(m *message) {
+		m.folderID = folderID
+	}), nil
+}
+
+func (s *Store) DeleteByFilter(_ context.Context, ownerID string, filters []store.Filter) (int64, error) {
+	if err := s.checkConnected(); err != nil {
+		return 0, err
+	}
+	return s.iterateFiltered(ownerID, filters, func(m *message) {
+		m.folderID = store.FolderTrash
+	}), nil
+}
+
+func (s *Store) AddTagByFilter(_ context.Context, ownerID string, filters []store.Filter, tagID string) (int64, error) {
+	if err := s.checkConnected(); err != nil {
+		return 0, err
+	}
+	return s.iterateFiltered(ownerID, filters, func(m *message) {
+		for _, t := range m.tags {
+			if t == tagID {
+				return
+			}
+		}
+		m.tags = append(m.tags, tagID)
+	}), nil
+}
+
+func (s *Store) RemoveTagByFilter(_ context.Context, ownerID string, filters []store.Filter, tagID string) (int64, error) {
+	if err := s.checkConnected(); err != nil {
+		return 0, err
+	}
+	return s.iterateFiltered(ownerID, filters, func(m *message) {
+		for i, t := range m.tags {
+			if t == tagID {
+				m.tags = append(m.tags[:i], m.tags[i+1:]...)
+				return
+			}
+		}
+	}), nil
+}

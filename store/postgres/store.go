@@ -154,6 +154,7 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_tags ON %s USING GIN(tags)`, s.opts.table, s.opts.table),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_recipients ON %s USING GIN(recipient_ids)`, s.opts.table, s.opts.table),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_thread ON %s(thread_id) WHERE thread_id IS NOT NULL`, s.opts.table, s.opts.table),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_reply_to ON %s(reply_to_id) WHERE reply_to_id IS NOT NULL`, s.opts.table, s.opts.table),
 		// Compound indexes for common queries
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_owner_folder ON %s(owner_id, folder_id, created_at DESC)`, s.opts.table, s.opts.table),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_owner_draft ON %s(owner_id, is_draft, created_at DESC)`, s.opts.table, s.opts.table),

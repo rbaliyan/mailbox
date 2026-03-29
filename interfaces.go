@@ -216,6 +216,21 @@ type MailboxMutator interface {
 	// falling back to individual MarkRead calls otherwise.
 	// Returns the number of messages that were marked as read.
 	MarkAllRead(ctx context.Context, folderID string) (int64, error)
+
+	// Filter-based bulk operations. Filters are automatically scoped to this
+	// user's non-draft messages. Uses native bulk database operations when
+	// available (store.BulkUpdater), falling back to paginated iteration.
+
+	// UpdateByFilter marks messages matching filters as read/unread.
+	UpdateByFilter(ctx context.Context, filters []store.Filter, flags Flags) (int64, error)
+	// MoveByFilter moves messages matching filters to the given folder.
+	MoveByFilter(ctx context.Context, filters []store.Filter, folderID string) (int64, error)
+	// DeleteByFilter soft-deletes messages matching filters (moves to trash).
+	DeleteByFilter(ctx context.Context, filters []store.Filter) (int64, error)
+	// TagByFilter adds a tag to messages matching filters.
+	TagByFilter(ctx context.Context, filters []store.Filter, tagID string) (int64, error)
+	// UntagByFilter removes a tag from messages matching filters.
+	UntagByFilter(ctx context.Context, filters []store.Filter, tagID string) (int64, error)
 }
 
 // SendRequest contains the data needed to send a message directly,
