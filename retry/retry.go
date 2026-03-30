@@ -6,7 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/rand"
+	"crypto/rand"
+	"encoding/binary"
 	"time"
 )
 
@@ -168,7 +169,7 @@ func calculateBackoff(cfg Config, attempt int) time.Duration {
 	// Apply jitter
 	if cfg.Jitter > 0 {
 		jitterRange := backoff * cfg.Jitter
-		backoff = backoff - jitterRange + (rand.Float64() * 2 * jitterRange)
+		backoff = backoff - jitterRange + (cryptoFloat64() * 2 * jitterRange)
 	}
 
 	return time.Duration(backoff)
@@ -269,4 +270,11 @@ func (e *retryableError) Unwrap() error {
 
 func (e *retryableError) Retryable() bool {
 	return true
+}
+
+// cryptoFloat64 returns a cryptographically secure random float64 in [0, 1).
+func cryptoFloat64() float64 {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return float64(binary.LittleEndian.Uint64(b[:])>>11) / (1 << 53)
 }

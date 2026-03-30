@@ -127,8 +127,8 @@ func (s *Store) CreateMessages(ctx context.Context, data []store.MessageData) ([
 			return nil, fmt.Errorf("marshal attachments: %w", err)
 		}
 
-		query := fmt.Sprintf(`
-			INSERT INTO %s (id, owner_id, sender_id, subject, body, headers, metadata, status, folder_id,
+		query := fmt.Sprintf( // #nosec G201 -- table name validated by validIdentifier
+			`INSERT INTO %s (id, owner_id, sender_id, subject, body, headers, metadata, status, folder_id,
 			                recipient_ids, tags, attachments, is_draft, thread_id, reply_to_id,
 			                expires_at, available_at, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)

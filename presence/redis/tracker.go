@@ -88,7 +88,7 @@ func (t *Tracker) Register(ctx context.Context, userID string, opts ...presence.
 	t.registrations = append(t.registrations, reg)
 	t.mu.Unlock()
 
-	go reg.refreshLoop(regCtx)
+	go reg.refreshLoop(regCtx) // #nosec G118 — refresh loop intentionally uses derived context, not request context
 
 	return reg, nil
 }
