@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,7 +46,7 @@ func New(backend store.AttachmentFileStore, opts ...Option) (*Store, error) {
 
 	// Create cache directory
 	cacheDir := filepath.Join(o.cacheDir, "mailbox-attachments")
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+	if err := os.MkdirAll(cacheDir, 0750); err != nil {
 		return nil, fmt.Errorf("create cache directory: %w", err)
 	}
 
@@ -77,12 +78,16 @@ func (s *Store) Upload(ctx context.Context, filename, contentType string, conten
 func (s *Store) Load(ctx context.Context, uri string) (io.ReadCloser, error) {
 	cacheKey := s.cacheKey(uri)
 	cachePath := filepath.Join(s.cacheDir, cacheKey)
+	// Prevent directory traversal: ensure resolved path is under cacheDir.
+	if !strings.HasPrefix(filepath.Clean(cachePath), filepath.Clean(s.cacheDir)+string(filepath.Separator)) {
+		return nil, fmt.Errorf("invalid cache path: %s", cacheKey)
+	}
 
 	// Check if cached file exists and is not expired
 	if info, err := os.Stat(cachePath); err == nil {
 		if time.Since(info.ModTime()) < s.ttl {
 			// Cache hit
-			f, err := os.Open(cachePath)
+			f, err := os.Open(cachePath) // #nosec G304 — path validated against cacheDir above
 			if err == nil {
 				s.logger.Debug("cache hit", "uri", uri)
 				// Update access time

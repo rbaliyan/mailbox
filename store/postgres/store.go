@@ -70,7 +70,7 @@ func (s *Store) Connect(ctx context.Context) error {
 
 	// Create schema and indexes asynchronously — index creation on large
 	// tables can take a long time and should not block service startup.
-	go func() {
+	go func() { // #nosec G118 — background goroutine intentionally outlives request context
 		if err := s.ensureSchema(context.Background()); err != nil {
 			s.logger.Error("failed to ensure schema", "error", err)
 		}
