@@ -3,28 +3,28 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"time"
 
+	event "github.com/rbaliyan/event/v3"
+	"github.com/rbaliyan/event/v3/outbox"
 	"github.com/rbaliyan/mailbox/store"
 )
 
-// Compile-time check.
-var _ store.OutboxPersister = (*Store)(nil)
+// Compile-time checks.
+var (
+	_ store.OutboxPersister     = (*Store)(nil)
+	_ store.EventOutboxProvider = (*Store)(nil)
+)
 
 // OutboxEnabled returns whether the outbox is configured.
 func (s *Store) OutboxEnabled() bool { return s.opts.outboxEnabled }
 
-// WithOutboxCtx wraps fn in a PostgreSQL transaction that also persists
-// any OutboxEvents from context. The transaction is injected into context
-// via txCtxKey so that all store methods called within fn use the same tx.
-// Zero overhead when outbox is disabled or no events are in context.
+// WithOutboxCtx wraps fn in a PostgreSQL transaction that is shared by both
+// store methods (via txCtxKey) and the event bus (via event.WithOutboxTx).
+// This enables atomic mutation + event publish: store methods use the tx for
+// DB writes, and Event.Publish() routes to the outbox table in the same tx.
+// Zero overhead when outbox is disabled.
 func (s *Store) WithOutboxCtx(ctx context.Context, fn func(ctx context.Context) error) error {
 	if !s.opts.outboxEnabled {
-		return fn(ctx)
-	}
-
-	events := store.OutboxEventsFromCtx(ctx)
-	if len(events) == 0 {
 		return fn(ctx)
 	}
 
@@ -34,45 +34,32 @@ func (s *Store) WithOutboxCtx(ctx context.Context, fn func(ctx context.Context) 
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Inject tx into context so store methods use it via s.exec(ctx).
+	// Set both context keys so store methods and bus outbox use the same tx.
 	txCtx := context.WithValue(ctx, txCtxKey{}, tx)
+	txCtx = event.WithOutboxTx(txCtx, tx)
 
 	if err := fn(txCtx); err != nil {
 		return err
 	}
 
-	// Write events to outbox table in same transaction.
-	now := time.Now().UTC()
-	for _, evt := range events {
-		_, err := tx.ExecContext(txCtx,
-			fmt.Sprintf(`INSERT INTO %s (name, message_id, payload, status, created_at) VALUES ($1, $2, $3, $4, $5)`, s.opts.outboxTable),
-			evt.Name, evt.MessageID, evt.Payload, "pending", now,
-		)
-		if err != nil {
-			return fmt.Errorf("write outbox event: %w", err)
-		}
-	}
-
-	return tx.Commit()
-}
-
-// PersistOutboxEvents writes events directly to the outbox table without
-// wrapping a database transaction. Used for event-only operations where
-// no other mutation needs atomicity.
-func (s *Store) PersistOutboxEvents(ctx context.Context, events ...store.OutboxEvent) error {
-	if !s.opts.outboxEnabled || len(events) == 0 {
-		return nil
-	}
-
-	now := time.Now().UTC()
-	for _, evt := range events {
-		_, err := s.db.ExecContext(ctx,
-			fmt.Sprintf(`INSERT INTO %s (name, message_id, payload, status, created_at) VALUES ($1, $2, $3, $4, $5)`, s.opts.outboxTable),
-			evt.Name, evt.MessageID, evt.Payload, "pending", now,
-		)
-		if err != nil {
-			return fmt.Errorf("write outbox event: %w", err)
-		}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit outbox transaction: %w", err)
 	}
 	return nil
+}
+
+// EventOutboxStore returns an event.OutboxStore backed by the same PostgreSQL
+// database, for configuring the event bus with event.WithOutbox().
+// Returns nil if outbox is not enabled.
+func (s *Store) EventOutboxStore() event.OutboxStore {
+	if !s.opts.outboxEnabled {
+		return nil
+	}
+	// Create an event library outbox store pointing to the same DB and table.
+	pgStore, err := outbox.NewPostgresStore(s.db.DB, outbox.WithTable(s.opts.outboxTable))
+	if err != nil {
+		s.logger.Error("failed to create event outbox store", "error", err)
+		return nil
+	}
+	return pgStore
 }

@@ -8,36 +8,6 @@ import (
 	"github.com/rbaliyan/mailbox/store/memory"
 )
 
-func TestOutboxEventsContextRoundTrip(t *testing.T) {
-	ctx := context.Background()
-
-	// Empty context has no events.
-	if events := store.OutboxEventsFromCtx(ctx); len(events) != 0 {
-		t.Errorf("expected 0 events, got %d", len(events))
-	}
-
-	// Add events to context.
-	evt1 := store.OutboxEvent{Name: "test.event1", MessageID: "msg1", Payload: []byte(`{"a":1}`)}
-	evt2 := store.OutboxEvent{Name: "test.event2", MessageID: "msg2", Payload: []byte(`{"b":2}`)}
-	ctx = store.WithOutboxEvents(ctx, evt1, evt2)
-
-	events := store.OutboxEventsFromCtx(ctx)
-	if len(events) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(events))
-	}
-	if events[0].Name != "test.event1" || events[1].Name != "test.event2" {
-		t.Errorf("events mismatch: %v", events)
-	}
-
-	// Appending more events preserves existing.
-	evt3 := store.OutboxEvent{Name: "test.event3", MessageID: "msg3"}
-	ctx = store.WithOutboxEvents(ctx, evt3)
-	events = store.OutboxEventsFromCtx(ctx)
-	if len(events) != 3 {
-		t.Errorf("expected 3 events after append, got %d", len(events))
-	}
-}
-
 func TestMemoryOutboxPersister(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
@@ -207,26 +177,6 @@ func TestPermanentlyDelete_ViaOpAndPublish(t *testing.T) {
 	}
 }
 
-func TestNewOutboxEvent(t *testing.T) {
-	evt, err := newOutboxEvent("test.event", "msg-123", MessageSentEvent{
-		MessageID: "msg-123",
-		SenderID:  "alice",
-		Subject:   "hello",
-	})
-	if err != nil {
-		t.Fatalf("newOutboxEvent: %v", err)
-	}
-	if evt.Name != "test.event" {
-		t.Errorf("name: %q", evt.Name)
-	}
-	if evt.MessageID != "msg-123" {
-		t.Errorf("messageID: %q", evt.MessageID)
-	}
-	if len(evt.Payload) == 0 {
-		t.Error("payload should not be empty")
-	}
-}
-
 func TestPublishTypedEvent_UnknownType(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := NewService(WithStore(memory.New()))
@@ -237,119 +187,5 @@ func TestPublishTypedEvent_UnknownType(t *testing.T) {
 	err := s.publishTypedEvent(ctx, "unknown", struct{}{})
 	if err == nil {
 		t.Fatal("expected error for unknown event type")
-	}
-}
-
-func TestPublishOutboxEvent_AllEventTypes(t *testing.T) {
-	ctx := context.Background()
-	svc, _ := NewService(WithStore(memory.New()))
-	svc.Connect(ctx)
-	defer svc.Close(ctx)
-
-	s := svc.(*service)
-
-	tests := []struct {
-		name    string
-		evtName string
-		data    any
-	}{
-		{
-			name:    "MessageSent",
-			evtName: EventNameMessageSent,
-			data:    MessageSentEvent{MessageID: "m1", SenderID: "alice", Subject: "hi"},
-		},
-		{
-			name:    "MessageReceived",
-			evtName: EventNameMessageReceived,
-			data:    MessageReceivedEvent{MessageID: "m2", RecipientID: "bob", SenderID: "alice"},
-		},
-		{
-			name:    "MessageRead",
-			evtName: EventNameMessageRead,
-			data:    MessageReadEvent{MessageID: "m3", UserID: "bob"},
-		},
-		{
-			name:    "MessageDeleted",
-			evtName: EventNameMessageDeleted,
-			data:    MessageDeletedEvent{MessageID: "m4", UserID: "bob"},
-		},
-		{
-			name:    "MessageMoved",
-			evtName: EventNameMessageMoved,
-			data:    MessageMovedEvent{MessageID: "m5", UserID: "bob", FromFolderID: "__inbox", ToFolderID: "__archive"},
-		},
-		{
-			name:    "MarkAllRead",
-			evtName: EventNameMarkAllRead,
-			data:    MarkAllReadEvent{UserID: "bob", FolderID: "__inbox", Count: 5},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create outbox event via newOutboxEvent (JSON round-trip).
-			evt, err := newOutboxEvent(tt.evtName, "msg-id", tt.data)
-			if err != nil {
-				t.Fatalf("newOutboxEvent: %v", err)
-			}
-
-			// Publish via publishEventByName — the outbox relay path.
-			if err := s.PublishOutboxEvent(ctx, evt); err != nil {
-				t.Errorf("publishEventByName(%s): %v", tt.evtName, err)
-			}
-		})
-	}
-}
-
-func TestPublishOutboxEvent_UnknownEvent(t *testing.T) {
-	ctx := context.Background()
-	svc, _ := NewService(WithStore(memory.New()))
-	svc.Connect(ctx)
-	defer svc.Close(ctx)
-
-	s := svc.(*service)
-
-	evt := store.OutboxEvent{
-		Name:      "unknown.event",
-		MessageID: "msg-1",
-		Payload:   []byte(`{}`),
-	}
-	err := s.PublishOutboxEvent(ctx, evt)
-	if err == nil {
-		t.Fatal("expected error for unknown event name")
-	}
-}
-
-func TestPublishOutboxEvent_InvalidPayload(t *testing.T) {
-	ctx := context.Background()
-	svc, _ := NewService(WithStore(memory.New()))
-	svc.Connect(ctx)
-	defer svc.Close(ctx)
-
-	s := svc.(*service)
-
-	evt := store.OutboxEvent{
-		Name:      EventNameMessageSent,
-		MessageID: "msg-1",
-		Payload:   []byte(`{invalid json`),
-	}
-	err := s.PublishOutboxEvent(ctx, evt)
-	if err == nil {
-		t.Fatal("expected error for invalid JSON payload")
-	}
-}
-
-func TestPersistOutboxEvents_MemoryNoOp(t *testing.T) {
-	ctx := context.Background()
-	memStore := memory.New()
-	memStore.Connect(ctx)
-	defer memStore.Close(ctx)
-
-	var s store.Store = memStore
-	op := s.(store.OutboxPersister)
-	// Should succeed silently (no-op).
-	err := op.PersistOutboxEvents(ctx, store.OutboxEvent{Name: "test", Payload: []byte(`{}`)})
-	if err != nil {
-		t.Fatalf("PersistOutboxEvents: %v", err)
 	}
 }

@@ -85,6 +85,8 @@
 //
 //	store := mongostore.New(client, mongostore.WithOutbox(true))
 //
-// Events are then persisted atomically with DB writes and published via a relay.
-// See store.OutboxPersister for the interface.
+// Events are then persisted atomically with DB writes via the event library's
+// outbox package. The store provides an event.OutboxStore to the bus, and a
+// background relay (outbox.Relay) publishes pending events to the transport.
+// See store.OutboxPersister and store.EventOutboxProvider for the interfaces.
 package mailbox

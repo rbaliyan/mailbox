@@ -147,10 +147,13 @@ func (s *service) initEventBus(ctx context.Context) error {
 	var bus *event.Bus
 	var err error
 
+	// Collect bus options.
+	var busOpts []event.BusOption
+
 	switch {
 	case s.opts.eventTransport != nil:
 		s.logger.Info("initializing event bus with custom transport")
-		bus, err = event.NewBus(busName, event.WithTransport(s.opts.eventTransport))
+		busOpts = append(busOpts, event.WithTransport(s.opts.eventTransport))
 		s.statsCacheEnabled = true
 	case s.opts.redisClient != nil:
 		s.logger.Info("initializing event bus with Redis transport")
@@ -165,14 +168,23 @@ func (s *service) initEventBus(ctx context.Context) error {
 		if transportErr != nil {
 			return fmt.Errorf("create redis transport: %w", transportErr)
 		}
-		bus, err = event.NewBus(busName, event.WithTransport(t))
+		busOpts = append(busOpts, event.WithTransport(t))
 		s.statsCacheEnabled = true
 	default:
 		s.logger.Debug("initializing event bus with noop transport (stats cache disabled)")
-		bus, err = event.NewBus(busName, event.WithTransport(noop.New()))
+		busOpts = append(busOpts, event.WithTransport(noop.New()))
 		s.statsCacheEnabled = false
 	}
 
+	// Wire outbox store from the store implementation if available.
+	if provider, ok := s.store.(store.EventOutboxProvider); ok {
+		if outboxStore := provider.EventOutboxStore(); outboxStore != nil {
+			busOpts = append(busOpts, event.WithOutbox(outboxStore))
+			s.logger.Info("event bus outbox enabled")
+		}
+	}
+
+	bus, err = event.NewBus(busName, busOpts...)
 	if err != nil {
 		return fmt.Errorf("create event bus: %w", err)
 	}
