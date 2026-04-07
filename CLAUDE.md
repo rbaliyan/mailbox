@@ -114,7 +114,6 @@ mailbox/
 - `EnforceQuotas(ctx, userIDs)` - enforce delete-oldest quotas
 - `Events()` - per-service event instances
 - `Notifications(ctx, userID, lastEventID)` - notification stream
-- `PublishOutboxEvent(ctx, evt)` - publish pending outbox event (for relay)
 
 **Mailbox** (user-facing API):
 - `UserID()` - returns the mailbox owner's user ID
@@ -413,10 +412,12 @@ store := pgstore.New(db, pgstore.WithOutbox(true))
 ```
 
 When enabled, mutation methods atomically persist events to an outbox table/collection
-in the same database transaction. `PublishOutboxEvent(ctx, evt)` on `Service` dispatches
-outbox events to the event bus (for relay implementations).
+in the same database transaction. The event bus auto-routes `Event.Publish()` to the
+outbox table via `event.WithOutboxTx` (set by the store's `WithOutboxCtx`). A background
+relay (`outbox.Relay`) publishes pending events to the transport — no custom serialization needed.
 
-Store interface: `store.OutboxPersister` (`OutboxEnabled`, `WithOutboxCtx`, `PersistOutboxEvents`)
+Store interfaces: `store.OutboxPersister` (`OutboxEnabled`, `WithOutboxCtx`) and
+`store.EventOutboxProvider` (exposes `event.OutboxStore` for bus-level integration).
 
 ### Filter-Based Bulk Operations
 
