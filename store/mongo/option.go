@@ -14,13 +14,13 @@ const (
 
 // options holds MongoDB store configuration.
 type options struct {
-	database       string
-	collection     string
+	database         string
+	collection       string
 	outboxCollection string // collection for outbox events (default: "outbox")
-	timeout        time.Duration
-	logger         *slog.Logger
-	enableRegex    bool // Enable regex-based text search (disabled by default for security)
-	outboxEnabled  bool // Enable transactional outbox for atomic event persistence
+	timeout          time.Duration
+	logger           *slog.Logger
+	enableRegex      bool // Enable regex-based text search (disabled by default for security)
+	outboxEnabled    bool // Enable transactional outbox for atomic event persistence
 }
 
 func newOptions(opts ...Option) *options {
@@ -77,10 +77,10 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // WithOutbox enables transactional outbox for atomic event persistence.
-// When enabled, mutation methods check the context for pending events
-// (attached via store.WithOutboxEvents) and write them to an outbox
-// collection in the same MongoDB transaction as the main operation.
-// A background relay reads from the outbox and publishes to the event transport.
+// When enabled, mutation methods wrap DB writes in a MongoDB transaction and
+// set event.WithOutboxTx on the context so the event bus auto-routes
+// Event.Publish() calls to the outbox collection in the same transaction.
+// A background relay (outbox.Relay) reads from the outbox and publishes to the event transport.
 func WithOutbox(enabled bool) Option {
 	return func(o *options) {
 		o.outboxEnabled = enabled
