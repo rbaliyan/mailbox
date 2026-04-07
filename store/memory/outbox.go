@@ -16,8 +16,3 @@ func (s *Store) OutboxEnabled() bool { return false }
 func (s *Store) WithOutboxCtx(ctx context.Context, fn func(ctx context.Context) error) error {
 	return fn(ctx)
 }
-
-// PersistOutboxEvents is a no-op — memory store has no outbox.
-func (s *Store) PersistOutboxEvents(_ context.Context, _ ...store.OutboxEvent) error {
-	return nil
-}
