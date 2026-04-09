@@ -9,14 +9,14 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.14
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.14
-	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.1.14
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.98.0
+	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.1.15
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.99.0
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.10
-	github.com/google/cel-go v0.27.0
+	github.com/google/cel-go v0.28.0
 	github.com/google/uuid v1.6.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lib/pq v1.12.3
-	github.com/rbaliyan/event/v3 v3.15.8
+	github.com/rbaliyan/event/v3 v3.15.10
 	github.com/redis/go-redis/v9 v9.18.0
 	go.mongodb.org/mongo-driver/v2 v2.5.0
 	go.opentelemetry.io/otel v1.43.0
@@ -24,7 +24,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.43.0
 	golang.org/x/crypto v0.49.0
 	golang.org/x/sync v0.20.0
-	google.golang.org/api v0.274.0
+	google.golang.org/api v0.275.0
 )
 
 require (
