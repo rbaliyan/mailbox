@@ -29,6 +29,7 @@ type message struct {
 	replyToID    string
 	expiresAt    *time.Time
 	availableAt  *time.Time
+	deliverTo    []string // transient: delivery targets (not persisted)
 }
 
 // clone creates a deep copy of the message.
@@ -127,6 +128,15 @@ func (m *message) SetRecipients(recipientIDs ...string) store.DraftMessage {
 	m.recipientIDs = recipientIDs
 	m.updatedAt = time.Now().UTC()
 	return m
+}
+
+func (m *message) SetDeliverTo(recipientIDs ...string) store.DraftMessage {
+	m.deliverTo = recipientIDs
+	return m
+}
+
+func (m *message) GetDeliverTo() []string {
+	return m.deliverTo
 }
 
 func (m *message) SetHeader(key, value string) store.DraftMessage {

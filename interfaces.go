@@ -249,6 +249,11 @@ type SendRequest struct {
 	ThreadID      string
 	ReplyToID     string
 
+	// DeliverTo optionally restricts which recipients receive inbox copies
+	// on this instance. The message's RecipientIDs stores the full recipient
+	// list for display. When empty, delivery targets default to RecipientIDs.
+	DeliverTo []string
+
 	// TTL is an optional message time-to-live. When set, the message will be
 	// eligible for automatic deletion after this duration from send time.
 	// Zero means no per-message TTL (the service default TTL may still apply).

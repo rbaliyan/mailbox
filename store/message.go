@@ -136,6 +136,17 @@ type DraftMessage interface {
 	SetMetadata(key string, value any) DraftMessage
 	AddAttachment(attachment Attachment) DraftMessage
 
+	// SetDeliverTo sets the delivery target recipient IDs.
+	// When set, only these recipients receive inbox copies on this instance.
+	// The message's RecipientIDs (set via SetRecipients) stores the full
+	// recipient list for display. When DeliverTo is empty, delivery targets
+	// default to RecipientIDs for backward compatibility.
+	SetDeliverTo(recipientIDs ...string) DraftMessage
+
+	// GetDeliverTo returns the delivery target recipient IDs.
+	// Returns nil when not explicitly set (caller should fall back to GetRecipientIDs).
+	GetDeliverTo() []string
+
 	// SetTTL sets the message time-to-live. The message will be eligible for
 	// automatic deletion after this duration from send time. A zero duration
 	// clears any previously set TTL.

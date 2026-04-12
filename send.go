@@ -135,13 +135,13 @@ func (m *userMailbox) resolveAndInjectUserMetadata(ctx context.Context, draft st
 	}
 
 	if fn := user.FirstName(); fn != "" {
-		draft.SetMetadata(MetadataUserFirstName, fn)
+		draft.SetMetadata(MetadataSenderFirstName, fn)
 	}
 	if ln := user.LastName(); ln != "" {
-		draft.SetMetadata(MetadataUserLastName, ln)
+		draft.SetMetadata(MetadataSenderLastName, ln)
 	}
 	if email := user.Email(); email != "" {
-		draft.SetMetadata(MetadataUserEmail, email)
+		draft.SetMetadata(MetadataSenderEmail, email)
 	}
 
 	return nil
@@ -169,11 +169,19 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 
 	var deliveredTo []string
 	failedRecipients := make(map[string]error)
+
+	// Use DeliverTo when set (for multi-instance deployments where only a
+	// subset of recipients are local). Falls back to full RecipientIDs.
+	deliveryTargets := draft.GetDeliverTo()
+	if len(deliveryTargets) == 0 {
+		deliveryTargets = draft.GetRecipientIDs()
+	}
+	// The full recipient list stored in every message copy.
 	recipientIDs := draft.GetRecipientIDs()
 
-	// Phase 1: Check quotas and collect eligible recipients.
+	// Phase 1: Check quotas and collect eligible delivery targets.
 	var eligible []string
-	for _, recipientID := range recipientIDs {
+	for _, recipientID := range deliveryTargets {
 		if m.service.opts.quotaProvider != nil {
 			policy, pErr := m.service.opts.quotaProvider.GetQuota(ctx, recipientID)
 			if pErr != nil {
@@ -340,9 +348,12 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 		return nil, err
 	}
 
-	// Step 1: Deduplicate recipients before validation so that the recipient count
-	// check reflects the actual number of unique recipients.
+	// Step 1: Deduplicate recipients and delivery targets before validation
+	// so that the recipient count check reflects the actual number of unique recipients.
 	draft.SetRecipients(deduplicateRecipients(draft.GetRecipientIDs())...)
+	if dt := draft.GetDeliverTo(); len(dt) > 0 {
+		draft.SetDeliverTo(deduplicateRecipients(dt)...)
+	}
 
 	// Step 2: Auto-populate Content-Length header if not already set.
 	// This must happen before validation so the auto-added header is included in limit checks.
@@ -472,6 +483,9 @@ func (m *userMailbox) SendMessage(ctx context.Context, req SendRequest) (Message
 	// Build a transient draft
 	draft := m.service.store.NewDraft(m.userID)
 	draft.SetRecipients(req.RecipientIDs...)
+	if len(req.DeliverTo) > 0 {
+		draft.SetDeliverTo(req.DeliverTo...)
+	}
 	draft.SetSubject(req.Subject)
 	draft.SetBody(req.Body)
 	for k, v := range req.Headers {
