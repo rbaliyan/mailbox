@@ -161,6 +161,10 @@ var (
 	// ErrQuotaExceeded is returned when a user's mailbox has reached its message quota.
 	// Use errors.As with *QuotaExceededError to get details (user ID, current count, limit).
 	ErrQuotaExceeded = errors.New("mailbox: quota exceeded")
+
+	// ErrUserResolveFailed is returned when the UserResolver fails to resolve
+	// the sender's identity. The message is not sent.
+	ErrUserResolveFailed = errors.New("mailbox: user resolve failed")
 )
 
 // PartialDeliveryError provides details about which recipients failed.
@@ -288,6 +292,7 @@ func IsRetryableError(err error) bool {
 		ErrHeaderValueTooLong,
 		ErrHeadersTooLarge,
 		ErrQuotaExceeded,
+		ErrUserResolveFailed,
 	}
 
 	for _, permErr := range permanentErrors {

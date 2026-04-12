@@ -126,6 +126,9 @@ type options struct {
 	maxTTL           time.Duration // Maximum allowed TTL (0 = unlimited)
 	minScheduleDelay time.Duration // Minimum schedule delay (0 = no minimum)
 	maxScheduleDelay time.Duration // Maximum schedule delay (0 = unlimited)
+
+	// User resolution
+	userResolver UserResolver // Optional resolver for sender identity metadata
 }
 
 // EventPublishFailureFunc is called when an event fails to publish.
@@ -257,6 +260,20 @@ func WithAttachmentManager(m store.AttachmentManager) Option {
 	return func(o *options) {
 		if m != nil {
 			o.attachments = m
+		}
+	}
+}
+
+// --- User Resolution Options ---
+
+// WithUserResolver sets an optional user resolver for sender identity enrichment.
+// When configured, the service resolves the sender's identity during message
+// delivery and populates metadata keys (user.firstname, user.lastname, user.email).
+// If resolution fails, the send operation is aborted with ErrUserResolveFailed.
+func WithUserResolver(r UserResolver) Option {
+	return func(o *options) {
+		if r != nil {
+			o.userResolver = r
 		}
 	}
 }

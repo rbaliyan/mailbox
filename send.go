@@ -120,6 +120,33 @@ func (m *userMailbox) createSenderMessage(ctx context.Context, draft store.Draft
 	return senderCopy, nil
 }
 
+// resolveAndInjectUserMetadata resolves the sender's identity via UserResolver
+// and injects first name, last name, and email into draft metadata.
+// Returns nil if no resolver is configured. Returns ErrUserResolveFailed on failure.
+func (m *userMailbox) resolveAndInjectUserMetadata(ctx context.Context, draft store.DraftMessage) error {
+	resolver := m.service.opts.userResolver
+	if resolver == nil {
+		return nil
+	}
+
+	user, err := resolver.ResolveUser(ctx, m.userID)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUserResolveFailed, err)
+	}
+
+	if fn := user.FirstName(); fn != "" {
+		draft.SetMetadata(MetadataUserFirstName, fn)
+	}
+	if ln := user.LastName(); ln != "" {
+		draft.SetMetadata(MetadataUserLastName, ln)
+	}
+	if email := user.Email(); email != "" {
+		draft.SetMetadata(MetadataUserEmail, email)
+	}
+
+	return nil
+}
+
 // deduplicateRecipients returns a list of unique recipient IDs.
 func deduplicateRecipients(recipientIDs []string) []string {
 	seen := make(map[string]bool, len(recipientIDs))
@@ -325,12 +352,18 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 		draft.SetHeader(store.HeaderContentLength, strconv.Itoa(len(draft.GetBody())))
 	}
 
-	// Step 2b: Validate the draft (before acquiring semaphore to avoid wasting slots)
+	// Step 2b: Resolve sender identity and inject metadata (before validation
+	// so that the added metadata keys are included in limit checks).
+	if err := m.resolveAndInjectUserMetadata(ctx, draft); err != nil {
+		return nil, err
+	}
+
+	// Step 2c: Validate the draft (before acquiring semaphore to avoid wasting slots)
 	if err := ValidateDraft(draft, m.service.opts.getLimits()); err != nil {
 		return nil, err
 	}
 
-	// Step 2c: Fail early if draft has attachments but no attachment manager is configured.
+	// Step 2d: Fail early if draft has attachments but no attachment manager is configured.
 	// Without a manager, attachment refs won't be tracked and attachments may be orphaned
 	// or prematurely deleted.
 	if len(draft.GetAttachments()) > 0 && m.service.attachments == nil {
