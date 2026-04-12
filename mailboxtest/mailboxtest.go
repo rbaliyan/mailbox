@@ -35,7 +35,7 @@ func NewService(t *testing.T, opts ...mailbox.Option) mailbox.Service {
 		mailbox.WithStore(memory.New()),
 		mailbox.WithEventTransport(channel.New()),
 	}, opts...)
-	svc, err := mailbox.NewService(allOpts...)
+	svc, err := mailbox.New(mailbox.DefaultConfig(), allOpts...)
 	if err != nil {
 		t.Fatalf("mailboxtest: create service: %v", err)
 	}
@@ -66,7 +66,7 @@ func NewServiceWithStore(t *testing.T, s store.Store, opts ...mailbox.Option) ma
 		mailbox.WithStore(s),
 		mailbox.WithEventTransport(channel.New()),
 	}, opts...)
-	svc, err := mailbox.NewService(allOpts...)
+	svc, err := mailbox.New(mailbox.DefaultConfig(), allOpts...)
 	if err != nil {
 		t.Fatalf("mailboxtest: create service: %v", err)
 	}

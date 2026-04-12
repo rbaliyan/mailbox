@@ -101,19 +101,12 @@ func TestBackgroundTrashCleanup(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
 
-	cfg := Config{
-		TrashCleanupInterval: 100 * time.Millisecond,
+	// Connect store, create+age data, then disconnect.
+	// The service's Connect will reconnect the store.
+	// This avoids a data race between AgeMessagesByID and background goroutines.
+	if err := memStore.Connect(ctx); err != nil {
+		t.Fatalf("connect store: %v", err)
 	}
-	// Use default trash retention (30 days) since minimum is 24 hours.
-	svc, err := New(cfg, WithStore(memStore))
-	if err != nil {
-		t.Fatalf("create service: %v", err)
-	}
-	if err := svc.Connect(ctx); err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-
-	// Create a message directly in trash (matches existing cleanup test pattern).
 	msg, err := memStore.CreateMessage(ctx, store.MessageData{
 		OwnerID:  "alice",
 		SenderID: "alice",
@@ -125,14 +118,26 @@ func TestBackgroundTrashCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create message: %v", err)
 	}
-
-	// Age past default trash retention (31 days > 30 days default)
 	memStore.AgeMessagesByID(31*24*time.Hour, msg.GetID())
+	if err := memStore.Close(ctx); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	// Now start the service — goroutines start after Connect, data already aged.
+	cfg := Config{
+		TrashCleanupInterval: 100 * time.Millisecond,
+	}
+	svc, err := New(cfg, WithStore(memStore))
+	if err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+	if err := svc.Connect(ctx); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
 
 	// Wait for background cleanup to tick
 	time.Sleep(250 * time.Millisecond)
 
-	// Verify the trashed message was cleaned up
 	_, storeErr := memStore.Get(ctx, msg.GetID())
 	if !errors.Is(storeErr, store.ErrNotFound) {
 		t.Errorf("expected store.ErrNotFound after background trash cleanup, got %v", storeErr)
@@ -147,6 +152,29 @@ func TestBackgroundExpiredMessageCleanup(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
 
+	// Connect store, create+age data, then disconnect.
+	// The service's Connect will reconnect the store.
+	// This avoids a data race between AgeMessages and background goroutines.
+	if err := memStore.Connect(ctx); err != nil {
+		t.Fatalf("connect store: %v", err)
+	}
+	msg, err := memStore.CreateMessage(ctx, store.MessageData{
+		OwnerID:  "alice",
+		SenderID: "alice",
+		Subject:  "Expiring",
+		Body:     "Body",
+		FolderID: store.FolderSent,
+		Status:   store.MessageStatusSent,
+	})
+	if err != nil {
+		t.Fatalf("create message: %v", err)
+	}
+	memStore.AgeMessages(48 * time.Hour)
+	if err := memStore.Close(ctx); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	// Now start the service — goroutines start after Connect, data already aged.
 	cfg := Config{
 		ExpiredMessageCleanupInterval: 100 * time.Millisecond,
 	}
@@ -161,26 +189,9 @@ func TestBackgroundExpiredMessageCleanup(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 
-	// Create a message via store and age it past retention.
-	msg, err := memStore.CreateMessage(ctx, store.MessageData{
-		OwnerID:  "alice",
-		SenderID: "alice",
-		Subject:  "Expiring",
-		Body:     "Body",
-		FolderID: store.FolderSent,
-		Status:   store.MessageStatusSent,
-	})
-	if err != nil {
-		t.Fatalf("create message: %v", err)
-	}
-
-	// Age past retention
-	memStore.AgeMessages(48 * time.Hour)
-
-	// Wait for background cleanup
+	// Wait for background cleanup to tick
 	time.Sleep(250 * time.Millisecond)
 
-	// Message should be deleted
 	_, storeErr := memStore.Get(ctx, msg.GetID())
 	if !errors.Is(storeErr, store.ErrNotFound) {
 		t.Errorf("expected store.ErrNotFound after background expired cleanup, got %v", storeErr)
