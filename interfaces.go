@@ -29,9 +29,11 @@ type Service interface {
 	// IsConnected returns true if the service is connected and ready.
 	IsConnected() bool
 
-	// Connect establishes connections to storage backends.
+	// Connect establishes connections to storage backends and starts
+	// background maintenance goroutines (if configured via Config).
 	Connect(ctx context.Context) error
-	// Close closes all connections.
+	// Close stops background goroutines, waits for in-flight operations,
+	// and closes all connections.
 	Close(ctx context.Context) error
 	// Client returns a mailbox client for the given user.
 	// The returned client shares the service's connections.
@@ -39,18 +41,18 @@ type Service interface {
 	// is not connected, operations will return ErrNotConnected.
 	Client(userID string) Mailbox
 	// CleanupTrash permanently deletes messages that have been in trash
-	// longer than the configured retention period. Call this periodically
-	// using your application's scheduler.
+	// longer than the configured retention period. Called automatically
+	// when Config.TrashCleanupInterval is set; can also be called manually.
 	CleanupTrash(ctx context.Context) (*CleanupTrashResult, error)
 	// CleanupExpiredMessages permanently deletes messages older than the
 	// configured message retention period (based on created_at).
 	// Returns a zero result if message retention is not configured.
-	// Call this periodically using your application's scheduler.
+	// Called automatically when Config.ExpiredMessageCleanupInterval is set.
 	CleanupExpiredMessages(ctx context.Context) (*CleanupExpiredMessagesResult, error)
 	// EnforceQuotas evaluates quotas for the given users and applies enforcement
 	// actions. Only users with QuotaActionDeleteOldest policies are processed;
-	// QuotaActionReject is enforced at delivery time. Call this periodically
-	// using your application's scheduler when using delete-oldest mode.
+	// QuotaActionReject is enforced at delivery time. Called automatically when
+	// Config.QuotaEnforcementInterval and Config.QuotaUserLister are set.
 	EnforceQuotas(ctx context.Context, userIDs []string) (*EnforceQuotasResult, error)
 
 	// Events returns per-service event instances for subscribing and publishing.

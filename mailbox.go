@@ -16,6 +16,9 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
+// Compile-time check that service implements Service.
+var _ Service = (*service)(nil)
+
 // Connection states for the service.
 const (
 	stateDisconnected int32 = 0
@@ -29,6 +32,7 @@ type service struct {
 	attachments       store.AttachmentManager
 	notifier          *notify.Notifier
 	logger            *slog.Logger
+	cfg               Config
 	opts              *options
 	state             int32 // stateDisconnected, stateConnecting, or stateConnected
 	plugins           *pluginRegistry
@@ -38,15 +42,20 @@ type service struct {
 	events            *ServiceEvents      // Per-service event instances
 	statsCache        sync.Map            // map[ownerID string]*statsEntry
 	statsCacheEnabled bool                // true when event transport is configured
+	wg                sync.WaitGroup      // Tracks background goroutines
+	bgCancel          context.CancelFunc  // Cancels background goroutine context
 }
 
-// NewService creates a new mailbox service.
-// Call Connect() to establish connections to backends.
+// New creates a new mailbox service with the given configuration and options.
+// Call Connect() to establish connections to backends and start background tasks.
+//
+// When Config specifies non-zero cleanup intervals, background goroutines are
+// started during Connect() and stopped during Close(). Close() blocks until
+// all background goroutines have finished.
 //
 // Caching is NOT included in this library. If you need caching, wrap your store
 // with a caching decorator (see store/cached package for an example).
-// This keeps the library focused on messaging while letting you control caching strategy.
-func NewService(opts ...Option) (Service, error) {
+func New(cfg Config, opts ...Option) (Service, error) {
 	o := newOptions(opts...)
 
 	if o.store == nil {
@@ -70,11 +79,21 @@ func NewService(opts ...Option) (Service, error) {
 		attachments: o.attachments,
 		notifier:    o.notifier,
 		logger:      o.logger,
+		cfg:         cfg,
 		opts:        o,
 		plugins:     plugins,
 		otel:        otelInstr,
 		sendSem:     semaphore.NewWeighted(int64(o.maxConcurrentSends)),
 	}, nil
+}
+
+// NewService creates a new mailbox service with default configuration.
+// All background maintenance tasks are disabled; the caller is responsible
+// for scheduling CleanupTrash, CleanupExpiredMessages, and EnforceQuotas.
+//
+// Deprecated: Use New with a Config for automatic background maintenance.
+func NewService(opts ...Option) (Service, error) {
+	return New(DefaultConfig(), opts...)
 }
 
 // Events returns per-service event instances for subscribing and publishing.
@@ -124,6 +143,9 @@ func (s *service) Connect(ctx context.Context) error {
 		_ = s.store.Close(ctx)
 		return fmt.Errorf("init plugins: %w", err)
 	}
+
+	// Start background maintenance goroutines
+	s.startBackgroundTasks()
 
 	success = true
 	s.logger.Info("mailbox service connected")
@@ -274,12 +296,19 @@ func notifySubOpts[T any](coalesce bool) []event.SubscribeOption[T] {
 }
 
 // Close closes connections to storage backends.
+// It stops all background maintenance goroutines and waits for them to finish
+// before closing the store and event bus.
 func (s *service) Close(ctx context.Context) error {
 	if !atomic.CompareAndSwapInt32(&s.state, stateConnected, stateDisconnected) {
 		return nil
 	}
 
 	var errs []error
+
+	// Stop background maintenance goroutines.
+	if s.bgCancel != nil {
+		s.bgCancel()
+	}
 
 	// Wait for in-flight send operations to complete (graceful shutdown).
 	// After setting state to disconnected, no new sends can start because checkAccess fails.
@@ -296,6 +325,9 @@ func (s *service) Close(ctx context.Context) error {
 		s.sendSem.Release(int64(s.opts.maxConcurrentSends))
 		s.logger.Info("all in-flight operations completed")
 	}
+
+	// Wait for background goroutines to finish after sends are done.
+	s.wg.Wait()
 
 	// Close notifier (stops all notification streams).
 	if s.notifier != nil {

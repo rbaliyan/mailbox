@@ -24,24 +24,8 @@ type CleanupTrashResult struct {
 // or the context is cancelled. It uses the store's atomic DeleteExpiredTrash
 // operation for efficient bulk deletion.
 //
-// This method should be called periodically by the application using its own
-// scheduler (e.g., cron job, background worker). The library does not
-// automatically run cleanup to give applications full control over scheduling.
-//
-// Example with a simple ticker:
-//
-//	go func() {
-//	    ticker := time.NewTicker(1 * time.Hour)
-//	    defer ticker.Stop()
-//	    for range ticker.C {
-//	        result, err := svc.CleanupTrash(ctx)
-//	        if err != nil {
-//	            log.Printf("trash cleanup error: %v", err)
-//	        } else if result.DeletedCount > 0 {
-//	            log.Printf("cleaned up %d expired trash messages", result.DeletedCount)
-//	        }
-//	    }
-//	}()
+// When Config.TrashCleanupInterval is set, this is called automatically by a
+// background goroutine. It can also be called manually for on-demand cleanup.
 func (s *service) CleanupTrash(ctx context.Context) (*CleanupTrashResult, error) {
 	if atomic.LoadInt32(&s.state) != stateConnected {
 		return nil, ErrNotConnected
@@ -112,8 +96,8 @@ type CleanupExpiredMessagesResult struct {
 // message retention period (based on created_at). Returns a zero result if
 // message retention is not configured (WithMessageRetention was not called).
 //
-// This method should be called periodically by the application using its own
-// scheduler. The library does not automatically run cleanup.
+// When Config.ExpiredMessageCleanupInterval is set, this is called automatically
+// by a background goroutine. It can also be called manually for on-demand cleanup.
 func (s *service) CleanupExpiredMessages(ctx context.Context) (*CleanupExpiredMessagesResult, error) {
 	if atomic.LoadInt32(&s.state) != stateConnected {
 		return nil, ErrNotConnected

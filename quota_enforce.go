@@ -29,22 +29,9 @@ type EnforceQuotasResult struct {
 // than the policy's DeleteOlderThan threshold, up to the amount needed to bring
 // the user back within their quota limit.
 //
-// This method should be called periodically by the application using its own
-// scheduler (e.g., cron job, background worker). The library does not automatically
-// run enforcement to give applications full control over scheduling.
-//
-// Example:
-//
-//	go func() {
-//	    ticker := time.NewTicker(1 * time.Hour)
-//	    defer ticker.Stop()
-//	    for range ticker.C {
-//	        result, err := svc.EnforceQuotas(ctx, activeUserIDs)
-//	        if err != nil {
-//	            log.Printf("quota enforcement error: %v", err)
-//	        }
-//	    }
-//	}()
+// When Config.QuotaEnforcementInterval and Config.QuotaUserLister are set, this is
+// called automatically by a background goroutine. It can also be called manually
+// with an explicit user list for on-demand enforcement.
 func (s *service) EnforceQuotas(ctx context.Context, userIDs []string) (*EnforceQuotasResult, error) {
 	if atomic.LoadInt32(&s.state) != stateConnected {
 		return nil, ErrNotConnected

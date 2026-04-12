@@ -43,8 +43,11 @@ mailbox/
 ├── message.go          # Message interface (read-only)
 ├── draft.go            # DraftMessage interface (mutable)
 ├── attachment.go       # Attachment type
-├── mailbox.go          # Main Mailbox implementation
+├── mailbox.go          # Main Mailbox implementation (New, NewService, Connect, Close)
+├── config.go           # Config struct, DefaultConfig, QuotaUserLister
+├── background.go       # Background maintenance goroutines
 ├── option.go           # Option pattern configuration
+├── user.go             # User interface, UserResolver, metadata keys
 ├── recipient.go        # Recipient type and RecipientResolver interface
 ├── events.go           # Event types and bus setup (Redis Streams)
 ├── validation.go       # Input validation
@@ -99,10 +102,29 @@ mailbox/
 ├── mailboxtest/
 │   └── mailboxtest.go  # Test helpers (NewService, SendMessage, X25519Keypair)
 └── resolver/
-    └── static.go       # Static recipient resolver
+    └── static.go       # Static recipient/user resolver
 ```
 
 ## Architecture
+
+### Service Construction
+
+Two constructors are available:
+
+```go
+// Preferred: Config controls background maintenance scheduling.
+svc, err := mailbox.New(mailbox.Config{
+    TrashCleanupInterval:          1 * time.Hour,
+    ExpiredMessageCleanupInterval: 1 * time.Hour,
+}, mailbox.WithStore(store))
+
+// Deprecated: equivalent to New(DefaultConfig(), opts...).
+// All background tasks disabled; caller schedules maintenance manually.
+svc, err := mailbox.NewService(mailbox.WithStore(store))
+```
+
+When Config intervals are non-zero, `Connect()` starts background goroutines.
+`Close()` cancels them and blocks until all goroutines finish via `sync.WaitGroup`.
 
 ### Key Interfaces
 
@@ -157,6 +179,11 @@ mailbox/
 **RecipientResolver** (user ID to contact info):
 - `Resolve(ctx, userID)` / `ResolveBatch(ctx, userIDs)`
 
+**UserResolver** (sender identity enrichment, optional):
+- `ResolveUser(ctx, userID)` returns `User` (FirstName, LastName, Email)
+- When configured via `WithUserResolver`, populates message metadata during send
+- Failure aborts the send with `ErrUserResolveFailed`
+
 ### Design Patterns
 
 **Client Injection (Library Pattern):**
@@ -174,16 +201,18 @@ store := mongostore.New(mongoClient,
 
 **Option Pattern:**
 ```go
-svc, err := mailbox.NewService(
+svc, err := mailbox.New(mailbox.Config{
+    TrashCleanupInterval: 1 * time.Hour,
+},
     mailbox.WithStore(store),
     mailbox.WithTrashRetention(7 * 24 * time.Hour),
 )
 ```
 
 **New() vs Connect():**
-- `New(client, opts...)` creates instance with injected client
-- `Connect(ctx)` initializes indexes/schema (can fail)
-- `Close(ctx)` marks store as disconnected (caller closes client)
+- `New(cfg, opts...)` creates service with config and options
+- `Connect(ctx)` initializes indexes/schema and starts background goroutines
+- `Close(ctx)` stops background goroutines, waits for in-flight ops, closes store
 
 **Soft Delete:**
 - Messages are moved to `__trash` folder (not a separate deleted flag)
@@ -279,7 +308,16 @@ This library is designed to avoid distributed locks entirely. Instead, all concu
 
 ## Configuration Reference
 
-All configuration is done via the functional options pattern.
+Configuration is split between `Config` (passed to `New`) and functional options.
+
+### Config (Background Maintenance)
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `TrashCleanupInterval` | 0 (disabled) | How often to run automatic trash cleanup |
+| `ExpiredMessageCleanupInterval` | 0 (disabled) | How often to run automatic expired message cleanup |
+| `QuotaEnforcementInterval` | 0 (disabled) | How often to run automatic quota enforcement |
+| `QuotaUserLister` | nil | Provides user IDs for quota enforcement (required when interval > 0) |
 
 ### Core Options
 
@@ -398,6 +436,7 @@ Notifier options (`notify.NewNotifier(...)`):
 | `WithPlugin(Plugin)` | - | Register a single plugin |
 | `WithPlugins(...Plugin)` | - | Register multiple plugins |
 | `WithAttachmentManager(store.AttachmentManager)` | nil | Reference-counted attachments |
+| `WithUserResolver(UserResolver)` | nil | Sender identity enrichment (sets user.firstname, user.lastname, user.email metadata) |
 
 ### Transactional Outbox
 
@@ -438,7 +477,12 @@ bob.MoveByFilter(ctx, []store.Filter{
 ### Example Configuration
 
 ```go
-svc, err := mailbox.NewService(
+svc, err := mailbox.New(
+    // Config: background maintenance scheduling
+    mailbox.Config{
+        TrashCleanupInterval:          1 * time.Hour,
+        ExpiredMessageCleanupInterval: 1 * time.Hour,
+    },
     // Required
     mailbox.WithStore(mongoStore),
 
