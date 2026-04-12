@@ -10,19 +10,23 @@
 //	// Create in-memory store for testing
 //	store := memory.New()
 //
-//	// Create mailbox service
-//	svc, err := mailbox.NewService(
+//	// Create mailbox service with automatic background maintenance
+//	svc, err := mailbox.New(
+//	    mailbox.Config{
+//	        TrashCleanupInterval:          1 * time.Hour,
+//	        ExpiredMessageCleanupInterval: 1 * time.Hour,
+//	    },
 //	    mailbox.WithStore(store),
 //	)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
 //
-//	// Connect initializes indexes/schema
+//	// Connect initializes indexes/schema and starts background tasks
 //	if err := svc.Connect(ctx); err != nil {
 //	    log.Fatal(err)
 //	}
-//	defer svc.Close(ctx)
+//	defer svc.Close(ctx) // stops background goroutines and waits
 //
 //	// Get a mailbox client for a user
 //	mb := svc.Client("user123")
