@@ -6,6 +6,7 @@ import (
 
 	"github.com/rbaliyan/event/v3/transport"
 	"github.com/rbaliyan/mailbox/notify"
+	"github.com/rbaliyan/mailbox/router"
 	"github.com/rbaliyan/mailbox/store"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/metric"
@@ -129,6 +130,9 @@ type options struct {
 
 	// User resolution
 	userResolver UserResolver // Optional resolver for sender identity metadata
+
+	// Mailbox registration (for multi-instance deployments)
+	registrar router.Registrar // Optional registrar called during Connect
 }
 
 // EventPublishFailureFunc is called when an event fails to publish.
@@ -260,6 +264,20 @@ func WithAttachmentManager(m store.AttachmentManager) Option {
 	return func(o *options) {
 		if m != nil {
 			o.attachments = m
+		}
+	}
+}
+
+// --- Mailbox Registration Options ---
+
+// WithRegistrar sets a registrar that the service uses during Connect to
+// announce this mailbox instance to a shared registry. The registrar
+// returns the mailbox ID assigned to this instance; if Register returns
+// an error, Connect fails. The assigned ID is available via Service.MailboxID().
+func WithRegistrar(r router.Registrar) Option {
+	return func(o *options) {
+		if r != nil {
+			o.registrar = r
 		}
 	}
 }
