@@ -88,14 +88,14 @@ func TestUserResolverIntegration(t *testing.T) {
 
 		// Sender's copy should have sender metadata
 		meta := msg.GetMetadata()
-		if meta[MetadataUserFirstName] != "Alice" {
-			t.Errorf("sender copy: user.firstname = %v, want Alice", meta[MetadataUserFirstName])
+		if meta[MetadataSenderFirstName] != "Alice" {
+			t.Errorf("sender copy: sender.firstname = %v, want Alice", meta[MetadataSenderFirstName])
 		}
-		if meta[MetadataUserLastName] != "Smith" {
-			t.Errorf("sender copy: user.lastname = %v, want Smith", meta[MetadataUserLastName])
+		if meta[MetadataSenderLastName] != "Smith" {
+			t.Errorf("sender copy: sender.lastname = %v, want Smith", meta[MetadataSenderLastName])
 		}
-		if meta[MetadataUserEmail] != "alice@example.com" {
-			t.Errorf("sender copy: user.email = %v, want alice@example.com", meta[MetadataUserEmail])
+		if meta[MetadataSenderEmail] != "alice@example.com" {
+			t.Errorf("sender copy: sender.email = %v, want alice@example.com", meta[MetadataSenderEmail])
 		}
 
 		// Recipient's copy should also have sender metadata
@@ -107,14 +107,14 @@ func TestUserResolverIntegration(t *testing.T) {
 			t.Fatalf("expected 1 inbox message, got %d", len(inbox.All()))
 		}
 		recipientMeta := inbox.All()[0].GetMetadata()
-		if recipientMeta[MetadataUserFirstName] != "Alice" {
-			t.Errorf("recipient copy: user.firstname = %v, want Alice", recipientMeta[MetadataUserFirstName])
+		if recipientMeta[MetadataSenderFirstName] != "Alice" {
+			t.Errorf("recipient copy: sender.firstname = %v, want Alice", recipientMeta[MetadataSenderFirstName])
 		}
-		if recipientMeta[MetadataUserLastName] != "Smith" {
-			t.Errorf("recipient copy: user.lastname = %v, want Smith", recipientMeta[MetadataUserLastName])
+		if recipientMeta[MetadataSenderLastName] != "Smith" {
+			t.Errorf("recipient copy: sender.lastname = %v, want Smith", recipientMeta[MetadataSenderLastName])
 		}
-		if recipientMeta[MetadataUserEmail] != "alice@example.com" {
-			t.Errorf("recipient copy: user.email = %v, want alice@example.com", recipientMeta[MetadataUserEmail])
+		if recipientMeta[MetadataSenderEmail] != "alice@example.com" {
+			t.Errorf("recipient copy: sender.email = %v, want alice@example.com", recipientMeta[MetadataSenderEmail])
 		}
 	})
 
@@ -131,14 +131,14 @@ func TestUserResolverIntegration(t *testing.T) {
 		}
 
 		meta := msg.GetMetadata()
-		if meta[MetadataUserFirstName] != "Bob" {
-			t.Errorf("user.firstname = %v, want Bob", meta[MetadataUserFirstName])
+		if meta[MetadataSenderFirstName] != "Bob" {
+			t.Errorf("sender.firstname = %v, want Bob", meta[MetadataSenderFirstName])
 		}
-		if meta[MetadataUserLastName] != "Jones" {
-			t.Errorf("user.lastname = %v, want Jones", meta[MetadataUserLastName])
+		if meta[MetadataSenderLastName] != "Jones" {
+			t.Errorf("sender.lastname = %v, want Jones", meta[MetadataSenderLastName])
 		}
-		if meta[MetadataUserEmail] != "bob@example.com" {
-			t.Errorf("user.email = %v, want bob@example.com", meta[MetadataUserEmail])
+		if meta[MetadataSenderEmail] != "bob@example.com" {
+			t.Errorf("sender.email = %v, want bob@example.com", meta[MetadataSenderEmail])
 		}
 	})
 
@@ -159,8 +159,8 @@ func TestUserResolverIntegration(t *testing.T) {
 
 		meta := msg.GetMetadata()
 		// User metadata should be present
-		if meta[MetadataUserFirstName] != "Alice" {
-			t.Errorf("user.firstname = %v, want Alice", meta[MetadataUserFirstName])
+		if meta[MetadataSenderFirstName] != "Alice" {
+			t.Errorf("sender.firstname = %v, want Alice", meta[MetadataSenderFirstName])
 		}
 		// Custom metadata should be preserved
 		if meta["priority"] != "high" {
@@ -295,14 +295,14 @@ func TestUserResolverPartialFields(t *testing.T) {
 		}
 
 		meta := msg.GetMetadata()
-		if meta[MetadataUserFirstName] != "Alice" {
-			t.Errorf("user.firstname = %v, want Alice", meta[MetadataUserFirstName])
+		if meta[MetadataSenderFirstName] != "Alice" {
+			t.Errorf("sender.firstname = %v, want Alice", meta[MetadataSenderFirstName])
 		}
-		if _, exists := meta[MetadataUserLastName]; exists {
-			t.Errorf("user.lastname should not be set for empty last name, got %v", meta[MetadataUserLastName])
+		if _, exists := meta[MetadataSenderLastName]; exists {
+			t.Errorf("sender.lastname should not be set for empty last name, got %v", meta[MetadataSenderLastName])
 		}
-		if meta[MetadataUserEmail] != "alice@example.com" {
-			t.Errorf("user.email = %v, want alice@example.com", meta[MetadataUserEmail])
+		if meta[MetadataSenderEmail] != "alice@example.com" {
+			t.Errorf("sender.email = %v, want alice@example.com", meta[MetadataSenderEmail])
 		}
 	})
 
@@ -326,7 +326,7 @@ func TestUserResolverPartialFields(t *testing.T) {
 		}
 
 		meta := msg.GetMetadata()
-		for _, key := range []string{MetadataUserFirstName, MetadataUserLastName, MetadataUserEmail} {
+		for _, key := range []string{MetadataSenderFirstName, MetadataSenderLastName, MetadataSenderEmail} {
 			if _, exists := meta[key]; exists {
 				t.Errorf("metadata key %q should not be set, got %v", key, meta[key])
 			}
@@ -352,7 +352,7 @@ func TestNoUserResolver(t *testing.T) {
 	}
 
 	meta := msg.GetMetadata()
-	for _, key := range []string{MetadataUserFirstName, MetadataUserLastName, MetadataUserEmail} {
+	for _, key := range []string{MetadataSenderFirstName, MetadataSenderLastName, MetadataSenderEmail} {
 		if _, exists := meta[key]; exists {
 			t.Errorf("metadata key %q should not be set without resolver, got %v", key, meta[key])
 		}

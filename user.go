@@ -4,11 +4,11 @@ import "context"
 
 // Metadata keys populated by UserResolver during message delivery.
 // When a UserResolver is configured, these keys are set on message
-// metadata before validation and delivery.
+// metadata with the sender's identity before validation and delivery.
 const (
-	MetadataUserFirstName = "user.firstname"
-	MetadataUserLastName  = "user.lastname"
-	MetadataUserEmail     = "user.email"
+	MetadataSenderFirstName = "sender.firstname"
+	MetadataSenderLastName  = "sender.lastname"
+	MetadataSenderEmail     = "sender.email"
 )
 
 // User provides identity information about a user.

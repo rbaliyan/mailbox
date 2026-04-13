@@ -14,6 +14,7 @@ type DraftReader interface {
 	Subject() string
 	Body() string
 	RecipientIDs() []string
+	DeliverTo() []string
 	Headers() map[string]string
 	Metadata() map[string]any
 	Attachments() []store.Attachment
@@ -30,6 +31,7 @@ type DraftReader interface {
 // on Draft directly — they are not part of the fluent interface.
 type DraftComposer interface {
 	SetRecipients(recipientIDs ...string) DraftComposer
+	SetDeliverTo(recipientIDs ...string) DraftComposer
 	SetSubject(subject string) DraftComposer
 	SetBody(body string) DraftComposer
 	SetHeader(key, value string) DraftComposer
@@ -129,6 +131,7 @@ type draft struct {
 	replyToID  string
 	ttl        time.Duration
 	scheduleAt *time.Time
+	deliverTo  []string // transient delivery targets (mailbox-layer only)
 }
 
 // newDraft creates a new draft for the given mailbox.
@@ -162,6 +165,11 @@ func (d *draft) RecipientIDs() []string {
 	return d.message.GetRecipientIDs()
 }
 
+// DeliverTo returns the delivery target recipient IDs.
+func (d *draft) DeliverTo() []string {
+	return d.deliverTo
+}
+
 // Headers returns the draft headers.
 func (d *draft) Headers() map[string]string {
 	return d.message.GetHeaders()
@@ -180,6 +188,14 @@ func (d *draft) Attachments() []store.Attachment {
 // SetRecipients sets the recipient IDs.
 func (d *draft) SetRecipients(recipientIDs ...string) DraftComposer {
 	d.message.SetRecipients(recipientIDs...)
+	return d
+}
+
+// SetDeliverTo sets the delivery target recipient IDs.
+// When set, only these recipients receive inbox copies on this instance.
+// The message's RecipientIDs stores the full recipient list for display.
+func (d *draft) SetDeliverTo(recipientIDs ...string) DraftComposer {
+	d.deliverTo = recipientIDs
 	return d
 }
 
@@ -335,7 +351,7 @@ func (d *draft) ReplyToID() string {
 // On partial delivery, returns both the sent message and a PartialDeliveryError.
 // On event publish failure, returns both the sent message and an EventPublishError.
 func (d *draft) Send(ctx context.Context) (Message, error) {
-	msg, err := d.mailbox.sendDraft(ctx, d.message, d.threadID, d.replyToID, d.ttl, d.scheduleAt)
+	msg, err := d.mailbox.sendDraft(ctx, d.message, d.threadID, d.replyToID, d.ttl, d.scheduleAt, d.deliverTo)
 	if msg != nil {
 		d.saved = true
 		return newMessage(msg, d.mailbox), err

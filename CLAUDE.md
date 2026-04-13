@@ -436,7 +436,7 @@ Notifier options (`notify.NewNotifier(...)`):
 | `WithPlugin(Plugin)` | - | Register a single plugin |
 | `WithPlugins(...Plugin)` | - | Register multiple plugins |
 | `WithAttachmentManager(store.AttachmentManager)` | nil | Reference-counted attachments |
-| `WithUserResolver(UserResolver)` | nil | Sender identity enrichment (sets user.firstname, user.lastname, user.email metadata) |
+| `WithUserResolver(UserResolver)` | nil | Sender identity enrichment (sets sender.firstname, sender.lastname, sender.email metadata) |
 
 ### Transactional Outbox
 
@@ -457,6 +457,28 @@ relay (`outbox.Relay`) publishes pending events to the transport — no custom s
 
 Store interfaces: `store.OutboxPersister` (`OutboxEnabled`, `WithOutboxCtx`) and
 `store.EventOutboxProvider` (exposes `event.OutboxStore` for bus-level integration).
+
+### Selective Delivery (DeliverTo)
+
+`SendRequest.DeliverTo` and `DraftComposer.SetDeliverTo` separate delivery targets from
+message recipients. The message stores the full `RecipientIDs` list (so any reader sees
+who else received it), but only `DeliverTo` recipients get inbox copies on this instance.
+
+```go
+// Send to bob and charlie, but only deliver locally to bob.
+// An external orchestrator handles charlie's delivery on another instance.
+msg, _ := alice.SendMessage(ctx, mailbox.SendRequest{
+    RecipientIDs: []string{"bob", "charlie"}, // stored in message
+    DeliverTo:    []string{"bob"},             // inbox copy created here
+    Subject:      "Hello",
+    Body:         "World",
+})
+
+// Via draft flow
+draft.SetRecipients("bob", "charlie").SetDeliverTo("bob")
+```
+
+When `DeliverTo` is empty (default), all `RecipientIDs` receive inbox copies — backward compatible.
 
 ### Filter-Based Bulk Operations
 

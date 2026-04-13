@@ -268,7 +268,7 @@ func WithAttachmentManager(m store.AttachmentManager) Option {
 
 // WithUserResolver sets an optional user resolver for sender identity enrichment.
 // When configured, the service resolves the sender's identity during message
-// delivery and populates metadata keys (user.firstname, user.lastname, user.email).
+// delivery and populates metadata keys (sender.firstname, sender.lastname, sender.email).
 // If resolution fails, the send operation is aborted with ErrUserResolveFailed.
 func WithUserResolver(r UserResolver) Option {
 	return func(o *options) {
