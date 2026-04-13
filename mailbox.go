@@ -44,6 +44,7 @@ type service struct {
 	statsCacheEnabled bool                // true when event transport is configured
 	wg                sync.WaitGroup      // Tracks background goroutines
 	bgCancel          context.CancelFunc  // Cancels background goroutine context
+	mailboxID         string              // Assigned by Registrar during Connect; empty when no registrar
 }
 
 // New creates a new mailbox service with the given configuration and options.
@@ -101,6 +102,13 @@ func (s *service) Events() *ServiceEvents {
 	return s.events
 }
 
+// MailboxID returns the mailbox ID assigned by the Registrar during Connect.
+// Returns an empty string when no registrar was configured or Connect has not
+// completed successfully.
+func (s *service) MailboxID() string {
+	return s.mailboxID
+}
+
 // IsConnected returns true if the service is connected and ready.
 func (s *service) IsConnected() bool {
 	return atomic.LoadInt32(&s.state) == stateConnected
@@ -144,11 +152,25 @@ func (s *service) Connect(ctx context.Context) error {
 		return fmt.Errorf("init plugins: %w", err)
 	}
 
+	// Register with the configured registrar (if any). The registrar returns
+	// the mailbox ID assigned to this instance. A registration failure aborts
+	// Connect after rolling back earlier initialization.
+	if s.opts.registrar != nil {
+		id, err := s.opts.registrar.Register(ctx)
+		if err != nil {
+			_ = s.plugins.closeAll(ctx)
+			_ = s.eventBus.Close(ctx)
+			_ = s.store.Close(ctx)
+			return fmt.Errorf("register mailbox: %w", err)
+		}
+		s.mailboxID = id
+	}
+
 	// Start background maintenance goroutines
 	s.startBackgroundTasks()
 
 	success = true
-	s.logger.Info("mailbox service connected")
+	s.logger.Info("mailbox service connected", "mailbox_id", s.mailboxID)
 	return nil
 }
 

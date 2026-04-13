@@ -65,6 +65,11 @@ type Service interface {
 	// lastEventID enables backfill of missed events ("" for new events only).
 	// The caller must close the returned Stream when done.
 	Notifications(ctx context.Context, userID string, lastEventID string) (notify.Stream, error)
+
+	// MailboxID returns the mailbox ID assigned by the Registrar during Connect.
+	// Returns an empty string when no registrar was configured or Connect has not
+	// completed successfully.
+	MailboxID() string
 }
 
 // MessageReader provides single message retrieval.

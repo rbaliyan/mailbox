@@ -49,6 +49,8 @@ mailbox/
 ├── option.go           # Option pattern configuration
 ├── user.go             # User interface, UserResolver, metadata keys
 ├── recipient.go        # Recipient type and RecipientResolver interface
+├── router/
+│   └── router.go       # Router (userID→mailboxID) and Registrar interfaces
 ├── events.go           # Event types and bus setup (Redis Streams)
 ├── validation.go       # Input validation
 ├── plugin.go           # Plugin/extension system
@@ -437,6 +439,7 @@ Notifier options (`notify.NewNotifier(...)`):
 | `WithPlugins(...Plugin)` | - | Register multiple plugins |
 | `WithAttachmentManager(store.AttachmentManager)` | nil | Reference-counted attachments |
 | `WithUserResolver(UserResolver)` | nil | Sender identity enrichment (sets sender.firstname, sender.lastname, sender.email metadata) |
+| `WithRegistrar(router.Registrar)` | nil | Registers this mailbox instance during Connect; assigned ID available via `Service.MailboxID()` |
 
 ### Transactional Outbox
 
@@ -457,6 +460,28 @@ relay (`outbox.Relay`) publishes pending events to the transport — no custom s
 
 Store interfaces: `store.OutboxPersister` (`OutboxEnabled`, `WithOutboxCtx`) and
 `store.EventOutboxProvider` (exposes `event.OutboxStore` for bus-level integration).
+
+### Multi-Instance Routing (router package)
+
+The `router` package defines two interfaces for multi-mailbox deployments:
+
+- **`router.Router`** — `Route(ctx, userID) (mailboxID, error)`. Consulted by
+  an orchestrator to resolve which mailbox instance owns a user's messages.
+- **`router.Registrar`** — `Register(ctx) (mailboxID, error)`. Called by the
+  mailbox itself during `Connect`. The registrar returns the mailbox ID
+  assigned to this instance; a registration failure aborts `Connect`.
+
+```go
+svc, _ := mailbox.New(cfg,
+    mailbox.WithStore(store),
+    mailbox.WithRegistrar(myRegistrar),
+)
+if err := svc.Connect(ctx); err != nil {
+    // Registration failures bubble up here
+    log.Fatal(err)
+}
+id := svc.MailboxID() // assigned by the registrar
+```
 
 ### Selective Delivery (DeliverTo)
 
