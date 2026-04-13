@@ -43,7 +43,6 @@ type message struct {
 	availableAt    *time.Time
 	createdAt      time.Time
 	updatedAt      time.Time
-	deliverTo      []string // transient: delivery targets (not persisted)
 }
 
 // Message getters
@@ -82,15 +81,6 @@ func (m *message) SetBody(body string) store.DraftMessage {
 func (m *message) SetRecipients(recipientIDs ...string) store.DraftMessage {
 	m.recipientIDs = recipientIDs
 	return m
-}
-
-func (m *message) SetDeliverTo(recipientIDs ...string) store.DraftMessage {
-	m.deliverTo = recipientIDs
-	return m
-}
-
-func (m *message) GetDeliverTo() []string {
-	return m.deliverTo
 }
 
 func (m *message) SetHeader(key, value string) store.DraftMessage {

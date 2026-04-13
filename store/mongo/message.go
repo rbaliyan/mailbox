@@ -71,7 +71,6 @@ type message struct {
 	replyToID    string
 	expiresAt    *time.Time
 	availableAt  *time.Time
-	deliverTo    []string // transient: delivery targets (not persisted)
 
 	// delta tracking (internal use only)
 	delta messageDelta
@@ -152,15 +151,6 @@ func (m *message) SetRecipients(recipientIDs ...string) store.DraftMessage {
 	m.delta.recipientIDs = recipientIDs
 	m.delta.recipientsSet = true
 	return m
-}
-
-func (m *message) SetDeliverTo(recipientIDs ...string) store.DraftMessage {
-	m.deliverTo = recipientIDs
-	return m
-}
-
-func (m *message) GetDeliverTo() []string {
-	return m.deliverTo
 }
 
 func (m *message) SetHeader(key, value string) store.DraftMessage {

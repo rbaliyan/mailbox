@@ -131,6 +131,7 @@ type draft struct {
 	replyToID  string
 	ttl        time.Duration
 	scheduleAt *time.Time
+	deliverTo  []string // transient delivery targets (mailbox-layer only)
 }
 
 // newDraft creates a new draft for the given mailbox.
@@ -166,7 +167,7 @@ func (d *draft) RecipientIDs() []string {
 
 // DeliverTo returns the delivery target recipient IDs.
 func (d *draft) DeliverTo() []string {
-	return d.message.GetDeliverTo()
+	return d.deliverTo
 }
 
 // Headers returns the draft headers.
@@ -194,7 +195,7 @@ func (d *draft) SetRecipients(recipientIDs ...string) DraftComposer {
 // When set, only these recipients receive inbox copies on this instance.
 // The message's RecipientIDs stores the full recipient list for display.
 func (d *draft) SetDeliverTo(recipientIDs ...string) DraftComposer {
-	d.message.SetDeliverTo(recipientIDs...)
+	d.deliverTo = recipientIDs
 	return d
 }
 
@@ -350,7 +351,7 @@ func (d *draft) ReplyToID() string {
 // On partial delivery, returns both the sent message and a PartialDeliveryError.
 // On event publish failure, returns both the sent message and an EventPublishError.
 func (d *draft) Send(ctx context.Context) (Message, error) {
-	msg, err := d.mailbox.sendDraft(ctx, d.message, d.threadID, d.replyToID, d.ttl, d.scheduleAt)
+	msg, err := d.mailbox.sendDraft(ctx, d.message, d.threadID, d.replyToID, d.ttl, d.scheduleAt, d.deliverTo)
 	if msg != nil {
 		d.saved = true
 		return newMessage(msg, d.mailbox), err

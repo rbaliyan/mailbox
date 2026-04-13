@@ -2,6 +2,7 @@ package mailbox
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/rbaliyan/mailbox/store"
@@ -236,6 +237,58 @@ func TestDeliverTo(t *testing.T) {
 		got := draft.DeliverTo()
 		if got != nil {
 			t.Errorf("DeliverTo() = %v, want nil", got)
+		}
+	})
+
+	t.Run("DeliverTo with ID not in RecipientIDs is rejected", func(t *testing.T) {
+		svc := setupTestService(t)
+		defer svc.Close(ctx)
+
+		alice := svc.Client("alice")
+		bob := svc.Client("bob")
+		charlie := svc.Client("charlie")
+
+		_, err := alice.SendMessage(ctx, SendRequest{
+			RecipientIDs: []string{"bob"},
+			DeliverTo:    []string{"charlie"}, // not in RecipientIDs
+			Subject:      "Ghost",
+			Body:         "Test",
+		})
+		if err == nil {
+			t.Fatal("expected error when DeliverTo contains ID not in RecipientIDs")
+		}
+		if !errors.Is(err, ErrInvalidRecipient) {
+			t.Errorf("expected ErrInvalidRecipient, got %v", err)
+		}
+
+		// No inbox copies should have been created
+		bobInbox, _ := bob.Folder(ctx, store.FolderInbox, store.ListOptions{})
+		if len(bobInbox.All()) != 0 {
+			t.Errorf("bob: expected 0 inbox messages, got %d", len(bobInbox.All()))
+		}
+		charlieInbox, _ := charlie.Folder(ctx, store.FolderInbox, store.ListOptions{})
+		if len(charlieInbox.All()) != 0 {
+			t.Errorf("charlie: expected 0 inbox messages, got %d", len(charlieInbox.All()))
+		}
+	})
+
+	t.Run("DeliverTo partially out-of-recipients is rejected", func(t *testing.T) {
+		svc := setupTestService(t)
+		defer svc.Close(ctx)
+
+		alice := svc.Client("alice")
+
+		_, err := alice.SendMessage(ctx, SendRequest{
+			RecipientIDs: []string{"bob"},
+			DeliverTo:    []string{"bob", "charlie"}, // charlie not in RecipientIDs
+			Subject:      "Partial ghost",
+			Body:         "Test",
+		})
+		if err == nil {
+			t.Fatal("expected error when any DeliverTo ID is not in RecipientIDs")
+		}
+		if !errors.Is(err, ErrInvalidRecipient) {
+			t.Errorf("expected ErrInvalidRecipient, got %v", err)
 		}
 	})
 }

@@ -160,24 +160,24 @@ func deduplicateRecipients(recipientIDs []string) []string {
 	return unique
 }
 
-// deliverToRecipients creates message copies for all unique recipients.
+// deliverToRecipients creates message copies for the given delivery targets.
 // senderMsgID is used as the idempotency base to prevent duplicates on retry.
+// deliveryTargets is the subset of recipients to deliver to on this instance;
+// when nil/empty, the full RecipientIDs list from the draft is used.
 // Returns lists of successful and failed recipients.
-func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.DraftMessage, threadID, replyToID, senderMsgID string, expiresAt, availableAt *time.Time) ([]string, map[string]error) {
+func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.DraftMessage, threadID, replyToID, senderMsgID string, expiresAt, availableAt *time.Time, deliveryTargets []string) ([]string, map[string]error) {
 	// Recipients are already deduplicated in sendDraft before validation.
 	idempotencyBase := senderMsgID
 
 	var deliveredTo []string
 	failedRecipients := make(map[string]error)
 
-	// Use DeliverTo when set (for multi-instance deployments where only a
-	// subset of recipients are local). Falls back to full RecipientIDs.
-	deliveryTargets := draft.GetDeliverTo()
-	if len(deliveryTargets) == 0 {
-		deliveryTargets = draft.GetRecipientIDs()
-	}
 	// The full recipient list stored in every message copy.
 	recipientIDs := draft.GetRecipientIDs()
+	// Default delivery targets to the full recipient list when not specified.
+	if len(deliveryTargets) == 0 {
+		deliveryTargets = recipientIDs
+	}
 
 	// Phase 1: Check quotas and collect eligible delivery targets.
 	var eligible []string
@@ -343,7 +343,9 @@ func (m *userMailbox) finalizeDelivery(ctx context.Context, senderCopy store.Mes
 // sendDraft sends a draft message to recipients.
 // Creates a copy of the message for the sender and each recipient.
 // threadID and replyToID are optional thread context for conversation support.
-func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, threadID, replyToID string, ttl time.Duration, scheduleAt *time.Time) (store.Message, error) {
+// deliverTo, when non-empty, restricts delivery to that subset of recipients;
+// otherwise all recipients on the draft receive inbox copies.
+func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, threadID, replyToID string, ttl time.Duration, scheduleAt *time.Time, deliverTo []string) (store.Message, error) {
 	if err := m.checkAccess(); err != nil {
 		return nil, err
 	}
@@ -351,8 +353,22 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 	// Step 1: Deduplicate recipients and delivery targets before validation
 	// so that the recipient count check reflects the actual number of unique recipients.
 	draft.SetRecipients(deduplicateRecipients(draft.GetRecipientIDs())...)
-	if dt := draft.GetDeliverTo(); len(dt) > 0 {
-		draft.SetDeliverTo(deduplicateRecipients(dt)...)
+	if len(deliverTo) > 0 {
+		deliverTo = deduplicateRecipients(deliverTo)
+	}
+
+	// Validate DeliverTo is a subset of RecipientIDs so we never create an inbox
+	// copy for a user who is not listed as a recipient on the message.
+	if len(deliverTo) > 0 {
+		recipientSet := make(map[string]struct{}, len(draft.GetRecipientIDs()))
+		for _, id := range draft.GetRecipientIDs() {
+			recipientSet[id] = struct{}{}
+		}
+		for _, id := range deliverTo {
+			if _, ok := recipientSet[id]; !ok {
+				return nil, fmt.Errorf("%w: DeliverTo contains %q which is not in RecipientIDs", ErrInvalidRecipient, id)
+			}
+		}
 	}
 
 	// Step 2: Auto-populate Content-Length header if not already set.
@@ -421,12 +437,12 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 	}
 
 	// Step 7: Deliver to recipients (use sender message ID for idempotency)
-	deliveredTo, failedRecipients := m.deliverToRecipients(ctx, draft, threadID, replyToID, senderCopy.GetID(), expiresAt, availableAt)
+	deliveredTo, failedRecipients := m.deliverToRecipients(ctx, draft, threadID, replyToID, senderCopy.GetID(), expiresAt, availableAt, deliverTo)
 
 	// Step 8: Handle total delivery failure
 	if len(deliveredTo) == 0 {
 		rollbackErr := m.rollbackSenderMessage(ctx, senderCopy)
-		sendErr = fmt.Errorf("send failed: all %d recipients failed delivery", len(draft.GetRecipientIDs()))
+		sendErr = fmt.Errorf("send failed: all %d delivery targets failed", len(failedRecipients))
 		if rollbackErr != nil {
 			sendErr = fmt.Errorf("%w (rollback also failed: %v)", sendErr, rollbackErr)
 		}
@@ -483,9 +499,6 @@ func (m *userMailbox) SendMessage(ctx context.Context, req SendRequest) (Message
 	// Build a transient draft
 	draft := m.service.store.NewDraft(m.userID)
 	draft.SetRecipients(req.RecipientIDs...)
-	if len(req.DeliverTo) > 0 {
-		draft.SetDeliverTo(req.DeliverTo...)
-	}
 	draft.SetSubject(req.Subject)
 	draft.SetBody(req.Body)
 	for k, v := range req.Headers {
@@ -499,7 +512,7 @@ func (m *userMailbox) SendMessage(ctx context.Context, req SendRequest) (Message
 	}
 
 	// Send via existing flow — return message even on partial delivery or event error
-	msg, err := m.sendDraft(ctx, draft, req.ThreadID, req.ReplyToID, req.TTL, req.ScheduleAt)
+	msg, err := m.sendDraft(ctx, draft, req.ThreadID, req.ReplyToID, req.TTL, req.ScheduleAt, req.DeliverTo)
 	if msg != nil {
 		return newMessage(msg, m), err
 	}
