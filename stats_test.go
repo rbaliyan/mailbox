@@ -15,7 +15,7 @@ import (
 // Stats cache is disabled, so Stats() always fetches from store.
 func setupStatsService(t *testing.T) Service {
 	t.Helper()
-	svc, err := NewService(
+	svc, err := New(Config{},
 		WithStore(memory.New()),
 	)
 	if err != nil {
@@ -32,9 +32,8 @@ func setupStatsService(t *testing.T) Service {
 // so stats are only updated by event handlers.
 func setupStatsServiceWithEvents(t *testing.T) Service {
 	t.Helper()
-	svc, err := NewService(
+	svc, err := New(Config{StatsRefreshInterval: 1 * time.Hour},
 		WithStore(memory.New()),
-		WithStatsRefreshInterval(1*time.Hour),
 		WithEventTransport(channel.New()),
 	)
 	if err != nil {
@@ -129,7 +128,7 @@ func TestStatsCacheDisabledWithoutTransport(t *testing.T) {
 	ctx := context.Background()
 
 	// Service without event transport: cache is disabled.
-	svc, err := NewService(WithStore(memory.New()))
+	svc, err := New(Config{}, WithStore(memory.New()))
 	if err != nil {
 		t.Fatalf("create service: %v", err)
 	}
@@ -175,9 +174,8 @@ func TestStatsCaching(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("returns cached result within TTL", func(t *testing.T) {
-		svc, err := NewService(
+		svc, err := New(Config{StatsRefreshInterval: 1 * time.Hour},
 			WithStore(memory.New()),
-			WithStatsRefreshInterval(1*time.Hour),
 			WithEventTransport(channel.New()),
 		)
 		if err != nil {
@@ -222,9 +220,8 @@ func TestStatsCaching(t *testing.T) {
 	})
 
 	t.Run("refreshes after TTL expires", func(t *testing.T) {
-		svc, err := NewService(
+		svc, err := New(Config{StatsRefreshInterval: 1 * time.Millisecond},
 			WithStore(memory.New()),
-			WithStatsRefreshInterval(1*time.Millisecond),
 			WithEventTransport(channel.New()),
 		)
 		if err != nil {
@@ -380,9 +377,8 @@ func TestStatsEventUpdates(t *testing.T) {
 func TestStatsConcurrency(t *testing.T) {
 	ctx := context.Background()
 
-	svc, err := NewService(
+	svc, err := New(Config{StatsRefreshInterval: 1 * time.Millisecond},
 		WithStore(memory.New()),
-		WithStatsRefreshInterval(1*time.Millisecond),
 		WithEventTransport(channel.New()),
 	)
 	if err != nil {
@@ -412,7 +408,7 @@ func TestStatsConcurrency(t *testing.T) {
 }
 
 func TestStatsNotConnected(t *testing.T) {
-	svc, _ := NewService(WithStore(memory.New()))
+	svc, _ := New(Config{}, WithStore(memory.New()))
 	mb := svc.Client("user1")
 
 	_, err := mb.Stats(context.Background())

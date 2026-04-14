@@ -13,7 +13,7 @@ import (
 func setupQuotaService(t *testing.T, opts ...Option) Service {
 	t.Helper()
 	allOpts := append([]Option{WithStore(memory.New())}, opts...)
-	svc, err := NewService(allOpts...)
+	svc, err := New(Config{}, allOpts...)
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
 	}

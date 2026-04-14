@@ -13,7 +13,7 @@ import (
 func TestConcurrency_MultipleSenders(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc, err := NewService(WithStore(memStore))
+	svc, err := New(Config{}, WithStore(memStore))
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestConcurrency_MultipleSenders(t *testing.T) {
 func TestConcurrentReads(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc, err := NewService(WithStore(memStore))
+	svc, err := New(Config{}, WithStore(memStore))
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestConcurrentReads(t *testing.T) {
 func TestConcurrentMarkRead(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc, err := NewService(WithStore(memStore))
+	svc, err := New(Config{}, WithStore(memStore))
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestConcurrentMarkRead(t *testing.T) {
 func TestConcurrentServiceAccess(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc, err := NewService(WithStore(memStore))
+	svc, err := New(Config{}, WithStore(memStore))
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestConcurrentServiceAccess(t *testing.T) {
 func TestConcurrentDraftOperations(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc, err := NewService(WithStore(memStore))
+	svc, err := New(Config{}, WithStore(memStore))
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestConcurrentDraftOperations(t *testing.T) {
 func TestConcurrentFolderMoves(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc, err := NewService(WithStore(memStore))
+	svc, err := New(Config{}, WithStore(memStore))
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
 	}
@@ -392,7 +392,7 @@ func TestConcurrentFolderMoves(t *testing.T) {
 func TestConditionalMoveToFolder(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc, err := NewService(WithStore(memStore))
+	svc, err := New(Config{}, WithStore(memStore))
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
 	}
@@ -447,7 +447,7 @@ func TestConditionalMoveToFolder(t *testing.T) {
 func TestConditionalMove_ConcurrentClaim(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc, err := NewService(WithStore(memStore))
+	svc, err := New(Config{}, WithStore(memStore))
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
 	}

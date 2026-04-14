@@ -6,7 +6,7 @@
 //
 // Register this plugin before the encryption plugin for compress-then-encrypt:
 //
-//	svc, _ := mailbox.NewService(
+//	svc, _ := mailbox.New(mailbox.Config{},
 //	    mailbox.WithStore(store),
 //	    mailbox.WithPlugins(
 //	        compress.NewPlugin(compress.Gzip),

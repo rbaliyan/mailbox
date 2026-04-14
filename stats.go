@@ -49,7 +49,7 @@ func (s *service) getOrRefreshStats(ctx context.Context, ownerID string) (*store
 	defer entry.mu.Unlock()
 
 	// Fast path: return cached entry if within TTL.
-	if entry.stats != nil && now.Sub(entry.updatedAt) < s.opts.statsRefreshInterval {
+	if entry.stats != nil && now.Sub(entry.updatedAt) < s.cfg.StatsRefreshInterval {
 		return entry.stats.Clone(), nil
 	}
 

@@ -179,7 +179,7 @@ func TestPermanentlyDelete_ViaOpAndPublish(t *testing.T) {
 
 func TestPublishTypedEvent_UnknownType(t *testing.T) {
 	ctx := context.Background()
-	svc, _ := NewService(WithStore(memory.New()))
+	svc, _ := New(Config{}, WithStore(memory.New()))
 	svc.Connect(ctx)
 	defer svc.Close(ctx)
 

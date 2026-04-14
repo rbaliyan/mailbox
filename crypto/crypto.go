@@ -7,7 +7,7 @@
 // For compression, use the separate [github.com/rbaliyan/mailbox/compress] package.
 // Register compression before encryption for compress-then-encrypt:
 //
-//	svc, _ := mailbox.NewService(
+//	svc, _ := mailbox.New(mailbox.Config{},
 //	    mailbox.WithStore(store),
 //	    mailbox.WithPlugins(
 //	        compress.NewPlugin(compress.Gzip),

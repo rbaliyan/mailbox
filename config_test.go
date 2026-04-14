@@ -45,8 +45,11 @@ func TestNew(t *testing.T) {
 		}
 	})
 
-	t.Run("NewService delegates to New with DefaultConfig", func(t *testing.T) {
-		svc, err := NewService(WithStore(memory.New()))
+	t.Run("creates service with custom config", func(t *testing.T) {
+		cfg := Config{
+			TrashRetention: 7 * 24 * time.Hour,
+		}
+		svc, err := New(cfg, WithStore(memory.New()))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -177,10 +180,10 @@ func TestBackgroundExpiredMessageCleanup(t *testing.T) {
 	// Now start the service — goroutines start after Connect, data already aged.
 	cfg := Config{
 		ExpiredMessageCleanupInterval: 100 * time.Millisecond,
+		MessageRetention:              24 * time.Hour,
 	}
 	svc, err := New(cfg,
 		WithStore(memStore),
-		WithMessageRetention(24*time.Hour),
 	)
 	if err != nil {
 		t.Fatalf("create service: %v", err)

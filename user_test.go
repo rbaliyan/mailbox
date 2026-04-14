@@ -49,7 +49,7 @@ func setupServiceWithUserResolver(t *testing.T, resolver UserResolver) Service {
 		WithStore(memory.New()),
 		WithUserResolver(resolver),
 	}
-	svc, err := NewService(opts...)
+	svc, err := New(Config{}, opts...)
 	if err != nil {
 		t.Fatalf("failed to create service: %v", err)
 	}

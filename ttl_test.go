@@ -10,10 +10,10 @@ import (
 	"github.com/rbaliyan/mailbox/store/memory"
 )
 
-func setupTTLService(t *testing.T, memStore *memory.Store, opts ...Option) Service {
+func setupTTLService(t *testing.T, memStore *memory.Store, cfg Config, opts ...Option) Service {
 	t.Helper()
 	allOpts := append([]Option{WithStore(memStore)}, opts...)
-	svc, err := NewService(allOpts...)
+	svc, err := New(cfg, allOpts...)
 	if err != nil {
 		t.Fatalf("create service: %v", err)
 	}
@@ -26,7 +26,7 @@ func setupTTLService(t *testing.T, memStore *memory.Store, opts ...Option) Servi
 func TestMessageTTL_CleanupDeletesExpired(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc := setupTTLService(t, memStore)
+	svc := setupTTLService(t, memStore, Config{})
 	defer svc.Close(ctx)
 
 	// Send a message with a 1-hour TTL.
@@ -82,7 +82,7 @@ func TestMessageTTL_CleanupDeletesExpired(t *testing.T) {
 func TestMessageTTL_DefaultTTL(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc := setupTTLService(t, memStore, WithDefaultTTL(1*time.Hour))
+	svc := setupTTLService(t, memStore, Config{DefaultTTL: 1 * time.Hour})
 	defer svc.Close(ctx)
 
 	// Send a message without explicit TTL; the service default should apply.
@@ -122,7 +122,7 @@ func TestMessageTTL_DefaultTTL(t *testing.T) {
 func TestScheduledMessage_HiddenUntilAvailable(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc := setupTTLService(t, memStore)
+	svc := setupTTLService(t, memStore, Config{})
 	defer svc.Close(ctx)
 
 	// Send a message scheduled 1 hour in the future.
@@ -157,7 +157,7 @@ func TestScheduledMessage_HiddenUntilAvailable(t *testing.T) {
 func TestScheduledMessage_VisibleAfterAvailable(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc := setupTTLService(t, memStore)
+	svc := setupTTLService(t, memStore, Config{})
 	defer svc.Close(ctx)
 
 	// Send a message scheduled 1 hour in the future.
@@ -204,7 +204,7 @@ func TestScheduledMessage_VisibleAfterAvailable(t *testing.T) {
 func TestNoTTL_NoSchedule_DefaultBehavior(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc := setupTTLService(t, memStore)
+	svc := setupTTLService(t, memStore, Config{})
 	defer svc.Close(ctx)
 
 	// Send a message without TTL or schedule.
@@ -259,7 +259,7 @@ func TestNoTTL_NoSchedule_DefaultBehavior(t *testing.T) {
 func TestSendRequest_TTLAndScheduleAt(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc := setupTTLService(t, memStore)
+	svc := setupTTLService(t, memStore, Config{})
 	defer svc.Close(ctx)
 
 	// Send via SendMessage with TTL and ScheduleAt.
@@ -311,7 +311,7 @@ func TestSendRequest_TTLAndScheduleAt(t *testing.T) {
 func TestTTL_MinTTLValidation(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc := setupTTLService(t, memStore, WithMinTTL(1*time.Hour))
+	svc := setupTTLService(t, memStore, Config{MinTTL: 1 * time.Hour})
 	defer svc.Close(ctx)
 
 	sender := svc.Client("alice")
@@ -332,7 +332,7 @@ func TestTTL_MinTTLValidation(t *testing.T) {
 func TestTTL_MaxTTLValidation(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc := setupTTLService(t, memStore, WithMaxTTL(24*time.Hour))
+	svc := setupTTLService(t, memStore, Config{MaxTTL: 24 * time.Hour})
 	defer svc.Close(ctx)
 
 	sender := svc.Client("alice")
@@ -353,7 +353,7 @@ func TestTTL_MaxTTLValidation(t *testing.T) {
 func TestSchedule_MaxDelayValidation(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc := setupTTLService(t, memStore, WithMaxScheduleDelay(7*24*time.Hour))
+	svc := setupTTLService(t, memStore, Config{MaxScheduleDelay: 7 * 24 * time.Hour})
 	defer svc.Close(ctx)
 
 	future := time.Now().UTC().Add(30 * 24 * time.Hour) // 30 days out

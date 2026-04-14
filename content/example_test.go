@@ -60,7 +60,7 @@ func Example_serviceToService() {
 
 	// -- infrastructure setup --
 
-	svc, err := mailbox.NewService(mailbox.WithStore(memory.New()))
+	svc, err := mailbox.New(mailbox.Config{}, mailbox.WithStore(memory.New()))
 	if err != nil {
 		log.Fatal(err)
 	}

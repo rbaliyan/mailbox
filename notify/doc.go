@@ -26,7 +26,7 @@
 //	    notify.WithPresence(tracker),
 //	)
 //
-//	svc, _ := mailbox.NewService(
+//	svc, _ := mailbox.New(mailbox.Config{},
 //	    mailbox.WithStore(store),
 //	    mailbox.WithNotifier(notifier),
 //	)

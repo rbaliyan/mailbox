@@ -249,7 +249,7 @@ func (d *draft) AddAttachment(attachment store.Attachment) error {
 		return ErrInvalidAttachment
 	}
 
-	limits := d.mailbox.service.opts.getLimits()
+	limits := d.mailbox.service.cfg.getLimits()
 
 	if attachment.GetFilename() == "" {
 		return &ValidationError{Field: "attachment.filename", Message: "filename is required"}
