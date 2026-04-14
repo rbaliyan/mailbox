@@ -6,7 +6,7 @@
 // Example:
 //
 //	func TestSomething(t *testing.T) {
-//	    svc := mailboxtest.NewService(t)
+//	    svc := mailboxtest.NewService(t, mailbox.Config{})
 //	    defer svc.Close(context.Background())
 //
 //	    alice := svc.Client("alice")
@@ -29,13 +29,13 @@ import (
 
 // NewService creates a connected mailbox service with in-memory store and
 // channel event transport. The service is ready to use immediately.
-func NewService(t *testing.T, opts ...mailbox.Option) mailbox.Service {
+func NewService(t *testing.T, cfg mailbox.Config, opts ...mailbox.Option) mailbox.Service {
 	t.Helper()
 	allOpts := append([]mailbox.Option{
 		mailbox.WithStore(memory.New()),
 		mailbox.WithEventTransport(channel.New()),
 	}, opts...)
-	svc, err := mailbox.New(mailbox.DefaultConfig(), allOpts...)
+	svc, err := mailbox.New(cfg, allOpts...)
 	if err != nil {
 		t.Fatalf("mailboxtest: create service: %v", err)
 	}
@@ -60,13 +60,13 @@ func NewMemoryStore(t *testing.T) *memory.Store {
 
 // NewServiceWithStore creates a connected service using the given store.
 // The store must already be connected.
-func NewServiceWithStore(t *testing.T, s store.Store, opts ...mailbox.Option) mailbox.Service {
+func NewServiceWithStore(t *testing.T, cfg mailbox.Config, s store.Store, opts ...mailbox.Option) mailbox.Service {
 	t.Helper()
 	allOpts := append([]mailbox.Option{
 		mailbox.WithStore(s),
 		mailbox.WithEventTransport(channel.New()),
 	}, opts...)
-	svc, err := mailbox.New(mailbox.DefaultConfig(), allOpts...)
+	svc, err := mailbox.New(cfg, allOpts...)
 	if err != nil {
 		t.Fatalf("mailboxtest: create service: %v", err)
 	}

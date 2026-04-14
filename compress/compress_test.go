@@ -21,7 +21,7 @@ func init() {
 func TestCompressionPlugin_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 
-	svc, err := mailbox.NewService(
+	svc, err := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 		mailbox.WithPlugins(compress.NewPlugin(compress.Gzip)),
 	)
@@ -87,7 +87,7 @@ func TestDecompress_UnsupportedEncoding(t *testing.T) {
 func TestIsCompressed(t *testing.T) {
 	ctx := context.Background()
 
-	svc, _ := mailbox.NewService(
+	svc, _ := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 		mailbox.WithPlugins(compress.NewPlugin(compress.Gzip)),
 	)
@@ -109,7 +109,7 @@ func TestIsCompressed(t *testing.T) {
 func ExampleNewPlugin_basic() {
 	ctx := context.Background()
 
-	svc, _ := mailbox.NewService(
+	svc, _ := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 		mailbox.WithPlugins(compress.NewPlugin(compress.Gzip)),
 	)
@@ -138,7 +138,7 @@ func ExampleNewPlugin_basic() {
 func ExampleNewPlugin_bestCompression() {
 	ctx := context.Background()
 
-	svc, _ := mailbox.NewService(
+	svc, _ := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 		mailbox.WithPlugins(compress.NewPlugin(compress.GzipBest)),
 	)
@@ -163,7 +163,7 @@ func ExampleNewPlugin_bestCompression() {
 func ExampleOpen() {
 	ctx := context.Background()
 
-	svc, _ := mailbox.NewService(
+	svc, _ := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 		mailbox.WithPlugins(compress.NewPlugin(compress.Gzip)),
 	)
@@ -199,7 +199,7 @@ func ExampleOpen_uncompressed() {
 	ctx := context.Background()
 
 	// No compression plugin.
-	svc, _ := mailbox.NewService(mailbox.WithStore(memory.New()))
+	svc, _ := mailbox.New(mailbox.Config{}, mailbox.WithStore(memory.New()))
 	svc.Connect(ctx)
 	defer svc.Close(ctx)
 
@@ -225,7 +225,7 @@ func ExampleOpen_uncompressed() {
 func ExampleIsCompressed() {
 	ctx := context.Background()
 
-	svc, _ := mailbox.NewService(
+	svc, _ := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 		mailbox.WithPlugins(compress.NewPlugin(compress.Gzip)),
 	)

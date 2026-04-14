@@ -44,7 +44,7 @@
 // Wire the engine as a plugin and event subscriber:
 //
 //	engine, err := rules.NewEngine(provider, st)
-//	svc, err := mailbox.NewService(
+//	svc, err := mailbox.New(mailbox.Config{},
 //	    mailbox.WithStore(st),
 //	    mailbox.WithPlugin(engine),   // registers AfterSend for send-side rules
 //	)

@@ -32,7 +32,7 @@ func (s *service) CleanupTrash(ctx context.Context) (*CleanupTrashResult, error)
 	}
 
 	result := &CleanupTrashResult{}
-	cutoff := time.Now().UTC().Add(-s.opts.trashRetention)
+	cutoff := time.Now().UTC().Add(-s.cfg.TrashRetention)
 
 	if s.attachments != nil {
 		return s.cleanupTrashWithAttachments(ctx, result, cutoff)
@@ -94,7 +94,7 @@ type CleanupExpiredMessagesResult struct {
 
 // CleanupExpiredMessages permanently deletes messages older than the configured
 // message retention period (based on created_at). Returns a zero result if
-// message retention is not configured (WithMessageRetention was not called).
+// message retention is not configured (Config.MessageRetention is zero).
 //
 // When Config.ExpiredMessageCleanupInterval is set, this is called automatically
 // by a background goroutine. It can also be called manually for on-demand cleanup.
@@ -106,8 +106,8 @@ func (s *service) CleanupExpiredMessages(ctx context.Context) (*CleanupExpiredMe
 	result := &CleanupExpiredMessagesResult{}
 
 	// Global retention cleanup (based on created_at).
-	if s.opts.messageRetention > 0 {
-		cutoff := time.Now().UTC().Add(-s.opts.messageRetention)
+	if s.cfg.MessageRetention > 0 {
+		cutoff := time.Now().UTC().Add(-s.cfg.MessageRetention)
 
 		if s.attachments != nil {
 			retentionResult, err := s.cleanupExpiredWithAttachments(ctx, &CleanupExpiredMessagesResult{}, cutoff)

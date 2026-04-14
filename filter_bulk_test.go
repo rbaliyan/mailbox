@@ -11,7 +11,7 @@ import (
 func setupFilterBulkService(t *testing.T) (Service, *memory.Store) {
 	t.Helper()
 	memStore := memory.New()
-	svc, err := NewService(WithStore(memStore))
+	svc, err := New(Config{}, WithStore(memStore))
 	if err != nil {
 		t.Fatalf("create service: %v", err)
 	}

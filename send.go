@@ -23,19 +23,19 @@ func (m *userMailbox) Compose() (Draft, error) {
 // scheduleAt, and service default TTL. Called at send time.
 // Returns validation errors for out-of-range values.
 func (m *userMailbox) computeTTLFields(ttl time.Duration, scheduleAt *time.Time) (expiresAt *time.Time, availableAt *time.Time, err error) {
-	opts := m.service.opts
+	cfg := &m.service.cfg
 
 	// Validate TTL bounds.
 	effectiveTTL := ttl
 	if effectiveTTL <= 0 {
-		effectiveTTL = opts.defaultTTL
+		effectiveTTL = cfg.DefaultTTL
 	}
 	if effectiveTTL > 0 {
-		if effectiveTTL < opts.minTTL {
-			return nil, nil, fmt.Errorf("%w: TTL %v is below minimum %v", ErrInvalidTTL, effectiveTTL, opts.minTTL)
+		if effectiveTTL < cfg.MinTTL {
+			return nil, nil, fmt.Errorf("%w: TTL %v is below minimum %v", ErrInvalidTTL, effectiveTTL, cfg.MinTTL)
 		}
-		if opts.maxTTL > 0 && effectiveTTL > opts.maxTTL {
-			return nil, nil, fmt.Errorf("%w: TTL %v exceeds maximum %v", ErrInvalidTTL, effectiveTTL, opts.maxTTL)
+		if cfg.MaxTTL > 0 && effectiveTTL > cfg.MaxTTL {
+			return nil, nil, fmt.Errorf("%w: TTL %v exceeds maximum %v", ErrInvalidTTL, effectiveTTL, cfg.MaxTTL)
 		}
 	}
 
@@ -44,11 +44,11 @@ func (m *userMailbox) computeTTLFields(ttl time.Duration, scheduleAt *time.Time)
 		now := time.Now().UTC()
 		delay := scheduleAt.Sub(now)
 		if delay > 0 {
-			if opts.minScheduleDelay > 0 && delay < opts.minScheduleDelay {
-				return nil, nil, fmt.Errorf("%w: schedule delay %v is below minimum %v", ErrInvalidSchedule, delay, opts.minScheduleDelay)
+			if cfg.MinScheduleDelay > 0 && delay < cfg.MinScheduleDelay {
+				return nil, nil, fmt.Errorf("%w: schedule delay %v is below minimum %v", ErrInvalidSchedule, delay, cfg.MinScheduleDelay)
 			}
-			if opts.maxScheduleDelay > 0 && delay > opts.maxScheduleDelay {
-				return nil, nil, fmt.Errorf("%w: schedule delay %v exceeds maximum %v", ErrInvalidSchedule, delay, opts.maxScheduleDelay)
+			if cfg.MaxScheduleDelay > 0 && delay > cfg.MaxScheduleDelay {
+				return nil, nil, fmt.Errorf("%w: schedule delay %v exceeds maximum %v", ErrInvalidSchedule, delay, cfg.MaxScheduleDelay)
 			}
 		}
 		ut := scheduleAt.UTC()
@@ -386,7 +386,7 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 	}
 
 	// Step 2c: Validate the draft (before acquiring semaphore to avoid wasting slots)
-	if err := ValidateDraft(draft, m.service.opts.getLimits()); err != nil {
+	if err := ValidateDraft(draft, m.service.cfg.getLimits()); err != nil {
 		return nil, err
 	}
 
@@ -548,7 +548,7 @@ func (m *userMailbox) saveDraft(ctx context.Context, draft store.DraftMessage) (
 		return nil, err
 	}
 
-	limits := m.service.opts.getLimits()
+	limits := m.service.cfg.getLimits()
 
 	// Validate content if provided (drafts can have empty subject)
 	if draft.GetSubject() != "" {

@@ -27,7 +27,7 @@ import (
 // newTestService creates a connected service for examples using in-memory backends.
 // Channel transport enables synchronous event delivery without Redis.
 func newTestService() mailbox.Service {
-	svc, err := mailbox.NewService(
+	svc, err := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 		mailbox.WithEventTransport(channel.New()),
 	)
@@ -46,7 +46,7 @@ func newTestServiceWithNotifications() mailbox.Service {
 		notify.WithStore(notifymem.New()),
 		notify.WithPollInterval(50*time.Millisecond),
 	)
-	svc, err := mailbox.NewService(
+	svc, err := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 		mailbox.WithEventTransport(channel.New()),
 		mailbox.WithNotifier(notifier),
@@ -60,9 +60,9 @@ func newTestServiceWithNotifications() mailbox.Service {
 	return svc
 }
 
-// ExampleNewService demonstrates creating and connecting a mailbox service.
-func ExampleNewService() {
-	svc, err := mailbox.NewService(
+// ExampleNew demonstrates creating and connecting a mailbox service.
+func ExampleNew() {
+	svc, err := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 		// Production: use mailbox.WithRedisClient(redisClient) for events
 		// Production: use mongostore.New(mongoClient) for storage
@@ -82,29 +82,29 @@ func ExampleNewService() {
 	// connected: true
 }
 
-// ExampleNewService_withOptions demonstrates all major configuration options.
-func ExampleNewService_withOptions() {
-	svc, err := mailbox.NewService(
-		mailbox.WithStore(memory.New()),
-
+// ExampleNew_withConfig demonstrates all major configuration options.
+func ExampleNew_withConfig() {
+	svc, err := mailbox.New(mailbox.Config{
 		// Message limits
-		mailbox.WithMaxBodySize(5*1024*1024),     // 5 MB
-		mailbox.WithMaxSubjectLength(200),         // 200 chars
-		mailbox.WithMaxRecipients(50),             // 50 recipients
-		mailbox.WithMaxAttachmentCount(10),        // 10 attachments
-		mailbox.WithMaxAttachmentSize(50*1024*1024), // 50 MB per attachment
+		MaxBodySize:      5 * 1024 * 1024,  // 5 MB
+		MaxSubjectLength: 200,               // 200 chars
+		MaxRecipientCount: 50,               // 50 recipients
+		MaxAttachmentCount: 10,              // 10 attachments
+		MaxAttachmentSize: 50 * 1024 * 1024, // 50 MB per attachment
 
 		// Query limits
-		mailbox.WithMaxQueryLimit(200),
-		mailbox.WithDefaultQueryLimit(25),
+		MaxQueryLimit:     200,
+		DefaultQueryLimit: 25,
 
 		// Trash and retention
-		mailbox.WithTrashRetention(7*24*time.Hour),      // 7 days
-		mailbox.WithMessageRetention(90*24*time.Hour),    // 90 days
+		TrashRetention:   7 * 24 * time.Hour,  // 7 days
+		MessageRetention: 90 * 24 * time.Hour, // 90 days
 
 		// Concurrency
-		mailbox.WithMaxConcurrentSends(20),
-		mailbox.WithShutdownTimeout(60*time.Second),
+		MaxConcurrentSends: 20,
+		ShutdownTimeout:    60 * time.Second,
+	},
+		mailbox.WithStore(memory.New()),
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -728,7 +728,7 @@ func Example_partialDelivery() {
 	ctx := context.Background()
 
 	// Set up with a small quota so one recipient hits the limit.
-	svc, _ := mailbox.NewService(
+	svc, _ := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 		mailbox.WithGlobalQuota(mailbox.QuotaPolicy{
 			MaxMessages:  2,
@@ -771,7 +771,7 @@ func Example_stats() {
 	ctx := context.Background()
 	// Use a plain service (no event transport) to avoid stats cache interference
 	// from other examples running in the same process.
-	svc, _ := mailbox.NewService(mailbox.WithStore(memory.New()))
+	svc, _ := mailbox.New(mailbox.Config{}, mailbox.WithStore(memory.New()))
 	svc.Connect(ctx)
 	defer svc.Close(ctx)
 
@@ -848,9 +848,8 @@ func Example_filters() {
 func Example_cleanupTrash() {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc, _ := mailbox.NewService(
+	svc, _ := mailbox.New(mailbox.Config{TrashRetention: 24 * time.Hour},
 		mailbox.WithStore(memStore),
-		mailbox.WithTrashRetention(24*time.Hour),
 	)
 	svc.Connect(ctx)
 	defer svc.Close(ctx)
@@ -880,9 +879,8 @@ func Example_cleanupTrash() {
 func Example_cleanupExpiredMessages() {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc, _ := mailbox.NewService(
+	svc, _ := mailbox.New(mailbox.Config{MessageRetention: 24 * time.Hour},
 		mailbox.WithStore(memStore),
-		mailbox.WithMessageRetention(24*time.Hour),
 	)
 	svc.Connect(ctx)
 	defer svc.Close(ctx)
@@ -959,7 +957,7 @@ func Example_encryptedMessage() {
 	}
 
 	// Create service with compression + encryption plugins.
-	svc, _ := mailbox.NewService(
+	svc, _ := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 		mailbox.WithPlugins(
 			compress.NewPlugin(compress.Gzip),  // compress first
@@ -1005,7 +1003,7 @@ func Example_encryptedMessage() {
 // Example_filterBulkOps demonstrates filter-based bulk operations.
 func Example_filterBulkOps() {
 	ctx := context.Background()
-	svc, _ := mailbox.NewService(mailbox.WithStore(memory.New()))
+	svc, _ := mailbox.New(mailbox.Config{}, mailbox.WithStore(memory.New()))
 	svc.Connect(ctx)
 	defer svc.Close(ctx)
 
@@ -1042,9 +1040,8 @@ func Example_filterBulkOps() {
 func Example_messageTTL() {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc, _ := mailbox.NewService(
+	svc, _ := mailbox.New(mailbox.Config{MessageRetention: 24 * time.Hour},
 		mailbox.WithStore(memStore),
-		mailbox.WithMessageRetention(24*time.Hour), // also enables TTL cleanup
 	)
 	svc.Connect(ctx)
 	defer svc.Close(ctx)
@@ -1083,7 +1080,7 @@ func Example_messageTTL() {
 func Example_scheduledDelivery() {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc, _ := mailbox.NewService(mailbox.WithStore(memStore))
+	svc, _ := mailbox.New(mailbox.Config{}, mailbox.WithStore(memStore))
 	svc.Connect(ctx)
 	defer svc.Close(ctx)
 

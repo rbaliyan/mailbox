@@ -300,7 +300,7 @@ func (m *userMailbox) MarkAllRead(ctx context.Context, folderID string) (_ int64
 		var cursor string
 		for {
 			list, err := m.service.store.Find(ctx, filters, store.ListOptions{
-				Limit:      m.service.opts.maxQueryLimit,
+				Limit:      m.service.cfg.MaxQueryLimit,
 				StartAfter: cursor,
 			})
 			if err != nil {
@@ -421,7 +421,7 @@ func (m *userMailbox) UpdateByFilter(ctx context.Context, filters []store.Filter
 	var cursor string
 	for {
 		list, err := m.service.store.Find(ctx, scoped, store.ListOptions{
-			Limit: m.service.opts.maxQueryLimit, StartAfter: cursor,
+			Limit: m.service.cfg.MaxQueryLimit, StartAfter: cursor,
 		})
 		if err != nil {
 			return count, err
@@ -453,7 +453,7 @@ func (m *userMailbox) MoveByFilter(ctx context.Context, filters []store.Filter, 
 	var cursor string
 	for {
 		list, err := m.service.store.Find(ctx, scoped, store.ListOptions{
-			Limit: m.service.opts.maxQueryLimit, StartAfter: cursor,
+			Limit: m.service.cfg.MaxQueryLimit, StartAfter: cursor,
 		})
 		if err != nil {
 			return count, err
@@ -485,7 +485,7 @@ func (m *userMailbox) DeleteByFilter(ctx context.Context, filters []store.Filter
 	var cursor string
 	for {
 		list, err := m.service.store.Find(ctx, scoped, store.ListOptions{
-			Limit: m.service.opts.maxQueryLimit, StartAfter: cursor,
+			Limit: m.service.cfg.MaxQueryLimit, StartAfter: cursor,
 		})
 		if err != nil {
 			return count, err
@@ -517,7 +517,7 @@ func (m *userMailbox) TagByFilter(ctx context.Context, filters []store.Filter, t
 	var cursor string
 	for {
 		list, err := m.service.store.Find(ctx, scoped, store.ListOptions{
-			Limit: m.service.opts.maxQueryLimit, StartAfter: cursor,
+			Limit: m.service.cfg.MaxQueryLimit, StartAfter: cursor,
 		})
 		if err != nil {
 			return count, err
@@ -549,7 +549,7 @@ func (m *userMailbox) UntagByFilter(ctx context.Context, filters []store.Filter,
 	var cursor string
 	for {
 		list, err := m.service.store.Find(ctx, scoped, store.ListOptions{
-			Limit: m.service.opts.maxQueryLimit, StartAfter: cursor,
+			Limit: m.service.cfg.MaxQueryLimit, StartAfter: cursor,
 		})
 		if err != nil {
 			return count, err

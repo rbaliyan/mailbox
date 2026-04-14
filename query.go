@@ -131,11 +131,11 @@ func (m *userMailbox) Search(ctx context.Context, query SearchQuery) (MessageLis
 
 	// Apply default query limit if not specified
 	if query.Options.Limit == 0 {
-		query.Options.Limit = m.service.opts.defaultQueryLimit
+		query.Options.Limit = m.service.cfg.DefaultQueryLimit
 	}
 	// Enforce maximum query limit to prevent resource exhaustion
-	if query.Options.Limit > m.service.opts.maxQueryLimit {
-		query.Options.Limit = m.service.opts.maxQueryLimit
+	if query.Options.Limit > m.service.cfg.MaxQueryLimit {
+		query.Options.Limit = m.service.cfg.MaxQueryLimit
 	}
 
 	// Set owner for search
@@ -354,11 +354,11 @@ func (m *userMailbox) GetReplies(ctx context.Context, messageID string, opts sto
 func (m *userMailbox) listMessages(ctx context.Context, filters []store.Filter, opts store.ListOptions) (*store.MessageList, error) {
 	// Apply default query limit if not specified
 	if opts.Limit == 0 {
-		opts.Limit = m.service.opts.defaultQueryLimit
+		opts.Limit = m.service.cfg.DefaultQueryLimit
 	}
 	// Enforce maximum query limit to prevent resource exhaustion
-	if opts.Limit > m.service.opts.maxQueryLimit {
-		opts.Limit = m.service.opts.maxQueryLimit
+	if opts.Limit > m.service.cfg.MaxQueryLimit {
+		opts.Limit = m.service.cfg.MaxQueryLimit
 	}
 	if opts.SortBy == "" {
 		opts.SortBy = "CreatedAt"

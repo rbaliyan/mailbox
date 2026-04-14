@@ -57,6 +57,7 @@ type service struct {
 // Caching is NOT included in this library. If you need caching, wrap your store
 // with a caching decorator (see store/cached package for an example).
 func New(cfg Config, opts ...Option) (Service, error) {
+	cfg.applyDefaults()
 	o := newOptions(opts...)
 
 	if o.store == nil {
@@ -84,18 +85,10 @@ func New(cfg Config, opts ...Option) (Service, error) {
 		opts:        o,
 		plugins:     plugins,
 		otel:        otelInstr,
-		sendSem:     semaphore.NewWeighted(int64(o.maxConcurrentSends)),
+		sendSem:     semaphore.NewWeighted(int64(cfg.MaxConcurrentSends)),
 	}, nil
 }
 
-// NewService creates a new mailbox service with default configuration.
-// All background maintenance tasks are disabled; the caller is responsible
-// for scheduling CleanupTrash, CleanupExpiredMessages, and EnforceQuotas.
-//
-// Deprecated: Use New with a Config for automatic background maintenance.
-func NewService(opts ...Option) (Service, error) {
-	return New(DefaultConfig(), opts...)
-}
 
 // Events returns per-service event instances for subscribing and publishing.
 func (s *service) Events() *ServiceEvents {
@@ -202,11 +195,11 @@ func (s *service) initEventBus(ctx context.Context) error {
 	case s.opts.redisClient != nil:
 		s.logger.Info("initializing event bus with Redis transport")
 		redisOpts := []eventredis.Option{
-			eventredis.WithClaimInterval(s.opts.claimInterval, s.opts.claimMinIdle),
-			eventredis.WithClaimBatchSize(s.opts.claimBatchSize),
+			eventredis.WithClaimInterval(s.cfg.ClaimInterval, s.cfg.ClaimMinIdle),
+			eventredis.WithClaimBatchSize(s.cfg.ClaimBatchSize),
 		}
-		if s.opts.eventStreamMaxLen > 0 {
-			redisOpts = append(redisOpts, eventredis.WithMaxLen(s.opts.eventStreamMaxLen))
+		if s.cfg.EventStreamMaxLen > 0 {
+			redisOpts = append(redisOpts, eventredis.WithMaxLen(s.cfg.EventStreamMaxLen))
 		}
 		t, transportErr := eventredis.New(s.opts.redisClient, redisOpts...)
 		if transportErr != nil {
@@ -335,16 +328,16 @@ func (s *service) Close(ctx context.Context) error {
 	// Wait for in-flight send operations to complete (graceful shutdown).
 	// After setting state to disconnected, no new sends can start because checkAccess fails.
 	// We acquire all semaphore slots to wait for existing operations to finish.
-	s.logger.Info("waiting for in-flight operations to complete...", "timeout", s.opts.shutdownTimeout)
-	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, s.opts.shutdownTimeout)
+	s.logger.Info("waiting for in-flight operations to complete...", "timeout", s.cfg.ShutdownTimeout)
+	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, s.cfg.ShutdownTimeout)
 	defer shutdownCancel()
-	if err := s.sendSem.Acquire(shutdownCtx, int64(s.opts.maxConcurrentSends)); err != nil {
+	if err := s.sendSem.Acquire(shutdownCtx, int64(s.cfg.MaxConcurrentSends)); err != nil {
 		// Context cancelled or deadline exceeded - log but continue shutdown
 		s.logger.Warn("timeout waiting for in-flight operations, proceeding with shutdown",
 			"error", err)
 		errs = append(errs, fmt.Errorf("graceful shutdown timeout: %w", err))
 	} else {
-		s.sendSem.Release(int64(s.opts.maxConcurrentSends))
+		s.sendSem.Release(int64(s.cfg.MaxConcurrentSends))
 		s.logger.Info("all in-flight operations completed")
 	}
 

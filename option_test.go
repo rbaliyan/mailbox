@@ -7,45 +7,130 @@ import (
 	"time"
 )
 
-func TestNewOptions(t *testing.T) {
-	t.Run("returns defaults without options", func(t *testing.T) {
-		opts := newOptions()
+func TestConfigApplyDefaults(t *testing.T) {
+	t.Run("fills all defaults for zero config", func(t *testing.T) {
+		cfg := Config{}
+		cfg.applyDefaults()
 
-		if opts.trashRetention != DefaultTrashRetention {
-			t.Errorf("expected trashRetention %v, got %v", DefaultTrashRetention, opts.trashRetention)
+		if cfg.TrashRetention != DefaultTrashRetention {
+			t.Errorf("TrashRetention = %v, want %v", cfg.TrashRetention, DefaultTrashRetention)
 		}
-		if opts.maxSubjectLength != DefaultMaxSubjectLength {
-			t.Errorf("expected maxSubjectLength %v, got %v", DefaultMaxSubjectLength, opts.maxSubjectLength)
+		if cfg.MaxSubjectLength != DefaultMaxSubjectLength {
+			t.Errorf("MaxSubjectLength = %v, want %v", cfg.MaxSubjectLength, DefaultMaxSubjectLength)
 		}
-		if opts.maxBodySize != DefaultMaxBodySize {
-			t.Errorf("expected maxBodySize %v, got %v", DefaultMaxBodySize, opts.maxBodySize)
+		if cfg.MaxBodySize != DefaultMaxBodySize {
+			t.Errorf("MaxBodySize = %v, want %v", cfg.MaxBodySize, DefaultMaxBodySize)
 		}
-		if opts.maxAttachmentSize != DefaultMaxAttachmentSize {
-			t.Errorf("expected maxAttachmentSize %v, got %v", DefaultMaxAttachmentSize, opts.maxAttachmentSize)
+		if cfg.MaxAttachmentSize != DefaultMaxAttachmentSize {
+			t.Errorf("MaxAttachmentSize = %v, want %v", cfg.MaxAttachmentSize, DefaultMaxAttachmentSize)
 		}
-		if opts.maxAttachmentCount != DefaultMaxAttachmentCount {
-			t.Errorf("expected maxAttachmentCount %v, got %v", DefaultMaxAttachmentCount, opts.maxAttachmentCount)
+		if cfg.MaxAttachmentCount != DefaultMaxAttachmentCount {
+			t.Errorf("MaxAttachmentCount = %v, want %v", cfg.MaxAttachmentCount, DefaultMaxAttachmentCount)
 		}
-		if opts.maxRecipientCount != DefaultMaxRecipientCount {
-			t.Errorf("expected maxRecipientCount %v, got %v", DefaultMaxRecipientCount, opts.maxRecipientCount)
+		if cfg.MaxRecipientCount != DefaultMaxRecipientCount {
+			t.Errorf("MaxRecipientCount = %v, want %v", cfg.MaxRecipientCount, DefaultMaxRecipientCount)
 		}
-		if opts.maxMetadataSize != DefaultMaxMetadataSize {
-			t.Errorf("expected maxMetadataSize %v, got %v", DefaultMaxMetadataSize, opts.maxMetadataSize)
+		if cfg.MaxMetadataSize != DefaultMaxMetadataSize {
+			t.Errorf("MaxMetadataSize = %v, want %v", cfg.MaxMetadataSize, DefaultMaxMetadataSize)
 		}
-		if opts.maxMetadataKeys != DefaultMaxMetadataKeys {
-			t.Errorf("expected maxMetadataKeys %v, got %v", DefaultMaxMetadataKeys, opts.maxMetadataKeys)
+		if cfg.MaxMetadataKeys != DefaultMaxMetadataKeys {
+			t.Errorf("MaxMetadataKeys = %v, want %v", cfg.MaxMetadataKeys, DefaultMaxMetadataKeys)
 		}
-		if opts.maxQueryLimit != DefaultMaxQueryLimit {
-			t.Errorf("expected maxQueryLimit %v, got %v", DefaultMaxQueryLimit, opts.maxQueryLimit)
+		if cfg.MaxQueryLimit != DefaultMaxQueryLimit {
+			t.Errorf("MaxQueryLimit = %v, want %v", cfg.MaxQueryLimit, DefaultMaxQueryLimit)
 		}
-		if opts.defaultQueryLimit != DefaultQueryLimit {
-			t.Errorf("expected defaultQueryLimit %v, got %v", DefaultQueryLimit, opts.defaultQueryLimit)
+		if cfg.DefaultQueryLimit != DefaultQueryLimit {
+			t.Errorf("DefaultQueryLimit = %v, want %v", cfg.DefaultQueryLimit, DefaultQueryLimit)
 		}
-		if opts.maxConcurrentSends != DefaultMaxConcurrentSends {
-			t.Errorf("expected maxConcurrentSends %v, got %v", DefaultMaxConcurrentSends, opts.maxConcurrentSends)
+		if cfg.MaxConcurrentSends != DefaultMaxConcurrentSends {
+			t.Errorf("MaxConcurrentSends = %v, want %v", cfg.MaxConcurrentSends, DefaultMaxConcurrentSends)
+		}
+		if cfg.ShutdownTimeout != DefaultShutdownTimeout {
+			t.Errorf("ShutdownTimeout = %v, want %v", cfg.ShutdownTimeout, DefaultShutdownTimeout)
+		}
+		if cfg.MinTTL != 1*time.Minute {
+			t.Errorf("MinTTL = %v, want 1m", cfg.MinTTL)
+		}
+		if cfg.StatsRefreshInterval != DefaultStatsRefreshInterval {
+			t.Errorf("StatsRefreshInterval = %v, want %v", cfg.StatsRefreshInterval, DefaultStatsRefreshInterval)
+		}
+		if cfg.ClaimInterval != DefaultClaimInterval {
+			t.Errorf("ClaimInterval = %v, want %v", cfg.ClaimInterval, DefaultClaimInterval)
+		}
+		if cfg.ClaimMinIdle != DefaultClaimMinIdle {
+			t.Errorf("ClaimMinIdle = %v, want %v", cfg.ClaimMinIdle, DefaultClaimMinIdle)
+		}
+		if cfg.ClaimBatchSize != DefaultClaimBatchSize {
+			t.Errorf("ClaimBatchSize = %v, want %v", cfg.ClaimBatchSize, DefaultClaimBatchSize)
+		}
+		if cfg.MaxHeaderCount != DefaultMaxHeaderCount {
+			t.Errorf("MaxHeaderCount = %v, want %v", cfg.MaxHeaderCount, DefaultMaxHeaderCount)
+		}
+		if cfg.MaxHeaderKeyLength != DefaultMaxHeaderKeyLength {
+			t.Errorf("MaxHeaderKeyLength = %v, want %v", cfg.MaxHeaderKeyLength, DefaultMaxHeaderKeyLength)
+		}
+		if cfg.MaxHeaderValueLength != DefaultMaxHeaderValueLength {
+			t.Errorf("MaxHeaderValueLength = %v, want %v", cfg.MaxHeaderValueLength, DefaultMaxHeaderValueLength)
+		}
+		if cfg.MaxHeadersTotalSize != DefaultMaxHeadersTotalSize {
+			t.Errorf("MaxHeadersTotalSize = %v, want %v", cfg.MaxHeadersTotalSize, DefaultMaxHeadersTotalSize)
 		}
 	})
 
+	t.Run("preserves non-zero values", func(t *testing.T) {
+		cfg := Config{
+			TrashRetention:     7 * 24 * time.Hour,
+			MaxBodySize:        5 * 1024 * 1024,
+			MaxConcurrentSends: 20,
+			ShutdownTimeout:    60 * time.Second,
+		}
+		cfg.applyDefaults()
+
+		if cfg.TrashRetention != 7*24*time.Hour {
+			t.Errorf("TrashRetention = %v, want 7d", cfg.TrashRetention)
+		}
+		if cfg.MaxBodySize != 5*1024*1024 {
+			t.Errorf("MaxBodySize = %v, want 5MB", cfg.MaxBodySize)
+		}
+		if cfg.MaxConcurrentSends != 20 {
+			t.Errorf("MaxConcurrentSends = %v, want 20", cfg.MaxConcurrentSends)
+		}
+		if cfg.ShutdownTimeout != 60*time.Second {
+			t.Errorf("ShutdownTimeout = %v, want 60s", cfg.ShutdownTimeout)
+		}
+	})
+
+	t.Run("trash retention below minimum resets to default", func(t *testing.T) {
+		cfg := Config{TrashRetention: 1 * time.Hour}
+		cfg.applyDefaults()
+		if cfg.TrashRetention != DefaultTrashRetention {
+			t.Errorf("TrashRetention = %v, want %v", cfg.TrashRetention, DefaultTrashRetention)
+		}
+	})
+
+	t.Run("shutdown timeout below minimum resets to default", func(t *testing.T) {
+		cfg := Config{ShutdownTimeout: 500 * time.Millisecond}
+		cfg.applyDefaults()
+		if cfg.ShutdownTimeout != DefaultShutdownTimeout {
+			t.Errorf("ShutdownTimeout = %v, want %v", cfg.ShutdownTimeout, DefaultShutdownTimeout)
+		}
+	})
+
+	t.Run("message retention below minimum resets to disabled", func(t *testing.T) {
+		cfg := Config{MessageRetention: 1 * time.Hour}
+		cfg.applyDefaults()
+		if cfg.MessageRetention != 0 {
+			t.Errorf("MessageRetention = %v, want 0 (disabled)", cfg.MessageRetention)
+		}
+	})
+
+	t.Run("default query limit capped to max query limit", func(t *testing.T) {
+		cfg := Config{MaxQueryLimit: 10, DefaultQueryLimit: 50}
+		cfg.applyDefaults()
+		if cfg.DefaultQueryLimit != 10 {
+			t.Errorf("DefaultQueryLimit = %v, want 10 (capped to MaxQueryLimit)", cfg.DefaultQueryLimit)
+		}
+	})
 }
 
 func TestWithLogger(t *testing.T) {
@@ -61,23 +146,6 @@ func TestWithLogger(t *testing.T) {
 		opts := newOptions(WithLogger(nil))
 		if opts.logger == nil {
 			t.Error("expected default logger when nil passed")
-		}
-	})
-}
-
-func TestWithTrashRetention(t *testing.T) {
-	t.Run("sets custom retention", func(t *testing.T) {
-		retention := 7 * 24 * time.Hour
-		opts := newOptions(WithTrashRetention(retention))
-		if opts.trashRetention != retention {
-			t.Errorf("expected retention %v, got %v", retention, opts.trashRetention)
-		}
-	})
-
-	t.Run("ignores retention below minimum", func(t *testing.T) {
-		opts := newOptions(WithTrashRetention(1 * time.Hour))
-		if opts.trashRetention != DefaultTrashRetention {
-			t.Errorf("expected default retention %v, got %v", DefaultTrashRetention, opts.trashRetention)
 		}
 	})
 }
@@ -153,69 +221,6 @@ func TestWithServiceName(t *testing.T) {
 	})
 }
 
-func TestMessageLimitOptions(t *testing.T) {
-	t.Run("WithMaxBodySize", func(t *testing.T) {
-		opts := newOptions(WithMaxBodySize(5 * 1024 * 1024))
-		if opts.maxBodySize != 5*1024*1024 {
-			t.Errorf("expected maxBodySize 5MB, got %d", opts.maxBodySize)
-		}
-	})
-
-	t.Run("WithMaxAttachmentSize", func(t *testing.T) {
-		opts := newOptions(WithMaxAttachmentSize(50 * 1024 * 1024))
-		if opts.maxAttachmentSize != 50*1024*1024 {
-			t.Errorf("expected maxAttachmentSize 50MB, got %d", opts.maxAttachmentSize)
-		}
-	})
-
-	t.Run("WithMaxRecipients", func(t *testing.T) {
-		opts := newOptions(WithMaxRecipients(50))
-		if opts.maxRecipientCount != 50 {
-			t.Errorf("expected maxRecipientCount 50, got %d", opts.maxRecipientCount)
-		}
-	})
-}
-
-func TestWithMaxConcurrentSends(t *testing.T) {
-	t.Run("sets custom concurrent sends limit", func(t *testing.T) {
-		opts := newOptions(WithMaxConcurrentSends(20))
-		if opts.maxConcurrentSends != 20 {
-			t.Errorf("expected maxConcurrentSends 20, got %d", opts.maxConcurrentSends)
-		}
-	})
-
-	t.Run("ignores zero or negative", func(t *testing.T) {
-		opts := newOptions(WithMaxConcurrentSends(0))
-		if opts.maxConcurrentSends != DefaultMaxConcurrentSends {
-			t.Errorf("expected default maxConcurrentSends, got %d", opts.maxConcurrentSends)
-		}
-	})
-}
-
-func TestWithShutdownTimeout(t *testing.T) {
-	t.Run("sets custom shutdown timeout", func(t *testing.T) {
-		timeout := 60 * time.Second
-		opts := newOptions(WithShutdownTimeout(timeout))
-		if opts.shutdownTimeout != timeout {
-			t.Errorf("expected shutdownTimeout %v, got %v", timeout, opts.shutdownTimeout)
-		}
-	})
-
-	t.Run("ignores timeout below minimum", func(t *testing.T) {
-		opts := newOptions(WithShutdownTimeout(500 * time.Millisecond))
-		if opts.shutdownTimeout != DefaultShutdownTimeout {
-			t.Errorf("expected default shutdownTimeout %v, got %v", DefaultShutdownTimeout, opts.shutdownTimeout)
-		}
-	})
-
-	t.Run("uses default when not specified", func(t *testing.T) {
-		opts := newOptions()
-		if opts.shutdownTimeout != DefaultShutdownTimeout {
-			t.Errorf("expected default shutdownTimeout %v, got %v", DefaultShutdownTimeout, opts.shutdownTimeout)
-		}
-	})
-}
-
 func TestWithPlugin(t *testing.T) {
 	t.Run("adds plugin", func(t *testing.T) {
 		plugin := &mockPlugin{}
@@ -252,88 +257,15 @@ func TestWithPlugins(t *testing.T) {
 	})
 }
 
-func TestHeaderLimitOptions(t *testing.T) {
-	t.Run("WithMaxHeaderCount", func(t *testing.T) {
-		opts := newOptions(WithMaxHeaderCount(25))
-		if opts.maxHeaderCount != 25 {
-			t.Errorf("expected maxHeaderCount 25, got %d", opts.maxHeaderCount)
-		}
-	})
+func TestConfigGetLimits(t *testing.T) {
+	cfg := Config{
+		MaxBodySize:       1024,
+		MaxAttachmentSize: 2048,
+		MaxRecipientCount: 10,
+	}
+	cfg.applyDefaults()
 
-	t.Run("WithMaxHeaderCount ignores zero", func(t *testing.T) {
-		opts := newOptions(WithMaxHeaderCount(0))
-		if opts.maxHeaderCount != DefaultMaxHeaderCount {
-			t.Errorf("expected default %d, got %d", DefaultMaxHeaderCount, opts.maxHeaderCount)
-		}
-	})
-
-	t.Run("WithMaxHeaderKeyLength", func(t *testing.T) {
-		opts := newOptions(WithMaxHeaderKeyLength(64))
-		if opts.maxHeaderKeyLength != 64 {
-			t.Errorf("expected maxHeaderKeyLength 64, got %d", opts.maxHeaderKeyLength)
-		}
-	})
-
-	t.Run("WithMaxHeaderKeyLength ignores zero", func(t *testing.T) {
-		opts := newOptions(WithMaxHeaderKeyLength(0))
-		if opts.maxHeaderKeyLength != DefaultMaxHeaderKeyLength {
-			t.Errorf("expected default %d, got %d", DefaultMaxHeaderKeyLength, opts.maxHeaderKeyLength)
-		}
-	})
-
-	t.Run("WithMaxHeaderValueLength", func(t *testing.T) {
-		opts := newOptions(WithMaxHeaderValueLength(4096))
-		if opts.maxHeaderValueLength != 4096 {
-			t.Errorf("expected maxHeaderValueLength 4096, got %d", opts.maxHeaderValueLength)
-		}
-	})
-
-	t.Run("WithMaxHeaderValueLength ignores zero", func(t *testing.T) {
-		opts := newOptions(WithMaxHeaderValueLength(0))
-		if opts.maxHeaderValueLength != DefaultMaxHeaderValueLength {
-			t.Errorf("expected default %d, got %d", DefaultMaxHeaderValueLength, opts.maxHeaderValueLength)
-		}
-	})
-
-	t.Run("WithMaxHeadersTotalSize", func(t *testing.T) {
-		opts := newOptions(WithMaxHeadersTotalSize(32 * 1024))
-		if opts.maxHeadersTotalSize != 32*1024 {
-			t.Errorf("expected maxHeadersTotalSize 32KB, got %d", opts.maxHeadersTotalSize)
-		}
-	})
-
-	t.Run("WithMaxHeadersTotalSize ignores zero", func(t *testing.T) {
-		opts := newOptions(WithMaxHeadersTotalSize(0))
-		if opts.maxHeadersTotalSize != DefaultMaxHeadersTotalSize {
-			t.Errorf("expected default %d, got %d", DefaultMaxHeadersTotalSize, opts.maxHeadersTotalSize)
-		}
-	})
-
-	t.Run("defaults populated in newOptions", func(t *testing.T) {
-		opts := newOptions()
-		if opts.maxHeaderCount != DefaultMaxHeaderCount {
-			t.Errorf("expected default maxHeaderCount %d, got %d", DefaultMaxHeaderCount, opts.maxHeaderCount)
-		}
-		if opts.maxHeaderKeyLength != DefaultMaxHeaderKeyLength {
-			t.Errorf("expected default maxHeaderKeyLength %d, got %d", DefaultMaxHeaderKeyLength, opts.maxHeaderKeyLength)
-		}
-		if opts.maxHeaderValueLength != DefaultMaxHeaderValueLength {
-			t.Errorf("expected default maxHeaderValueLength %d, got %d", DefaultMaxHeaderValueLength, opts.maxHeaderValueLength)
-		}
-		if opts.maxHeadersTotalSize != DefaultMaxHeadersTotalSize {
-			t.Errorf("expected default maxHeadersTotalSize %d, got %d", DefaultMaxHeadersTotalSize, opts.maxHeadersTotalSize)
-		}
-	})
-}
-
-func TestOptionsGetLimits(t *testing.T) {
-	opts := newOptions(
-		WithMaxBodySize(1024),
-		WithMaxAttachmentSize(2048),
-		WithMaxRecipients(10),
-	)
-
-	limits := opts.getLimits()
+	limits := cfg.getLimits()
 
 	if limits.MaxBodySize != 1024 {
 		t.Errorf("expected MaxBodySize 1024, got %d", limits.MaxBodySize)
@@ -344,21 +276,21 @@ func TestOptionsGetLimits(t *testing.T) {
 	if limits.MaxRecipientCount != 10 {
 		t.Errorf("expected MaxRecipientCount 10, got %d", limits.MaxRecipientCount)
 	}
-	// Other limits should have default values
 	if limits.MaxSubjectLength != DefaultMaxSubjectLength {
 		t.Errorf("expected default MaxSubjectLength, got %d", limits.MaxSubjectLength)
 	}
 }
 
-func TestOptionsGetLimits_Headers(t *testing.T) {
-	opts := newOptions(
-		WithMaxHeaderCount(10),
-		WithMaxHeaderKeyLength(64),
-		WithMaxHeaderValueLength(2048),
-		WithMaxHeadersTotalSize(16 * 1024),
-	)
+func TestConfigGetLimits_Headers(t *testing.T) {
+	cfg := Config{
+		MaxHeaderCount:       10,
+		MaxHeaderKeyLength:   64,
+		MaxHeaderValueLength: 2048,
+		MaxHeadersTotalSize:  16 * 1024,
+	}
+	cfg.applyDefaults()
 
-	limits := opts.getLimits()
+	limits := cfg.getLimits()
 
 	if limits.MaxHeaderCount != 10 {
 		t.Errorf("expected MaxHeaderCount 10, got %d", limits.MaxHeaderCount)

@@ -9,10 +9,10 @@ import (
 	"github.com/rbaliyan/mailbox/store/memory"
 )
 
-func setupRetentionService(t *testing.T, memStore *memory.Store, opts ...Option) Service {
+func setupRetentionService(t *testing.T, memStore *memory.Store, cfg Config, opts ...Option) Service {
 	t.Helper()
 	allOpts := append([]Option{WithStore(memStore)}, opts...)
-	svc, err := NewService(allOpts...)
+	svc, err := New(cfg, allOpts...)
 	if err != nil {
 		t.Fatalf("create service: %v", err)
 	}
@@ -25,7 +25,7 @@ func setupRetentionService(t *testing.T, memStore *memory.Store, opts ...Option)
 func TestCleanupExpiredMessages_Disabled(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc := setupRetentionService(t, memStore)
+	svc := setupRetentionService(t, memStore, Config{})
 	defer svc.Close(ctx)
 
 	// Send a message so there's data.
@@ -36,7 +36,7 @@ func TestCleanupExpiredMessages_Disabled(t *testing.T) {
 		t.Fatalf("send: %v", err)
 	}
 
-	// Without WithMessageRetention, cleanup should be a no-op.
+	// Without MessageRetention in Config, cleanup should be a no-op.
 	result, err := svc.CleanupExpiredMessages(ctx)
 	if err != nil {
 		t.Fatalf("cleanup: %v", err)
@@ -61,9 +61,9 @@ func TestCleanupExpiredMessages_Disabled(t *testing.T) {
 func TestCleanupExpiredMessages_DeletesOldMessages(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc := setupRetentionService(t, memStore,
-		WithMessageRetention(24*time.Hour),
-	)
+	svc := setupRetentionService(t, memStore, Config{
+		MessageRetention: 24 * time.Hour,
+	})
 	defer svc.Close(ctx)
 
 	// Send messages — creates copies in sender's sent and recipient's inbox.
@@ -116,9 +116,9 @@ func TestCleanupExpiredMessages_DeletesOldMessages(t *testing.T) {
 func TestCleanupExpiredMessages_PreservesDrafts(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc := setupRetentionService(t, memStore,
-		WithMessageRetention(24*time.Hour),
-	)
+	svc := setupRetentionService(t, memStore, Config{
+		MessageRetention: 24 * time.Hour,
+	})
 	defer svc.Close(ctx)
 
 	// Create a draft.
@@ -161,9 +161,9 @@ func TestCleanupExpiredMessages_PreservesDrafts(t *testing.T) {
 func TestCleanupExpiredMessages_AllFolders(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
-	svc := setupRetentionService(t, memStore,
-		WithMessageRetention(24*time.Hour),
-	)
+	svc := setupRetentionService(t, memStore, Config{
+		MessageRetention: 24 * time.Hour,
+	})
 	defer svc.Close(ctx)
 
 	bob := svc.Client("bob")
@@ -228,7 +228,7 @@ func TestCleanupExpiredMessages_PreservesYoungMessages(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
 	svc := setupRetentionService(t, memStore,
-		WithMessageRetention(7*24*time.Hour), // 7 days
+		Config{MessageRetention: 7 * 24 * time.Hour},
 	)
 	defer svc.Close(ctx)
 
@@ -261,7 +261,7 @@ func TestCleanupExpiredMessages_PreservesYoungMessages(t *testing.T) {
 
 func TestCleanupExpiredMessages_NotConnected(t *testing.T) {
 	memStore := memory.New()
-	svc, err := NewService(WithStore(memStore))
+	svc, err := New(Config{}, WithStore(memStore))
 	if err != nil {
 		t.Fatalf("create service: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestCleanupExpiredMessages_MinRetentionIgnored(t *testing.T) {
 	memStore := memory.New()
 	// Retention below minimum (1 day) should be silently ignored (stays at 0 = disabled).
 	svc := setupRetentionService(t, memStore,
-		WithMessageRetention(1*time.Hour),
+		Config{MessageRetention: 1 * time.Hour},
 	)
 	defer svc.Close(ctx)
 

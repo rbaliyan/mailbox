@@ -62,7 +62,7 @@
 //
 // To enable events, pass WithRedisClient or WithEventTransport when creating the service:
 //
-//	svc, err := mailbox.NewService(
+//	svc, err := mailbox.New(mailbox.Config{},
 //	    mailbox.WithStore(store),
 //	    mailbox.WithRedisClient(redisClient),
 //	)

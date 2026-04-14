@@ -56,7 +56,7 @@ func newTestService(t *testing.T, plugins ...mailbox.Plugin) mailbox.Service {
 	if len(plugins) > 0 {
 		opts = append(opts, mailbox.WithPlugins(plugins...))
 	}
-	svc, err := mailbox.NewService(opts...)
+	svc, err := mailbox.New(mailbox.Config{}, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +407,7 @@ func ExampleOpen() {
 	keys.AddUser("bob", bobPub, bobPriv)
 
 	// Create service with compress-then-encrypt plugins.
-	svc, _ := mailbox.NewService(
+	svc, _ := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 		mailbox.WithPlugins(
 			compress.NewPlugin(compress.Gzip),
@@ -451,7 +451,7 @@ func ExampleNewEncryptionPlugin_rsa() {
 	keys.AddUser("alice", alicePub, alicePriv)
 	keys.AddUser("bob", bobPub, bobPriv)
 
-	svc, _ := mailbox.NewService(
+	svc, _ := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 		mailbox.WithPlugins(
 			crypto.NewEncryptionPlugin(keys, crypto.WithKeyType(crypto.RSAOAEP)),
@@ -485,7 +485,7 @@ func ExampleNewEncryptionPlugin_multiRecipient() {
 		keys.AddUser(user, pub, priv)
 	}
 
-	svc, _ := mailbox.NewService(
+	svc, _ := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 		mailbox.WithPlugins(crypto.NewEncryptionPlugin(keys)),
 	)
@@ -522,7 +522,7 @@ func ExampleOpen_senderDecrypt() {
 		keys.AddUser(user, pub, priv)
 	}
 
-	svc, _ := mailbox.NewService(
+	svc, _ := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 		mailbox.WithPlugins(crypto.NewEncryptionPlugin(keys)),
 	)
@@ -557,7 +557,7 @@ func ExampleOpen_compressThenEncrypt() {
 	}
 
 	// Register compression BEFORE encryption for compress-then-encrypt.
-	svc, _ := mailbox.NewService(
+	svc, _ := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 		mailbox.WithPlugins(
 			compress.NewPlugin(compress.Gzip),     // step 1: compress
@@ -601,7 +601,7 @@ func ExampleOpen_metadata() {
 		keys.AddUser(user, pub, priv)
 	}
 
-	svc, _ := mailbox.NewService(
+	svc, _ := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 		mailbox.WithPlugins(crypto.NewEncryptionPlugin(keys)),
 	)
@@ -633,7 +633,7 @@ func ExampleOpen_metadata() {
 func ExampleIsEncrypted() {
 	ctx := context.Background()
 
-	svc, _ := mailbox.NewService(mailbox.WithStore(memory.New()))
+	svc, _ := mailbox.New(mailbox.Config{}, mailbox.WithStore(memory.New()))
 	svc.Connect(ctx)
 	defer svc.Close(ctx)
 

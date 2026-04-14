@@ -65,10 +65,9 @@ func TestCleanupExpiredMessages_ReleasesAttachmentRefs(t *testing.T) {
 	memStore := memory.New()
 	attMgr := &stubAttachmentManager{}
 
-	svc, err := NewService(
+	svc, err := New(Config{MessageRetention: 24 * time.Hour},
 		WithStore(memStore),
 		WithAttachmentManager(attMgr),
-		WithMessageRetention(24*time.Hour),
 	)
 	if err != nil {
 		t.Fatalf("create service: %v", err)
@@ -173,10 +172,9 @@ func TestCleanupExpiredMessages_OnlyWinnerReleasesRefs(t *testing.T) {
 	memStore := memory.New()
 	attMgr := &stubAttachmentManager{}
 
-	svc, err := NewService(
+	svc, err := New(Config{MessageRetention: 24 * time.Hour},
 		WithStore(memStore),
 		WithAttachmentManager(attMgr),
-		WithMessageRetention(24*time.Hour),
 	)
 	if err != nil {
 		t.Fatalf("create service: %v", err)
@@ -238,7 +236,7 @@ func TestCleanupTrash_ReleasesAttachmentRefs(t *testing.T) {
 	memStore := memory.New()
 	attMgr := &stubAttachmentManager{}
 
-	svc, err := NewService(
+	svc, err := New(Config{},
 		WithStore(memStore),
 		WithAttachmentManager(attMgr),
 	)

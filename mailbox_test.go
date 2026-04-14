@@ -20,16 +20,16 @@ func mustCompose(mb Mailbox) Draft {
 	return d
 }
 
-func TestNewService(t *testing.T) {
+func TestNewWithDefaults(t *testing.T) {
 	t.Run("requires store", func(t *testing.T) {
-		_, err := NewService()
+		_, err := New(Config{})
 		if !errors.Is(err, ErrStoreRequired) {
 			t.Errorf("expected ErrStoreRequired, got %v", err)
 		}
 	})
 
 	t.Run("creates service with store", func(t *testing.T) {
-		svc, err := NewService(WithStore(memory.New()))
+		svc, err := New(Config{}, WithStore(memory.New()))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -42,7 +42,7 @@ func TestNewService(t *testing.T) {
 
 func TestServiceLifecycle(t *testing.T) {
 	t.Run("connect and close", func(t *testing.T) {
-		svc, err := NewService(WithStore(memory.New()))
+		svc, err := New(Config{}, WithStore(memory.New()))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -84,7 +84,7 @@ func TestUserMailbox(t *testing.T) {
 	})
 
 	t.Run("operations fail when not connected", func(t *testing.T) {
-		disconnectedSvc, _ := NewService(WithStore(memory.New()))
+		disconnectedSvc, _ := New(Config{}, WithStore(memory.New()))
 		mb := disconnectedSvc.Client("user123")
 
 		_, err := mb.Get(ctx, "msg123")
@@ -731,7 +731,7 @@ func TestConcurrentSends(t *testing.T) {
 
 func TestGracefulShutdown(t *testing.T) {
 	ctx := context.Background()
-	svc, _ := NewService(WithStore(memory.New()))
+	svc, _ := New(Config{}, WithStore(memory.New()))
 	if err := svc.Connect(ctx); err != nil {
 		t.Fatalf("connect failed: %v", err)
 	}
@@ -959,7 +959,7 @@ func TestUpdateFlags_EmptyFlags(t *testing.T) {
 func setupTestService(t *testing.T) Service {
 	t.Helper()
 
-	svc, err := NewService(
+	svc, err := New(Config{},
 		WithStore(memory.New()),
 	)
 	if err != nil {
