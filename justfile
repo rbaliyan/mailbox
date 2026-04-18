@@ -49,6 +49,10 @@ depcheck:
 generate:
     go generate ./...
 
+# Generate proto stubs (requires buf)
+proto:
+    buf generate
+
 # Clean generated files
 clean:
     rm -f coverage.out coverage.html

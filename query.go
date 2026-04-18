@@ -2,6 +2,7 @@ package mailbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -39,6 +40,25 @@ func (m *userMailbox) Get(ctx context.Context, messageID string) (Message, error
 	}
 
 	return newMessage(msg, m), nil
+}
+
+// GetDraft retrieves a single draft by ID for the current user.
+// Returns ErrNotFound if the draft does not exist or does not belong to this user.
+func (m *userMailbox) GetDraft(ctx context.Context, id string) (Draft, error) {
+	if err := m.checkAccess(); err != nil {
+		return nil, err
+	}
+	d, err := m.service.store.GetDraft(ctx, id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get draft: %w", err)
+	}
+	if d.GetOwnerID() != m.userID {
+		return nil, ErrNotFound
+	}
+	return &draft{mailbox: m, message: d, saved: true}, nil
 }
 
 // Drafts returns draft messages for the current user.

@@ -98,6 +98,7 @@ type ThreadReader interface {
 // DraftLister provides draft listing.
 type DraftLister interface {
 	Drafts(ctx context.Context, opts store.ListOptions) (DraftList, error)
+	GetDraft(ctx context.Context, id string) (Draft, error)
 }
 
 // FolderReader provides folder information.
