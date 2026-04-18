@@ -1,0 +1,478 @@
+syntax = "proto3";
+
+package mailbox.v1;
+
+option go_package = "github.com/rbaliyan/mailbox/proto/mailbox/v1;mailboxpb";
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+
+// MailboxService exposes email-like messaging operations for a user mailbox.
+// Every RPC is scoped to a user identified by user_id in the request.
+// Access control is delegated to the SecurityGuard configured on the server.
+service MailboxService {
+  // --- Message retrieval ---
+
+  // GetMessage retrieves a single message by ID.
+  rpc GetMessage(GetMessageRequest) returns (MessageResponse);
+
+  // ListMessages lists messages in a folder with pagination.
+  rpc ListMessages(ListMessagesRequest) returns (MessageListResponse);
+
+  // SearchMessages performs full-text search across a user's messages.
+  rpc SearchMessages(SearchMessagesRequest) returns (MessageListResponse);
+
+  // GetThread returns all messages belonging to a thread, ordered by creation time.
+  rpc GetThread(GetThreadRequest) returns (MessageListResponse);
+
+  // GetReplies returns all direct replies to a message.
+  rpc GetReplies(GetRepliesRequest) returns (MessageListResponse);
+
+  // --- Message sending ---
+
+  // SendMessage sends a message without going through the draft workflow.
+  rpc SendMessage(SendMessageRequest) returns (MessageResponse);
+
+  // --- Single-message mutations ---
+
+  // UpdateFlags changes the read or archived status of a message.
+  rpc UpdateFlags(UpdateFlagsRequest) returns (google.protobuf.Empty);
+
+  // MoveMessage moves a message to a different folder.
+  rpc MoveMessage(MoveMessageRequest) returns (google.protobuf.Empty);
+
+  // DeleteMessage moves a message to trash.
+  rpc DeleteMessage(DeleteMessageRequest) returns (google.protobuf.Empty);
+
+  // RestoreMessage restores a message from trash.
+  rpc RestoreMessage(RestoreMessageRequest) returns (google.protobuf.Empty);
+
+  // PermanentlyDeleteMessage hard-deletes a message from trash.
+  rpc PermanentlyDeleteMessage(PermanentlyDeleteMessageRequest) returns (google.protobuf.Empty);
+
+  // AddTag adds a tag to a message.
+  rpc AddTag(TagRequest) returns (google.protobuf.Empty);
+
+  // RemoveTag removes a tag from a message.
+  rpc RemoveTag(TagRequest) returns (google.protobuf.Empty);
+
+  // MarkAllRead marks all unread messages in a folder as read.
+  rpc MarkAllRead(MarkAllReadRequest) returns (CountResponse);
+
+  // --- Bulk operations by message IDs ---
+
+  // BulkUpdateFlags changes the read/archived status of multiple messages.
+  rpc BulkUpdateFlags(BulkUpdateFlagsRequest) returns (BulkResultResponse);
+
+  // BulkMove moves multiple messages to a folder.
+  rpc BulkMove(BulkMoveRequest) returns (BulkResultResponse);
+
+  // BulkDelete moves multiple messages to trash.
+  rpc BulkDelete(BulkDeleteRequest) returns (BulkResultResponse);
+
+  // BulkPermanentlyDelete hard-deletes multiple messages from trash.
+  rpc BulkPermanentlyDelete(BulkPermanentlyDeleteRequest) returns (BulkResultResponse);
+
+  // BulkAddTag adds a tag to multiple messages.
+  rpc BulkAddTag(BulkTagRequest) returns (BulkResultResponse);
+
+  // BulkRemoveTag removes a tag from multiple messages.
+  rpc BulkRemoveTag(BulkTagRequest) returns (BulkResultResponse);
+
+  // --- Draft operations ---
+
+  // ComposeDraft creates and saves a new draft.
+  rpc ComposeDraft(ComposeDraftRequest) returns (DraftResponse);
+
+  // UpdateDraft updates fields of an existing draft.
+  // Only non-empty fields are applied; empty string fields are left unchanged.
+  rpc UpdateDraft(UpdateDraftRequest) returns (DraftResponse);
+
+  // ListDrafts lists all drafts for a user with pagination.
+  rpc ListDrafts(ListDraftsRequest) returns (DraftListResponse);
+
+  // DeleteDraft permanently deletes a draft.
+  rpc DeleteDraft(DeleteDraftRequest) returns (google.protobuf.Empty);
+
+  // SendDraft sends an existing draft.
+  rpc SendDraft(SendDraftRequest) returns (MessageResponse);
+
+  // --- Stats and folder information ---
+
+  // GetStats returns aggregate statistics for a user's mailbox.
+  rpc GetStats(GetStatsRequest) returns (StatsResponse);
+
+  // UnreadCount returns the total number of unread messages for a user.
+  rpc UnreadCount(UnreadCountRequest) returns (CountResponse);
+
+  // ListFolders lists all folders (system and custom) in a user's mailbox.
+  rpc ListFolders(ListFoldersRequest) returns (FolderListResponse);
+
+  // --- Real-time streaming ---
+
+  // StreamNotifications streams real-time notification events for a user.
+  // The stream stays open until the client disconnects or the context is cancelled.
+  // Pass last_event_id to replay missed events on reconnect.
+  rpc StreamNotifications(StreamNotificationsRequest) returns (stream NotificationEvent);
+}
+
+// ---- Shared types ----
+
+// Attachment holds metadata for a file attached to a message.
+// File content is served from an external store (S3, GCS) via uri.
+message Attachment {
+  string id = 1;
+  string filename = 2;
+  string content_type = 3;
+  int64 size = 4;
+  string uri = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+// Message is a read-only snapshot of a sent or received message.
+message Message {
+  string id = 1;
+  string owner_id = 2;
+  string sender_id = 3;
+  string subject = 4;
+  string body = 5;
+  repeated string recipient_ids = 6;
+  map<string, string> headers = 7;
+  google.protobuf.Struct metadata = 8;
+  repeated Attachment attachments = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+  // expires_at is absent when the message has no TTL.
+  google.protobuf.Timestamp expires_at = 12;
+  // available_at is absent when the message is immediately available.
+  google.protobuf.Timestamp available_at = 13;
+  string status = 14;
+  bool is_read = 15;
+  // read_at is absent when the message has not been read.
+  google.protobuf.Timestamp read_at = 16;
+  string folder_id = 17;
+  repeated string tags = 18;
+  string thread_id = 19;
+  string reply_to_id = 20;
+}
+
+// Draft is a message being composed. Use ComposeDraft to create one.
+message Draft {
+  string id = 1;
+  string owner_id = 2;
+  string subject = 3;
+  string body = 4;
+  repeated string recipient_ids = 5;
+  repeated string deliver_to = 6;
+  map<string, string> headers = 7;
+  google.protobuf.Struct metadata = 8;
+  repeated Attachment attachments = 9;
+  string thread_id = 10;
+  string reply_to_id = 11;
+}
+
+// Flags controls the read and archived status of a message.
+// An absent (nil) field means no change; false means explicitly clear the flag.
+message Flags {
+  google.protobuf.BoolValue read = 1;
+  google.protobuf.BoolValue archived = 2;
+}
+
+// ListOptions controls pagination and sorting for list operations.
+message ListOptions {
+  // limit caps the number of results. 0 uses the server default.
+  int32 limit = 1;
+  // offset skips the first N results (offset-based pagination).
+  int32 offset = 2;
+  string sort_by = 3;
+  // sort_order is "asc" or "desc". Empty defaults to the server default.
+  string sort_order = 4;
+  // start_after is a cursor returned by a previous response (cursor-based pagination).
+  // When set, offset is ignored.
+  string start_after = 5;
+}
+
+// FolderInfo describes a single folder in a user's mailbox.
+message FolderInfo {
+  string id = 1;
+  string name = 2;
+  bool is_system = 3;
+  int64 message_count = 4;
+  int64 unread_count = 5;
+}
+
+// FolderCounts holds message counts for a single folder.
+message FolderCounts {
+  int64 total = 1;
+  int64 unread = 2;
+}
+
+// MailboxStats holds aggregate statistics for a user's mailbox.
+message MailboxStats {
+  int64 total_messages = 1;
+  int64 unread_count = 2;
+  int64 draft_count = 3;
+  map<string, FolderCounts> folders = 4;
+}
+
+// BulkOperationResult is the outcome of one item in a bulk request.
+message BulkOperationResult {
+  string id = 1;
+  bool success = 2;
+  // error is non-empty when success is false.
+  string error = 3;
+}
+
+// BulkResultResponse summarises the outcome of a bulk request.
+message BulkResultResponse {
+  repeated BulkOperationResult results = 1;
+  int32 success_count = 2;
+  int32 failure_count = 3;
+}
+
+// CountResponse wraps a single integer count.
+message CountResponse {
+  int64 count = 1;
+}
+
+// NotificationEvent is a real-time push event streamed to a connected user.
+message NotificationEvent {
+  string id = 1;
+  string type = 2;
+  string user_id = 3;
+  // payload is the JSON-encoded event-specific data.
+  bytes payload = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+// ---- Request / Response messages ----
+
+message GetMessageRequest {
+  string user_id = 1;
+  string message_id = 2;
+}
+
+message MessageResponse {
+  Message message = 1;
+}
+
+message ListMessagesRequest {
+  string user_id = 1;
+  string folder_id = 2;
+  ListOptions options = 3;
+}
+
+message MessageListResponse {
+  repeated Message messages = 1;
+  int64 total = 2;
+  bool has_more = 3;
+  string next_cursor = 4;
+}
+
+message SearchMessagesRequest {
+  string user_id = 1;
+  string query = 2;
+  // fields restricts the search to specific fields (e.g., "subject", "body").
+  // Empty means search all fields.
+  repeated string fields = 3;
+  // tags filters results to messages containing all specified tags.
+  repeated string tags = 4;
+  ListOptions options = 5;
+}
+
+message GetThreadRequest {
+  string user_id = 1;
+  string thread_id = 2;
+  ListOptions options = 3;
+}
+
+message GetRepliesRequest {
+  string user_id = 1;
+  string message_id = 2;
+  ListOptions options = 3;
+}
+
+message SendMessageRequest {
+  string user_id = 1;
+  repeated string recipient_ids = 2;
+  string subject = 3;
+  string body = 4;
+  map<string, string> headers = 5;
+  google.protobuf.Struct metadata = 6;
+  // attachment_ids references pre-uploaded attachment objects.
+  repeated string attachment_ids = 7;
+  string thread_id = 8;
+  string reply_to_id = 9;
+  repeated string deliver_to = 10;
+  // ttl sets per-message lifetime from send time. Zero means no TTL.
+  google.protobuf.Duration ttl = 11;
+  // schedule_at hides the message from recipients until this time. Absent means
+  // send immediately.
+  google.protobuf.Timestamp schedule_at = 12;
+}
+
+message UpdateFlagsRequest {
+  string user_id = 1;
+  string message_id = 2;
+  Flags flags = 3;
+}
+
+message MoveMessageRequest {
+  string user_id = 1;
+  string message_id = 2;
+  string folder_id = 3;
+}
+
+message DeleteMessageRequest {
+  string user_id = 1;
+  string message_id = 2;
+}
+
+message RestoreMessageRequest {
+  string user_id = 1;
+  string message_id = 2;
+}
+
+message PermanentlyDeleteMessageRequest {
+  string user_id = 1;
+  string message_id = 2;
+}
+
+// TagRequest is used for both AddTag and RemoveTag.
+message TagRequest {
+  string user_id = 1;
+  string message_id = 2;
+  string tag_id = 3;
+}
+
+message MarkAllReadRequest {
+  string user_id = 1;
+  string folder_id = 2;
+}
+
+message BulkUpdateFlagsRequest {
+  string user_id = 1;
+  repeated string message_ids = 2;
+  Flags flags = 3;
+}
+
+message BulkMoveRequest {
+  string user_id = 1;
+  repeated string message_ids = 2;
+  string folder_id = 3;
+}
+
+message BulkDeleteRequest {
+  string user_id = 1;
+  repeated string message_ids = 2;
+}
+
+message BulkPermanentlyDeleteRequest {
+  string user_id = 1;
+  repeated string message_ids = 2;
+}
+
+// BulkTagRequest is used for both BulkAddTag and BulkRemoveTag.
+message BulkTagRequest {
+  string user_id = 1;
+  repeated string message_ids = 2;
+  string tag_id = 3;
+}
+
+// ComposeDraftRequest creates and saves a new draft.
+// Set reply_to_message_id to make this draft a reply; the server looks up the
+// parent message and inherits its thread_id automatically.
+message ComposeDraftRequest {
+  string user_id = 1;
+  string subject = 2;
+  string body = 3;
+  repeated string recipient_ids = 4;
+  repeated string deliver_to = 5;
+  map<string, string> headers = 6;
+  google.protobuf.Struct metadata = 7;
+  // reply_to_message_id sets up the draft as a reply to the given message.
+  // Mutually exclusive with thread_id: if set, thread_id is inherited from
+  // the parent message and the reply_to_id field is set on the draft.
+  string reply_to_message_id = 8;
+  // ttl sets per-message lifetime. Zero means no TTL.
+  google.protobuf.Duration ttl = 9;
+  // schedule_at delays delivery until this time. Absent means send immediately.
+  google.protobuf.Timestamp schedule_at = 10;
+}
+
+message DraftResponse {
+  Draft draft = 1;
+}
+
+// UpdateDraftRequest patches an existing draft.
+// Empty string fields are ignored (no change); non-empty strings replace the
+// current value. Non-empty repeated fields replace the current list.
+// Headers and metadata entries are merged into existing maps.
+message UpdateDraftRequest {
+  string user_id = 1;
+  string draft_id = 2;
+  string subject = 3;
+  string body = 4;
+  repeated string recipient_ids = 5;
+  repeated string deliver_to = 6;
+  // headers entries are merged into the existing header map.
+  map<string, string> headers = 7;
+  // metadata entries are merged into the existing metadata map.
+  google.protobuf.Struct metadata = 8;
+  // ttl replaces the existing TTL when AsDuration() > 0.
+  google.protobuf.Duration ttl = 9;
+  // schedule_at replaces the existing schedule when non-nil.
+  google.protobuf.Timestamp schedule_at = 10;
+}
+
+message ListDraftsRequest {
+  string user_id = 1;
+  ListOptions options = 2;
+}
+
+message DraftListResponse {
+  repeated Draft drafts = 1;
+  int64 total = 2;
+  bool has_more = 3;
+  string next_cursor = 4;
+}
+
+message DeleteDraftRequest {
+  string user_id = 1;
+  string draft_id = 2;
+}
+
+message SendDraftRequest {
+  string user_id = 1;
+  string draft_id = 2;
+}
+
+message GetStatsRequest {
+  string user_id = 1;
+}
+
+message StatsResponse {
+  MailboxStats stats = 1;
+}
+
+message UnreadCountRequest {
+  string user_id = 1;
+}
+
+message ListFoldersRequest {
+  string user_id = 1;
+}
+
+message FolderListResponse {
+  repeated FolderInfo folders = 1;
+}
+
+message StreamNotificationsRequest {
+  string user_id = 1;
+  // last_event_id enables backfill of events missed since the last connection.
+  // Pass the ID of the last received event; omit or leave empty for new events only.
+  string last_event_id = 2;
+}

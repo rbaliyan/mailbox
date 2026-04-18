@@ -11,6 +11,7 @@ import (
 // DraftReader provides read access to draft content.
 type DraftReader interface {
 	ID() string
+	OwnerID() string
 	Subject() string
 	Body() string
 	RecipientIDs() []string
@@ -148,6 +149,11 @@ func newDraft(m *userMailbox) *draft {
 // ID returns the draft ID if saved, empty string otherwise.
 func (d *draft) ID() string {
 	return d.message.GetID()
+}
+
+// OwnerID returns the user ID that owns this draft.
+func (d *draft) OwnerID() string {
+	return d.mailbox.userID
 }
 
 // Subject returns the draft subject.
