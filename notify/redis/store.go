@@ -10,6 +10,7 @@ import (
 
 	"github.com/rbaliyan/mailbox/notify"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // Compile-time interface checks.
@@ -38,6 +39,10 @@ type Store struct {
 	cancel context.CancelFunc
 	closed atomic.Bool
 	wg     sync.WaitGroup // tracks the background cleanup goroutine
+
+	// OTel instruments (nil when no meter provider configured)
+	streamKeys     metric.Int64Gauge   // mailbox.notify.stream.keys
+	cleanupDeleted metric.Int64Counter // mailbox.notify.stream.cleanup.deleted
 }
 
 // New creates a new Redis notification store.
@@ -50,10 +55,34 @@ func New(client redis.UniversalClient, opts ...Option) *Store {
 		ctx:    ctx,
 		cancel: cancel,
 	}
+	s.initMetrics()
 	if s.opts.cleanupInterval > 0 {
 		s.wg.Go(s.cleanupLoop)
 	}
 	return s
+}
+
+// initMetrics creates OTel instruments when a meter provider is configured.
+func (s *Store) initMetrics() {
+	if s.opts.meter == nil {
+		return
+	}
+	meter := s.opts.meter.Meter("github.com/rbaliyan/mailbox")
+	var err error
+	s.streamKeys, err = meter.Int64Gauge(
+		"mailbox.notify.stream.keys",
+		metric.WithDescription("Total number of notification stream keys in Redis after each cleanup scan"),
+	)
+	if err != nil {
+		s.opts.logger.Warn("notify: failed to create stream.keys gauge", "error", err)
+	}
+	s.cleanupDeleted, err = meter.Int64Counter(
+		"mailbox.notify.stream.cleanup.deleted",
+		metric.WithDescription("Number of notification stream keys deleted per cleanup run"),
+	)
+	if err != nil {
+		s.opts.logger.Warn("notify: failed to create cleanup.deleted counter", "error", err)
+	}
 }
 
 func (s *Store) key(userID string) string {
@@ -181,6 +210,7 @@ func (s *Store) Cleanup(ctx context.Context, olderThan time.Time) error {
 	}
 	pattern := s.opts.prefix + ":*"
 
+	var totalKeys, deletedKeys int64
 	var cursor uint64
 	for {
 		keys, next, err := s.client.Scan(ctx, cursor, pattern, 100).Result()
@@ -188,51 +218,64 @@ func (s *Store) Cleanup(ctx context.Context, olderThan time.Time) error {
 			return fmt.Errorf("notify: redis scan: %w", err)
 		}
 		for _, key := range keys {
-			s.cleanupKey(ctx, key, minID)
+			totalKeys++
+			if s.cleanupKey(ctx, key, minID) {
+				deletedKeys++
+			}
 		}
 		cursor = next
 		if cursor == 0 {
 			break
 		}
 	}
+	if s.streamKeys != nil {
+		s.streamKeys.Record(ctx, totalKeys)
+	}
+	if s.cleanupDeleted != nil && deletedKeys > 0 {
+		s.cleanupDeleted.Add(ctx, deletedKeys)
+	}
 	return nil
 }
 
 // cleanupKey trims or deletes a single notification stream key.
 // minID is the MINID threshold (empty string = no age-based deletion, only empty streams deleted).
-func (s *Store) cleanupKey(ctx context.Context, key, minID string) {
+// Returns true if the key was deleted.
+func (s *Store) cleanupKey(ctx context.Context, key, minID string) bool {
 	// Read only the most-recent entry to decide whether the stream is stale.
 	last, err := s.client.XRevRangeN(ctx, key, "+", "-", 1).Result()
 	if err != nil {
 		s.opts.logger.Warn("notify: cleanup read last entry failed", "key", key, "error", err)
-		return
+		return false
 	}
 
 	// Empty stream → always delete.
 	if len(last) == 0 {
 		if err := s.client.Del(ctx, key).Err(); err != nil {
 			s.opts.logger.Warn("notify: cleanup delete empty stream failed", "key", key, "error", err)
+			return false
 		}
-		return
+		return true
 	}
 
 	// No age threshold — nothing more to do for non-empty streams.
 	if minID == "" {
-		return
+		return false
 	}
 
 	// Most-recent entry is older than the threshold → delete the whole key.
 	if last[0].ID <= minID {
 		if err := s.client.Del(ctx, key).Err(); err != nil {
 			s.opts.logger.Warn("notify: cleanup delete stale stream failed", "key", key, "error", err)
+			return false
 		}
-		return
+		return true
 	}
 
 	// Active stream — trim entries older than the threshold.
 	if err := s.client.XTrimMinID(ctx, key, minID).Err(); err != nil {
 		s.opts.logger.Warn("notify: cleanup trim failed", "key", key, "error", err)
 	}
+	return false
 }
 
 // cleanupLoop is the background goroutine started when cleanupInterval > 0.

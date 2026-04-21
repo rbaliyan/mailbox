@@ -34,21 +34,25 @@ func (s *service) CleanupTrash(ctx context.Context) (*CleanupTrashResult, error)
 	result := &CleanupTrashResult{}
 	cutoff := time.Now().UTC().Add(-s.cfg.TrashRetention)
 
+	var err error
 	if s.attachments != nil {
-		return s.cleanupTrashWithAttachments(ctx, result, cutoff)
+		result, err = s.cleanupTrashWithAttachments(ctx, result, cutoff)
+	} else {
+		// Fast path: no attachments, bulk delete by cutoff.
+		var deleted int64
+		deleted, err = s.store.DeleteExpiredTrash(ctx, cutoff)
+		if err != nil {
+			err = fmt.Errorf("delete expired trash: %w", err)
+		} else {
+			result.DeletedCount = int(deleted)
+			if deleted > 0 {
+				s.logger.Debug("deleted expired trash messages", "count", deleted)
+			}
+		}
 	}
 
-	// Fast path: no attachments, bulk delete by cutoff.
-	deleted, err := s.store.DeleteExpiredTrash(ctx, cutoff)
-	if err != nil {
-		return result, fmt.Errorf("delete expired trash: %w", err)
-	}
-	result.DeletedCount = int(deleted)
-	if deleted > 0 {
-		s.logger.Debug("deleted expired trash messages", "count", deleted)
-	}
-
-	return result, nil
+	s.otel.recordCleanupDeleted(ctx, "trash", result.DeletedCount)
+	return result, err
 }
 
 // cleanupTrashWithAttachments handles trash cleanup when attachments are configured.
@@ -151,6 +155,7 @@ func (s *service) CleanupExpiredMessages(ctx context.Context) (*CleanupExpiredMe
 		}
 	}
 
+	s.otel.recordCleanupDeleted(ctx, "expired", result.DeletedCount)
 	return result, nil
 }
 

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+
+	"go.opentelemetry.io/otel/metric"
 )
 
 // Notifier manages per-user notification delivery and persistence.
@@ -22,6 +24,10 @@ type Notifier struct {
 	opts    *options
 	streams sync.Map // map[string]*userStreams — local per-user stream sets
 	closed  atomic.Bool
+
+	// OTel instruments (nil when no meter provider configured)
+	activeCount  atomic.Int64
+	streamsGauge metric.Int64Gauge // mailbox.notify.streams.active
 }
 
 // userStreams holds the set of active streams for a single user on this instance.
@@ -32,9 +38,21 @@ type userStreams struct {
 
 // NewNotifier creates a new Notifier with the given options.
 func NewNotifier(opts ...Option) *Notifier {
-	return &Notifier{
+	n := &Notifier{
 		opts: newOptions(opts...),
 	}
+	if n.opts.meter != nil {
+		meter := n.opts.meter.Meter("github.com/rbaliyan/mailbox")
+		var err error
+		n.streamsGauge, err = meter.Int64Gauge(
+			"mailbox.notify.streams.active",
+			metric.WithDescription("Number of active notification subscription streams on this instance"),
+		)
+		if err != nil {
+			n.opts.logger.Warn("notify: failed to create streams.active gauge", "error", err)
+		}
+	}
+	return n
 }
 
 // Push sends a notification to a user.
@@ -325,6 +343,10 @@ func (n *Notifier) addStream(userID string, s *stream) {
 	us.streams = append(us.streams, s)
 	s.notifier = n
 	us.mu.Unlock()
+	count := n.activeCount.Add(1)
+	if n.streamsGauge != nil {
+		n.streamsGauge.Record(context.Background(), count)
+	}
 }
 
 func (n *Notifier) removeStream(userID string, s *stream) {
@@ -343,5 +365,9 @@ func (n *Notifier) removeStream(userID string, s *stream) {
 	}
 	if len(us.streams) == 0 {
 		n.streams.Delete(userID)
+	}
+	count := n.activeCount.Add(-1)
+	if n.streamsGauge != nil {
+		n.streamsGauge.Record(context.Background(), count)
 	}
 }
