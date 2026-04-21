@@ -7,10 +7,12 @@ import (
 
 // Default configuration values.
 const (
-	DefaultPrefix       = "notify"
-	DefaultMaxLen       = 1000
-	DefaultBlockTimeout = 5 * time.Second
-	DefaultBackfillSize = 100
+	DefaultPrefix          = "notify"
+	DefaultMaxLen          = 1000
+	DefaultBlockTimeout    = 5 * time.Second
+	DefaultBackfillSize    = 100
+	DefaultCleanupInterval = 24 * time.Hour        // scan for stale streams daily
+	DefaultMaxAge          = 30 * 24 * time.Hour   // delete streams inactive for 30 days
 )
 
 type options struct {
@@ -20,6 +22,10 @@ type options struct {
 	backfillSize int           // Max events replayed on reconnect
 	hashTag      bool          // Use Redis Cluster hash tags in keys
 	logger       *slog.Logger
+
+	// Background cleanup
+	cleanupInterval time.Duration // How often to scan and clean stale streams (0 = disabled)
+	maxAge          time.Duration // Streams with no entry newer than this are deleted (0 = disabled)
 }
 
 // Option configures a Redis notification store.
@@ -27,11 +33,13 @@ type Option func(*options)
 
 func newOptions(opts ...Option) *options {
 	o := &options{
-		prefix:       DefaultPrefix,
-		maxLen:       DefaultMaxLen,
-		blockTimeout: DefaultBlockTimeout,
-		backfillSize: DefaultBackfillSize,
-		logger:       slog.Default(),
+		prefix:          DefaultPrefix,
+		maxLen:          DefaultMaxLen,
+		blockTimeout:    DefaultBlockTimeout,
+		backfillSize:    DefaultBackfillSize,
+		cleanupInterval: DefaultCleanupInterval,
+		maxAge:          DefaultMaxAge,
+		logger:          slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(o)
@@ -88,6 +96,35 @@ func WithBackfillSize(n int) Option {
 func WithHashTag(enabled bool) Option {
 	return func(o *options) {
 		o.hashTag = enabled
+	}
+}
+
+// WithCleanupInterval sets how often the store scans for stale notification
+// streams and deletes them. Default is 24h. Set to -1 to disable background
+// cleanup (Cleanup can still be called manually).
+func WithCleanupInterval(d time.Duration) Option {
+	return func(o *options) {
+		if d == -1 {
+			o.cleanupInterval = 0
+		} else if d > 0 {
+			o.cleanupInterval = d
+		}
+	}
+}
+
+// WithMaxAge sets the retention period for notification streams.
+// Streams with no entry newer than maxAge are deleted entirely on the next
+// cleanup run; active streams have entries older than maxAge trimmed via
+// XTRIM MINID. Empty streams are always deleted.
+// Default is 30 days. Set to -1 to disable age-based deletion (only empty
+// streams are cleaned up).
+func WithMaxAge(d time.Duration) Option {
+	return func(o *options) {
+		if d == -1 {
+			o.maxAge = 0
+		} else if d > 0 {
+			o.maxAge = d
+		}
 	}
 }
 

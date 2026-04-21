@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +25,11 @@ var (
 // XREAD BLOCK for live delivery — collapsing persistence and streaming
 // into a single data structure.
 //
+// When WithCleanupInterval and WithMaxAge are both configured, the store
+// runs a background goroutine that periodically scans all streams and
+// deletes any stream whose most-recent entry is older than MaxAge.
+// Call Close to stop the background goroutine and release resources.
+//
 // The caller manages the Redis client lifecycle.
 type Store struct {
 	client redis.UniversalClient
@@ -31,18 +37,23 @@ type Store struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	closed atomic.Bool
+	wg     sync.WaitGroup // tracks the background cleanup goroutine
 }
 
 // New creates a new Redis notification store.
 // The caller manages the Redis client lifecycle.
 func New(client redis.UniversalClient, opts ...Option) *Store {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Store{
+	s := &Store{
 		client: client,
 		opts:   newOptions(opts...),
 		ctx:    ctx,
 		cancel: cancel,
 	}
+	if s.opts.cleanupInterval > 0 {
+		s.wg.Go(s.cleanupLoop)
+	}
+	return s
 }
 
 func (s *Store) key(userID string) string {
@@ -143,18 +154,31 @@ func (s *Store) List(ctx context.Context, userID string, afterID string, limit i
 	return events, nil
 }
 
-// Cleanup removes notifications older than the given time.
-// Scans all streams matching the prefix and trims entries with MINID.
+// Cleanup removes stale notification streams.
 //
-// NOTE: In Redis Cluster, SCAN only visits keys on a single node per call.
-// Consider using hash tags in the prefix (e.g., "{notify}") to colocate
-// all user streams on the same slot.
+// When olderThan is non-zero, for each stream matching the prefix:
+//   - If the stream is empty, the key is deleted.
+//   - If the most-recent entry is older than olderThan, the key is deleted entirely.
+//   - Otherwise, entries older than olderThan are trimmed via XTRIM MINID.
+//
+// When olderThan is zero, only empty streams are deleted (no age-based trimming).
+//
+// This combines entry-level trimming for active streams with whole-key deletion
+// for inactive ones, preventing empty keys from accumulating for users who have
+// not received notifications in a long time.
+//
+// NOTE: In Redis Cluster, SCAN only visits keys on the local shard.
+// Use WithHashTag so all streams land on the same slot if cross-shard
+// cleanup is required.
 func (s *Store) Cleanup(ctx context.Context, olderThan time.Time) error {
 	if s.closed.Load() {
 		return notify.ErrStoreClosed
 	}
 
-	minID := fmt.Sprintf("%d-0", olderThan.UnixMilli())
+	var minID string
+	if !olderThan.IsZero() {
+		minID = fmt.Sprintf("%d-0", olderThan.UnixMilli())
+	}
 	pattern := s.opts.prefix + ":*"
 
 	var cursor uint64
@@ -164,10 +188,7 @@ func (s *Store) Cleanup(ctx context.Context, olderThan time.Time) error {
 			return fmt.Errorf("notify: redis scan: %w", err)
 		}
 		for _, key := range keys {
-			if err := s.client.XTrimMinID(ctx, key, minID).Err(); err != nil {
-				s.opts.logger.Warn("notify: redis xtrim failed",
-					"key", key, "error", err)
-			}
+			s.cleanupKey(ctx, key, minID)
 		}
 		cursor = next
 		if cursor == 0 {
@@ -177,10 +198,79 @@ func (s *Store) Cleanup(ctx context.Context, olderThan time.Time) error {
 	return nil
 }
 
-// Close marks the store as closed and cancels all active streams.
+// cleanupKey trims or deletes a single notification stream key.
+// minID is the MINID threshold (empty string = no age-based deletion, only empty streams deleted).
+func (s *Store) cleanupKey(ctx context.Context, key, minID string) {
+	// Read only the most-recent entry to decide whether the stream is stale.
+	last, err := s.client.XRevRangeN(ctx, key, "+", "-", 1).Result()
+	if err != nil {
+		s.opts.logger.Warn("notify: cleanup read last entry failed", "key", key, "error", err)
+		return
+	}
+
+	// Empty stream → always delete.
+	if len(last) == 0 {
+		if err := s.client.Del(ctx, key).Err(); err != nil {
+			s.opts.logger.Warn("notify: cleanup delete empty stream failed", "key", key, "error", err)
+		}
+		return
+	}
+
+	// No age threshold — nothing more to do for non-empty streams.
+	if minID == "" {
+		return
+	}
+
+	// Most-recent entry is older than the threshold → delete the whole key.
+	if last[0].ID <= minID {
+		if err := s.client.Del(ctx, key).Err(); err != nil {
+			s.opts.logger.Warn("notify: cleanup delete stale stream failed", "key", key, "error", err)
+		}
+		return
+	}
+
+	// Active stream — trim entries older than the threshold.
+	if err := s.client.XTrimMinID(ctx, key, minID).Err(); err != nil {
+		s.opts.logger.Warn("notify: cleanup trim failed", "key", key, "error", err)
+	}
+}
+
+// cleanupLoop is the background goroutine started when cleanupInterval > 0.
+// It calls Cleanup on each tick using the configured maxAge.
+// When maxAge is 0 (disabled via WithMaxAge(-1)), Cleanup still runs but only
+// removes empty streams — no age-based trimming or deletion.
+func (s *Store) cleanupLoop() {
+	ticker := time.NewTicker(s.opts.cleanupInterval)
+	defer ticker.Stop()
+	s.opts.logger.Info("notify: stream cleanup started",
+		"interval", s.opts.cleanupInterval,
+		"max_age", s.opts.maxAge,
+	)
+	for {
+		select {
+		case <-s.ctx.Done():
+			s.opts.logger.Info("notify: stream cleanup stopped")
+			return
+		case <-ticker.C:
+			cutoff := time.Time{} // zero → no age-based deletion
+			if s.opts.maxAge > 0 {
+				cutoff = time.Now().Add(-s.opts.maxAge)
+			}
+			if err := s.Cleanup(s.ctx, cutoff); err != nil {
+				if s.ctx.Err() == nil {
+					s.opts.logger.Error("notify: stream cleanup failed", "error", err)
+				}
+			}
+		}
+	}
+}
+
+// Close marks the store as closed, cancels all active streams, and waits
+// for the background cleanup goroutine (if running) to exit.
 func (s *Store) Close(_ context.Context) error {
 	s.closed.Store(true)
 	s.cancel()
+	s.wg.Wait()
 	return nil
 }
 
