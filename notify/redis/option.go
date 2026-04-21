@@ -3,6 +3,8 @@ package redis
 import (
 	"log/slog"
 	"time"
+
+	"go.opentelemetry.io/otel/metric"
 )
 
 // Default configuration values.
@@ -22,6 +24,7 @@ type options struct {
 	backfillSize int           // Max events replayed on reconnect
 	hashTag      bool          // Use Redis Cluster hash tags in keys
 	logger       *slog.Logger
+	meter        metric.MeterProvider // Optional meter provider for OTel metrics
 
 	// Background cleanup
 	cleanupInterval time.Duration // How often to scan and clean stale streams (0 = disabled)
@@ -133,6 +136,17 @@ func WithLogger(l *slog.Logger) Option {
 	return func(o *options) {
 		if l != nil {
 			o.logger = l
+		}
+	}
+}
+
+// WithMeterProvider sets the OpenTelemetry meter provider for the store.
+// When provided, the store records mailbox.notify.stream.keys and
+// mailbox.notify.stream.cleanup.deleted metrics during cleanup runs.
+func WithMeterProvider(mp metric.MeterProvider) Option {
+	return func(o *options) {
+		if mp != nil {
+			o.meter = mp
 		}
 	}
 }

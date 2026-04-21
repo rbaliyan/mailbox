@@ -83,6 +83,8 @@ type otelInstrumentation struct {
 	del            operationMetrics
 	move           operationMetrics
 	notify         operationMetrics
+	quotaEnforced  metric.Int64Counter // mailbox.messages.quota.enforced
+	cleanupDeleted metric.Int64Counter // mailbox.messages.cleanup.deleted
 }
 
 // newOtelInstrumentation creates new OTel instrumentation from options.
@@ -143,6 +145,22 @@ func (o *otelInstrumentation) initMetrics(mp metric.MeterProvider) error {
 		if err != nil {
 			return err
 		}
+	}
+
+	o.quotaEnforced, err = meter.Int64Counter(
+		"mailbox.messages.quota.enforced",
+		metric.WithDescription("Number of messages deleted by quota enforcement, by user"),
+	)
+	if err != nil {
+		return err
+	}
+
+	o.cleanupDeleted, err = meter.Int64Counter(
+		"mailbox.messages.cleanup.deleted",
+		metric.WithDescription("Number of messages permanently deleted by background cleanup, by operation type"),
+	)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -246,5 +264,26 @@ func (o *otelInstrumentation) recordNotify(ctx context.Context, duration time.Du
 	o.notify.record(ctx, duration, err,
 		attribute.String("event_type", eventType),
 		attribute.Int("recipient_count", recipientCount),
+	)
+}
+
+// recordQuotaEnforced records messages deleted for a user by quota enforcement.
+func (o *otelInstrumentation) recordQuotaEnforced(ctx context.Context, userID string, count int) {
+	if !o.metricsEnabled || o.quotaEnforced == nil {
+		return
+	}
+	o.quotaEnforced.Add(ctx, int64(count),
+		metric.WithAttributes(attribute.String("user_id", userID)),
+	)
+}
+
+// recordCleanupDeleted records messages permanently deleted by a cleanup operation.
+// operation is one of "trash" or "expired".
+func (o *otelInstrumentation) recordCleanupDeleted(ctx context.Context, operation string, count int) {
+	if !o.metricsEnabled || o.cleanupDeleted == nil || count == 0 {
+		return
+	}
+	o.cleanupDeleted.Add(ctx, int64(count),
+		metric.WithAttributes(attribute.String("operation", operation)),
 	)
 }

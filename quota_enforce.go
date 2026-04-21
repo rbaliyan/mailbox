@@ -59,6 +59,7 @@ func (s *service) EnforceQuotas(ctx context.Context, userIDs []string) (*Enforce
 		if deleted > 0 {
 			result.UsersOverQuota++
 			result.MessagesDeleted += deleted
+			s.otel.recordQuotaEnforced(ctx, userID, deleted)
 		}
 	}
 

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/rbaliyan/mailbox/presence"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // Default configuration values.
@@ -21,6 +22,7 @@ type options struct {
 	pollInterval time.Duration // How often streams poll the store for events from other instances
 	bufferSize   int           // Channel buffer size for local delivery
 	logger       *slog.Logger
+	meter        metric.MeterProvider // Optional meter provider for OTel metrics
 }
 
 // Option configures a Notifier.
@@ -105,6 +107,16 @@ func WithLogger(l *slog.Logger) Option {
 	return func(o *options) {
 		if l != nil {
 			o.logger = l
+		}
+	}
+}
+
+// WithMeterProvider sets the OpenTelemetry meter provider for the notifier.
+// When provided, the notifier records mailbox.notify.streams.active metrics.
+func WithMeterProvider(mp metric.MeterProvider) Option {
+	return func(o *options) {
+		if mp != nil {
+			o.meter = mp
 		}
 	}
 }
