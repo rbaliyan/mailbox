@@ -205,18 +205,29 @@ func (n *Notifier) Subscribe(ctx context.Context, userID string, lastEventID str
 		}
 	}
 
-	// Register in local stream set.
+	// Register in local stream set before starting the goroutine so that
+	// notifier.Close() is guaranteed to see the stream if it runs concurrently.
 	n.addStream(userID, s)
+
+	// Re-check closed after addStream to close the window where Close() finished
+	// its Range (saw no stream) before addStream inserted it. In that case we
+	// self-cancel and remove rather than starting an ungoverned goroutine.
+	if n.closed.Load() {
+		n.removeStream(userID, s)
+		s.cancel()
+		return nil, ErrNotifierClosed
+	}
 
 	// Start background store poller for events from other instances.
 	if n.opts.store != nil {
-		go s.pollLoop()
+		s.wg.Go(s.pollLoop)
 	}
 
 	return s, nil
 }
 
 // Close shuts down the notifier and all active streams.
+// It cancels all stream contexts and waits for every pollLoop goroutine to exit.
 func (n *Notifier) Close(_ context.Context) error {
 	if !n.closed.CompareAndSwap(false, true) {
 		return nil
@@ -224,18 +235,26 @@ func (n *Notifier) Close(_ context.Context) error {
 
 	// Cancel all stream contexts. The channel is never closed — context
 	// cancellation is the sole termination signal, avoiding send-on-closed races.
+	var toWait []*stream
 	n.streams.Range(func(key, value any) bool {
 		us := value.(*userStreams)
 		us.mu.Lock()
 		for _, s := range us.streams {
 			s.cancel()
 			s.closed.Store(true)
+			toWait = append(toWait, s)
 		}
 		us.streams = nil
 		us.mu.Unlock()
 		n.streams.Delete(key)
 		return true
 	})
+
+	// Wait for all pollLoop goroutines to exit before returning.
+	// Each goroutine holds s.ctx (now cancelled) and will exit on the next tick.
+	for _, s := range toWait {
+		s.wg.Wait()
+	}
 
 	return nil
 }

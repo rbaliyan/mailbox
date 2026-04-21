@@ -2,6 +2,8 @@ package mailbox
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 )
 
@@ -157,7 +159,9 @@ type Config struct {
 	ClaimBatchSize int64
 
 	// EventStreamMaxLen is the approximate maximum number of entries per
-	// Redis event stream. Older entries are trimmed. 0 means unlimited.
+	// Redis event stream. Older entries are trimmed automatically on each publish.
+	// Default is 10,000 (see DefaultEventStreamMaxLen).
+	// Set to -1 to disable trimming (not recommended for production — streams grow without bound).
 	EventStreamMaxLen int64
 }
 
@@ -168,10 +172,67 @@ type QuotaUserLister interface {
 	ListUsers(ctx context.Context) ([]string, error)
 }
 
-// DefaultConfig returns a Config with all background tasks disabled and
-// zero-value fields (library defaults apply).
+// DefaultConfig returns a Config with all fields set to their library defaults.
+// Background maintenance tasks are disabled (intervals are zero); enable them
+// by setting the relevant interval fields.
+//
+// Use DefaultConfig as a starting point and override individual fields:
+//
+//	cfg := mailbox.DefaultConfig()
+//	cfg.TrashCleanupInterval = 1 * time.Hour
+//	cfg.EventStreamMaxLen = 50_000
 func DefaultConfig() Config {
-	return Config{}
+	cfg := Config{}
+	cfg.applyDefaults()
+	return cfg
+}
+
+// Validate checks that all critical resource limits are explicitly bounded.
+// Call this after constructing a Config to catch missing limits before Connect.
+//
+// Returns a joined error listing every field that is zero or unlimited.
+// Fields that are intentionally unbounded (MessageRetention, MaxTTL, MaxScheduleDelay)
+// are not checked — they have documented "0 = disabled/unlimited" semantics.
+func (c *Config) Validate() error {
+	var errs []error
+
+	check := func(name string, val int64) {
+		if val <= 0 {
+			errs = append(errs, fmt.Errorf("%s must be > 0 (got %d)", name, val))
+		}
+	}
+
+	check("MaxSubjectLength", int64(c.MaxSubjectLength))
+	check("MaxBodySize", int64(c.MaxBodySize))
+	check("MaxAttachmentSize", c.MaxAttachmentSize)
+	check("MaxAttachmentCount", int64(c.MaxAttachmentCount))
+	check("MaxRecipientCount", int64(c.MaxRecipientCount))
+	check("MaxMetadataSize", int64(c.MaxMetadataSize))
+	check("MaxMetadataKeys", int64(c.MaxMetadataKeys))
+	check("MaxHeaderCount", int64(c.MaxHeaderCount))
+	check("MaxHeaderKeyLength", int64(c.MaxHeaderKeyLength))
+	check("MaxHeaderValueLength", int64(c.MaxHeaderValueLength))
+	check("MaxHeadersTotalSize", int64(c.MaxHeadersTotalSize))
+	check("MaxQueryLimit", int64(c.MaxQueryLimit))
+	check("DefaultQueryLimit", int64(c.DefaultQueryLimit))
+	check("MaxConcurrentSends", int64(c.MaxConcurrentSends))
+	check("ShutdownTimeout", int64(c.ShutdownTimeout))
+	check("TrashRetention", int64(c.TrashRetention))
+	check("MinTTL", int64(c.MinTTL))
+	check("StatsRefreshInterval", int64(c.StatsRefreshInterval))
+	check("ClaimInterval", int64(c.ClaimInterval))
+	check("ClaimMinIdle", int64(c.ClaimMinIdle))
+	check("ClaimBatchSize", c.ClaimBatchSize)
+
+	// EventStreamMaxLen must be positive; -1 (unlimited) is a known production risk.
+	if c.EventStreamMaxLen <= 0 {
+		errs = append(errs, fmt.Errorf(
+			"EventStreamMaxLen must be > 0 (got %d); unlimited streams grow without bound in Redis",
+			c.EventStreamMaxLen,
+		))
+	}
+
+	return errors.Join(errs...)
 }
 
 // applyDefaults fills zero-valued fields with library defaults and validates constraints.
@@ -270,7 +331,10 @@ func (c *Config) applyDefaults() {
 	if c.ClaimBatchSize <= 0 {
 		c.ClaimBatchSize = DefaultClaimBatchSize
 	}
-	// EventStreamMaxLen: 0 = unlimited (valid)
+	// EventStreamMaxLen: 0 = use default; -1 = unlimited (streams grow without bound)
+	if c.EventStreamMaxLen == 0 {
+		c.EventStreamMaxLen = DefaultEventStreamMaxLen
+	}
 }
 
 // getLimits returns the configured message limits.

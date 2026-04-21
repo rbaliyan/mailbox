@@ -50,7 +50,11 @@ const (
 	// Orphan message claiming defaults (Redis transport only)
 	DefaultClaimInterval  = 30 * time.Second // scan for orphans every 30s
 	DefaultClaimMinIdle   = 60 * time.Second // claim messages idle for 60s+
-	DefaultClaimBatchSize = int64(100)       // claim up to 100 messages per cycle
+	DefaultClaimBatchSize = int64(100)        // claim up to 100 messages per cycle
+
+	// DefaultEventStreamMaxLen is the default approximate maximum number of entries
+	// per Redis event stream. Set EventStreamMaxLen = -1 to disable trimming.
+	DefaultEventStreamMaxLen = int64(10_000)
 )
 
 // options holds mailbox configuration.
