@@ -22,6 +22,7 @@ type stream struct {
 	cancel       context.CancelFunc
 	closed       atomic.Bool
 	dropped      atomic.Int64 // events dropped due to slow consumer
+	wg           sync.WaitGroup // tracks the pollLoop goroutine
 
 	mu     sync.Mutex // Protects lastID
 	lastID string
@@ -45,11 +46,13 @@ func (s *stream) Next(ctx context.Context) (Event, error) {
 // Close stops the stream and removes it from the notifier.
 // Context cancellation terminates Next and pollLoop; the channel is not
 // closed, so concurrent senders never panic.
+// Close blocks until the pollLoop goroutine has exited.
 func (s *stream) Close() error {
 	if !s.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 	s.cancel()
+	s.wg.Wait() // wait for pollLoop to exit before removing from notifier
 	if s.notifier != nil {
 		s.notifier.removeStream(s.userID, s)
 	}

@@ -29,6 +29,7 @@ type Tracker struct {
 
 	mu            sync.Mutex
 	registrations []*registration // Active registrations for cleanup on Close
+	wg            sync.WaitGroup  // Tracks active refreshLoop goroutines
 }
 
 // New creates a new Redis presence tracker.
@@ -83,12 +84,20 @@ func (t *Tracker) Register(ctx context.Context, userID string, opts ...presence.
 		cancel:  cancel,
 	}
 
-	// Track for cleanup on Close.
+	// Track for cleanup on Close. Re-check closed while holding t.mu to close
+	// the window where Close() finishes (with empty registrations) before Register
+	// appends — which would leave the goroutine running with no cancellation signal.
 	t.mu.Lock()
+	if atomic.LoadInt32(&t.closed) != 0 {
+		t.mu.Unlock()
+		cancel()
+		return nil, presence.ErrTrackerClosed
+	}
 	t.registrations = append(t.registrations, reg)
 	t.mu.Unlock()
 
-	go reg.refreshLoop(regCtx) // #nosec G118 — refresh loop intentionally uses derived context, not request context
+	// #nosec G118 — refresh loop intentionally uses derived context, not request context
+	t.wg.Go(func() { reg.refreshLoop(regCtx) })
 
 	return reg, nil
 }
@@ -158,7 +167,7 @@ func (t *Tracker) Locate(ctx context.Context, userID string) (*presence.RoutingI
 }
 
 // Close stops all active refresh loops and marks the tracker as closed.
-// Active registrations' goroutines are cancelled to prevent leaks.
+// It cancels all registration goroutines and waits for them to exit.
 func (t *Tracker) Close(_ context.Context) error {
 	if !atomic.CompareAndSwapInt32(&t.closed, 0, 1) {
 		return nil
@@ -172,6 +181,7 @@ func (t *Tracker) Close(_ context.Context) error {
 	for _, reg := range regs {
 		reg.cancel()
 	}
+	t.wg.Wait() // wait for all refreshLoop goroutines to exit
 	return nil
 }
 
