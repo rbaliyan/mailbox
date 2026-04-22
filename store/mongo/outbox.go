@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	event "github.com/rbaliyan/event/v3"
-	"github.com/rbaliyan/event/v3/outbox"
+	"github.com/rbaliyan/event-mongodb/outbox"
 	"github.com/rbaliyan/mailbox/store"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
