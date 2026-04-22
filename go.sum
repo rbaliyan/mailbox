@@ -142,8 +142,10 @@ github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 h1:GFCKgm
 github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10/go.mod h1:t/avpk3KcrXxUnYOhZhMXJlSEyie6gQbtLq5NM3loB8=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/rbaliyan/event/v3 v3.15.13 h1:JAuJUOk82dB0ZAUZvk3l9gWAE/f7VpFW1rBYc1nkfRQ=
-github.com/rbaliyan/event/v3 v3.15.13/go.mod h1:boOIAyWcHBgpUKyrSvHDlmc82RHBr6Qu8IG1NIx+Als=
+github.com/rbaliyan/event-mongodb v0.6.7 h1:db9p6fG6YKF7owpySQjI6kZ1E8kjypTt/afWWOPH4Dg=
+github.com/rbaliyan/event-mongodb v0.6.7/go.mod h1:Go9NN9i94kBORnPnJEZnjKW0E5KGpANZKHqZpq2VJ5E=
+github.com/rbaliyan/event/v3 v3.16.0 h1:aQzmMKgGImrvRiG9IwdBBr7Nek1AZfhMYXU5xqBFh2Q=
+github.com/rbaliyan/event/v3 v3.16.0/go.mod h1:ca1C/uRbDthv3j/E2bhKfVsZygVP9ulwZqe04PVo6aQ=
 github.com/redis/go-redis/v9 v9.18.0 h1:pMkxYPkEbMPwRdenAzUNyFNrDgHx9U+DrBabWNfSRQs=
 github.com/redis/go-redis/v9 v9.18.0/go.mod h1:k3ufPphLU5YXwNTUcCRXGxUoF1fqxnhFQmscfkCoDA0=
 github.com/spiffe/go-spiffe/v2 v2.6.0 h1:l+DolpxNWYgruGQVV0xsfeya3CsC7m8iBzDnMpsbLuo=
