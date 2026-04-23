@@ -131,7 +131,7 @@ func (s *searchStore) Search(ctx context.Context, q store.SearchQuery) (*store.M
 		return nil, err
 	}
 
-	list, err := s.Store.Find(ctx, []store.Filter{store.OwnerIs(q.OwnerID), idFilter}, store.ListOptions{Limit: len(ids)})
+	list, err := s.Find(ctx, []store.Filter{store.OwnerIs(q.OwnerID), idFilter}, store.ListOptions{Limit: len(ids)})
 	if err != nil {
 		if s.plugin.opts.fallback {
 			return s.Store.Search(ctx, q)
