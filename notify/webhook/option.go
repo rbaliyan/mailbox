@@ -41,7 +41,7 @@ type options struct {
 // Option configures a webhook Router.
 type Option func(*options)
 
-// WithEndpoints sets the webhook destinations.
+// WithEndpoints appends webhook destinations. Multiple calls accumulate.
 func WithEndpoints(endpoints ...EndpointConfig) Option {
 	return func(o *options) {
 		o.endpoints = append(o.endpoints, endpoints...)
@@ -57,8 +57,8 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
-// WithMaxRetries sets the maximum number of delivery attempts per endpoint.
-// Default is 3 (one initial attempt plus two retries).
+// WithMaxRetries sets the maximum number of retries after the initial attempt.
+// Total attempts = 1 + n. Default is 3 (one initial attempt plus three retries).
 func WithMaxRetries(n int) Option {
 	return func(o *options) {
 		if n >= 0 {

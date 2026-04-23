@@ -1,3 +1,6 @@
+// Package redis provides a Redis Streams-backed notify.Store and notify.StreamStore.
+// It uses XADD/XREAD BLOCK for real-time delivery and XRANGE for backfill on reconnect.
+// Suitable for production multi-instance deployments; use notify/memory for testing.
 package redis
 
 import (

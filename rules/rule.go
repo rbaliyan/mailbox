@@ -66,8 +66,13 @@ func isValidSendAction(t ActionType) bool {
 type Action struct {
 	// Type is the action to perform.
 	Type ActionType
-	// Value is the action parameter. Used as folder ID for SetFolder,
-	// tag ID for AddTag. Ignored for MarkRead, Delete, Archive, Spam.
+	// Value is the action parameter. Semantics depend on Type:
+	//   SetFolder  — destination folder ID
+	//   AddTag     — tag ID to add
+	//   RemoveTag  — tag ID to remove
+	//   Webhook    — URL to POST the message payload to
+	//   Forward    — target user ID to forward the message to
+	//   All others — ignored
 	Value string
 }
 

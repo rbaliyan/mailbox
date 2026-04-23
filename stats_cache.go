@@ -32,6 +32,7 @@ type StatsCache interface {
 const (
 	StatsCacheFieldTotal  = "total"
 	StatsCacheFieldUnread = "unread"
+	StatsCacheFieldDraft  = "draft"
 )
 
 // StatsCacheFolderTotal returns the IncrBy field name for a folder's total count.

@@ -1,3 +1,6 @@
+// Package memory provides an in-memory notify.Store for testing.
+// It is not safe for use across multiple processes; for production
+// multi-instance deployments use notify/redis instead.
 package memory
 
 import (

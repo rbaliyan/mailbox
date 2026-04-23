@@ -1,3 +1,7 @@
+// Package redis provides a Redis Hash-backed presence.Tracker.
+// Registrations are shared across all instances pointing at the same Redis,
+// making it suitable for production multi-instance deployments.
+// Use presence/memory for single-process testing.
 package redis
 
 import (

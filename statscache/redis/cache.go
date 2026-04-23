@@ -13,9 +13,9 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Local field names — kept in sync with the mailbox package's exported
-// StatsCacheField* / StatsCacheFolder* helpers, but duplicated here so this
-// package does not import the root mailbox module.
+// Local field names — mirror the exported StatsCacheField* / StatsCacheFolder*
+// constants in the root mailbox package. Duplicated here to avoid a circular
+// import; keep both in sync when adding new counter fields.
 const (
 	fieldTotal  = "total"
 	fieldUnread = "unread"
