@@ -57,10 +57,12 @@ func NewNotifier(opts ...Option) *Notifier {
 
 // Push sends a notification to a user.
 //
-// When presence tracking is configured, the event is dropped for offline users.
-// The event is saved to the store (for backfill), then delivered either locally
-// (if the user is connected to this instance) or via the Router (if the user
-// is connected to another instance).
+// When presence tracking is configured and the user is offline, Push returns
+// immediately without saving or routing — the event is dropped. When presence
+// is not configured, or when the user is online, the event is persisted to the
+// store (for backfill on reconnect) and then delivered either to a local stream
+// (user connected to this instance) or forwarded via the Router (user connected
+// to another instance).
 func (n *Notifier) Push(ctx context.Context, userID string, evt Event) error {
 	if n.closed.Load() {
 		return ErrNotifierClosed

@@ -9,7 +9,7 @@ Events are optional — they use a no-op transport by default when no Redis clie
 Events are automatically registered during `Connect()`. Pass a Redis client to enable Redis Streams transport:
 
 ```go
-svc, _ := mailbox.NewService(
+svc, _ := mailbox.New(mailbox.Config{},
     mailbox.WithStore(store),
     mailbox.WithRedisClient(redisClient), // enables Redis Streams event transport
 )
@@ -19,7 +19,7 @@ svc.Connect(ctx)
 Or use a custom transport:
 
 ```go
-svc, _ := mailbox.NewService(
+svc, _ := mailbox.New(mailbox.Config{},
     mailbox.WithStore(store),
     mailbox.WithEventTransport(myTransport),
 )

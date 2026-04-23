@@ -165,6 +165,10 @@ var (
 	// ErrUserResolveFailed is returned when the UserResolver fails to resolve
 	// the sender's identity. The message is not sent.
 	ErrUserResolveFailed = errors.New("mailbox: user resolve failed")
+
+	// ErrRecipientNotFound is returned by RecipientResolver implementations
+	// when a user ID cannot be resolved to a recipient.
+	ErrRecipientNotFound = errors.New("mailbox: recipient not found")
 )
 
 // PartialDeliveryError provides details about which recipients failed.

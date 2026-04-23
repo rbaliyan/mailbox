@@ -56,9 +56,11 @@ func WithSharedKeyCredential(accountName, accountKey string) Option {
 }
 
 // WithSASToken configures the store using a Shared Access Signature token.
-// The token is appended to the service URL for authentication.
-func WithSASToken(token string) Option {
+// Must be paired with WithAccountName so the service URL can be constructed.
+// The token is appended to the service URL: https://<account>.blob.core.windows.net/?<token>
+func WithSASToken(accountName, token string) Option {
 	return func(o *options) {
+		o.accountName = accountName
 		o.sasToken = token
 	}
 }

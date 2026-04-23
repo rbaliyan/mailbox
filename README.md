@@ -38,11 +38,13 @@ Most messaging infrastructure (Kafka, Redis Streams, NATS) treats messages as im
 - **Draft Composition** - Fluent API for composing messages
 - **Thread Support** - Conversation threading with replies
 - **Fan-Out with Independent State** - Each recipient gets their own copy to manage
-- **Full-Text Search** - Search across subject, body, and metadata
-- **Stats with Event-Driven Cache** - Per-user aggregate counts with incremental updates
-- **File Attachments** - S3 and GCS with reference counting and deduplication ([details](docs/attachments.md))
+- **Full-Text Search** - Native FTS via Postgres `tsvector` / MongoDB text index (opt-in)
+- **Stats with Event-Driven Cache** - Per-user aggregate counts with incremental updates; optional Redis L2 cache
+- **File Attachments** - S3, GCS, Azure Blob, and local filesystem backends ([details](docs/attachments.md))
 - **Real-Time Events** - Publish message lifecycle events to Redis Streams, NATS, Kafka, or any transport ([details](docs/events.md))
 - **Multiple Backends** - MongoDB, PostgreSQL, in-memory storage
+- **CEL Rules Engine** - Declarative per-user rules with custom functions and webhook/forward actions
+- **Webhook Notifications** - Signed HTTP delivery with exponential backoff via `notify/webhook`
 - **Plugin System** - Extensible hooks for send-time validation and filtering ([details](docs/advanced.md#plugin-system))
 - **OpenTelemetry** - Built-in tracing and metrics ([details](docs/advanced.md#opentelemetry-integration))
 - **Soft Delete** - Trash with restore and configurable retention cleanup
@@ -72,15 +74,15 @@ func main() {
     // Create in-memory store
     store := memory.New()
 
-    // Create service with options
-    svc, err := mailbox.NewService(
+    // Create service
+    svc, err := mailbox.New(mailbox.Config{},
         mailbox.WithStore(store),
     )
     if err != nil {
         log.Fatal(err)
     }
 
-    // Connect to initialize
+    // Connect to initialize indexes and start background tasks
     if err := svc.Connect(ctx); err != nil {
         log.Fatal(err)
     }
@@ -139,13 +141,13 @@ Messages wait in the recipient's inbox regardless of whether the consumer is run
 
 ```go
 import (
-    "go.mongodb.org/mongo-driver/mongo"
-    "go.mongodb.org/mongo-driver/mongo/options"
+    "go.mongodb.org/mongo-driver/v2/mongo"
+    "go.mongodb.org/mongo-driver/v2/mongo/options"
     mongostore "github.com/rbaliyan/mailbox/store/mongo"
 )
 
 // Application manages the MongoDB client
-client, _ := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
+client, _ := mongo.Connect(options.Client().ApplyURI("mongodb://localhost:27017"))
 defer client.Disconnect(ctx)
 
 // Create store with the client
@@ -153,26 +155,43 @@ store := mongostore.New(client,
     mongostore.WithDatabase("myapp"),
     mongostore.WithCollection("messages"),
 )
+
+// Optional: enable native full-text search (creates a text index on connect)
+store = mongostore.New(client,
+    mongostore.WithDatabase("myapp"),
+    mongostore.WithFTSEnabled(true),
+)
 ```
 
 ### PostgreSQL
 
 ```go
 import (
-    "database/sql"
+    "github.com/jmoiron/sqlx"
     _ "github.com/lib/pq"
     pgstore "github.com/rbaliyan/mailbox/store/postgres"
 )
 
-// Application manages the database connection
-db, _ := sql.Open("postgres", "postgres://localhost/myapp?sslmode=disable")
+// Application manages the database connection (store/postgres uses *sqlx.DB)
+db, _ := sqlx.Connect("postgres", "postgres://localhost/myapp?sslmode=disable")
 defer db.Close()
 
 // Create store with the connection
 store := pgstore.New(db,
     pgstore.WithTable("messages"),
 )
+
+// Alternatively, wrap a plain *sql.DB:
+// store := pgstore.NewFromDB(sqlDB, pgstore.WithTable("messages"))
+
+// Optional: enable native full-text search (adds tsvector column + trigger on connect)
+store = pgstore.New(db,
+    pgstore.WithTable("messages"),
+    pgstore.WithFTSEnabled(true),
+)
 ```
+
+> **Note:** `WithFTSEnabled(true)` runs DDL on `Connect()` — it adds a `search_vector tsvector` column, a GIN index, and a trigger to keep the vector current, then backfills existing rows. This is safe to run repeatedly (all DDL is idempotent), but expect a brief delay on first `Connect()` for large tables.
 
 ### In-Memory (for testing)
 
@@ -288,17 +307,16 @@ result, _ := drafts.Delete(ctx)
 
 ## Graceful Shutdown
 
-The service handles graceful shutdown automatically:
-
 ```go
-svc, _ := mailbox.NewService(
+svc, _ := mailbox.New(mailbox.Config{
+    TrashCleanupInterval: time.Hour, // automatic background cleanup
+},
     mailbox.WithStore(store),
-    mailbox.WithShutdownTimeout(60 * time.Second), // Wait up to 60s for operations
 )
 
 // ... use the service ...
 
-// Close waits for in-flight operations to complete
+// Close waits for in-flight operations and background goroutines to finish
 if err := svc.Close(ctx); err != nil {
     log.Printf("Shutdown error: %v", err)
 }
@@ -311,16 +329,121 @@ Shutdown behavior:
 
 ### Trash Cleanup
 
-Trash cleanup is not automatically started. Call `CleanupTrash()` from your own scheduler:
+`Config.TrashCleanupInterval` starts automatic background cleanup. Alternatively, call it manually from your own scheduler:
 
 ```go
-// Run cleanup periodically using your application's scheduler
+svc, _ := mailbox.New(mailbox.Config{
+    TrashCleanupInterval: time.Hour, // automatic — or leave zero and call manually
+},
+    mailbox.WithStore(store),
+)
+
+// Manual call (e.g., on demand or in tests):
 result, err := svc.CleanupTrash(ctx)
 if err != nil {
     log.Printf("Cleanup error: %v", err)
 } else {
     log.Printf("Deleted %d expired messages", result.DeletedCount)
 }
+```
+
+## Distributed Stats Cache (Redis)
+
+For multi-instance deployments, wire a Redis-backed L2 stats cache to avoid repeated database reads:
+
+```go
+import (
+    "github.com/redis/go-redis/v9"
+    statscache "github.com/rbaliyan/mailbox/statscache/redis"
+)
+
+rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+cache := statscache.New(rdb,
+    statscache.WithTTL(5 * time.Minute),
+    statscache.WithPrefix("myapp:stats"),
+)
+
+svc, _ := mailbox.New(mailbox.Config{},
+    mailbox.WithStore(store),
+    mailbox.WithStatsCache(cache),
+)
+```
+
+Stats are served from the in-process `sync.Map` (L1) first, then from Redis (L2), and only fall through to the database on a cold miss. Event-driven increments propagate to Redis atomically via `HINCRBY`.
+
+## CEL Rules Engine
+
+The `rules` package provides a declarative rules engine backed by [Common Expression Language](https://github.com/google/cel-go):
+
+```go
+import "github.com/rbaliyan/mailbox/rules"
+
+provider := rules.NewStaticProvider(
+    []rules.Rule{
+        {
+            ID:        "vip-tag",
+            Scope:     rules.ScopeReceive,
+            Condition: `contains_tag(tags, "vip") || sender == "admin"`,
+            Actions:   []rules.Action{{Type: rules.ActionSetFolder, Value: "priority"}},
+            Priority:  10,
+        },
+        {
+            ID:        "webhook-on-send",
+            Scope:     rules.ScopeSend,
+            Condition: `has_header(headers, "X-Alert")`,
+            Actions:   []rules.Action{{Type: rules.ActionWebhook, Value: "https://hooks.example.com/alert"}},
+        },
+    },
+    nil, // per-user rules
+)
+
+engine, _ := rules.NewEngine(provider, store)
+svc, _ := mailbox.New(mailbox.Config{},
+    mailbox.WithStore(store),
+    mailbox.WithPlugin(engine),
+)
+svc.Connect(ctx)
+
+// Wire receive-side rules via the event bus
+svc.Events().MessageReceived.Subscribe(ctx,
+    func(ctx context.Context, _ event.Event[mailbox.MessageReceivedEvent], data mailbox.MessageReceivedEvent) error {
+        return engine.OnMessageReceived(ctx, nil, rules.MessageReceivedData{
+            MessageID:   data.MessageID,
+            RecipientID: data.RecipientID,
+        })
+    },
+    event.AsWorker("rules-engine"),
+)
+```
+
+Available CEL variables: `sender`, `subject`, `body`, `recipients`, `headers`, `metadata`, `has_attachments`, `attachment_count`, `thread_id`, `is_reply`, `folder`, `tags`.
+
+Custom functions: `matches_regex`, `has_header`, `header_value`, `has_metadata`, `metadata_value`, `contains_tag`.
+
+## Webhook Notification Router
+
+The `notify/webhook` package delivers notification events to HTTP endpoints with HMAC-SHA256 signing:
+
+```go
+import "github.com/rbaliyan/mailbox/notify/webhook"
+
+router := webhook.New(
+    webhook.WithEndpoints(
+        webhook.EndpointConfig{
+            URL:    "https://api.example.com/webhooks/mailbox",
+            Events: []string{"message.received", "message.read"},
+        },
+    ),
+    webhook.WithSigningKey([]byte("my-secret")),
+)
+
+// On the receiving end, verify the signature:
+ok := webhook.VerifySignature(
+    []byte("my-secret"),
+    r.Header.Get("X-Mailbox-Timestamp"),
+    body,
+    r.Header.Get("X-Mailbox-Signature"),
+)
 ```
 
 ## API Reference
@@ -383,8 +506,8 @@ saved, err := draft.Save(ctx)
 ## Further Reading
 
 - [Real-Time Events](docs/events.md) — Setting up event publishing and subscribing to message lifecycle events
-- [File Attachments](docs/attachments.md) — S3 and GCS attachment storage
-- [Advanced Configuration](docs/advanced.md) — Caching, plugins, OpenTelemetry, message limits
+- [File Attachments](docs/attachments.md) — S3, GCS, Azure Blob, and local filesystem attachment storage
+- [Advanced Configuration](docs/advanced.md) — Plugins, OpenTelemetry, message limits
 - [Architecture](docs/architecture.md) — Design principles, store interface, concurrency model
 
 ## License

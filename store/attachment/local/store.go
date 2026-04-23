@@ -60,7 +60,7 @@ func (s *Store) Upload(_ context.Context, filename, _ string, content io.Reader)
 		return "", fmt.Errorf("create attachment dir: %w", err)
 	}
 
-	f, err := os.Create(abs)
+	f, err := os.Create(abs) // #nosec G304 — path is server-generated (baseDir + uuid + filepath.Base(filename))
 	if err != nil {
 		return "", fmt.Errorf("create attachment file: %w", err)
 	}
@@ -87,8 +87,11 @@ func (s *Store) Load(_ context.Context, uri string) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := s.containsPath(path); err != nil {
+		return nil, err
+	}
 
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 — path validated by containsPath above
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("attachment not found: %s", uri)
@@ -102,6 +105,9 @@ func (s *Store) Load(_ context.Context, uri string) (io.ReadCloser, error) {
 func (s *Store) Delete(_ context.Context, uri string) error {
 	path, err := parseFileURI(uri)
 	if err != nil {
+		return err
+	}
+	if err := s.containsPath(path); err != nil {
 		return err
 	}
 
@@ -121,11 +127,43 @@ func (s *Store) Delete(_ context.Context, uri string) error {
 }
 
 // Handler returns an http.Handler that serves attachments from the base directory.
+// Directory listings are disabled — only direct file paths return content.
 // Mount it at the path corresponding to BaseURL in your HTTP server.
 //
 //	mux.Handle("/attachments/", http.StripPrefix("/attachments/", store.Handler()))
 func (s *Store) Handler() http.Handler {
-	return http.FileServer(http.Dir(s.opts.baseDir))
+	return http.FileServer(noDirListFS{http.Dir(s.opts.baseDir)})
+}
+
+// noDirListFS wraps http.FileSystem to disable directory listing.
+// Requests for directories return os.ErrNotExist (404) instead of an index.
+type noDirListFS struct{ root http.FileSystem }
+
+func (f noDirListFS) Open(name string) (http.File, error) {
+	file, err := f.root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	stat, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if stat.IsDir() {
+		_ = file.Close()
+		return nil, os.ErrNotExist
+	}
+	return file, nil
+}
+
+// containsPath checks that p lies within the configured base directory,
+// preventing path-traversal attacks via crafted file:// URIs.
+func (s *Store) containsPath(p string) error {
+	clean := filepath.Clean(p)
+	if !strings.HasPrefix(clean, s.opts.baseDir+string(filepath.Separator)) {
+		return fmt.Errorf("path escapes base directory: %s", p)
+	}
+	return nil
 }
 
 // generateKey creates a unique relative path for a new attachment.

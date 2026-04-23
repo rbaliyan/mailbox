@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"slices"
 	"strconv"
@@ -96,7 +97,14 @@ func (r *Router) Route(ctx context.Context, _ notify.RoutingInfo, evt notify.Eve
 	return nil
 }
 
+// nonRetryableError wraps errors that must not trigger a retry (e.g. HTTP 4xx).
+type nonRetryableError struct{ err error }
+
+func (e *nonRetryableError) Error() string { return e.err.Error() }
+func (e *nonRetryableError) Unwrap() error { return e.err }
+
 // deliver sends the payload to a single endpoint with retries.
+// 4xx responses are not retried — they indicate a permanent endpoint misconfiguration.
 func (r *Router) deliver(ctx context.Context, ep EndpointConfig, payload []byte, timestamp string) error {
 	delay := r.opts.initDelay
 	var lastErr error
@@ -113,6 +121,10 @@ func (r *Router) deliver(ctx context.Context, ep EndpointConfig, payload []byte,
 
 		if err := r.post(ctx, ep, payload, timestamp); err != nil {
 			lastErr = err
+			var nre *nonRetryableError
+			if errors.As(err, &nre) {
+				return err // do not burn retry budget on permanent failures
+			}
 			continue
 		}
 		return nil
@@ -152,10 +164,10 @@ func (r *Router) post(ctx context.Context, ep EndpointConfig, payload []byte, ti
 	if resp.StatusCode >= 500 {
 		return fmt.Errorf("server error: %d", resp.StatusCode)
 	}
-	// 4xx signals endpoint misconfiguration. Surface as a non-retryable error
-	// so Route can report the failure without burning retry budget.
+	// 4xx signals endpoint misconfiguration. Surface as non-retryable so deliver()
+	// stops immediately without burning the retry budget.
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("client error: %d", resp.StatusCode)
+		return &nonRetryableError{fmt.Errorf("client error: %d", resp.StatusCode)}
 	}
 	return nil
 }
@@ -176,15 +188,34 @@ func sign(key []byte, timestamp string, payload []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// VerifySignature verifies an incoming webhook request's HMAC-SHA256 signature.
+// VerifySignature verifies an incoming webhook request's HMAC-SHA256 signature
+// and rejects requests whose timestamp falls outside the given tolerance window.
 // sigHeader should be the raw value of the X-Mailbox-Signature header (e.g. "sha256=abc...").
-func VerifySignature(secret []byte, timestamp string, body []byte, sigHeader string) bool {
+// Use a tolerance of 5*time.Minute to match industry convention (Stripe, GitHub, Slack).
+// Pass 0 to skip the timestamp check (not recommended for production).
+func VerifySignature(secret []byte, timestamp string, body []byte, sigHeader string, tolerance time.Duration) bool {
 	const prefix = "sha256="
 	// Reject any header whose length is <= the prefix. This covers the empty
 	// string, shorter-than-prefix values, and the exact-prefix case
 	// ("sha256=" with no digest) — all must fail verification.
 	if len(sigHeader) <= len(prefix) {
 		return false
+	}
+	// Reject empty signing keys — an empty key produces a deterministic HMAC
+	// that an attacker can forge without knowing the real secret.
+	if len(secret) == 0 {
+		return false
+	}
+	// Enforce freshness to prevent replay attacks.
+	if tolerance > 0 {
+		ts, err := strconv.ParseInt(timestamp, 10, 64)
+		if err != nil {
+			return false
+		}
+		age := math.Abs(float64(time.Now().Unix() - ts))
+		if time.Duration(age)*time.Second > tolerance {
+			return false
+		}
 	}
 	expected := sign(secret, timestamp, body)
 	return hmac.Equal([]byte(sigHeader[len(prefix):]), []byte(expected))

@@ -2,12 +2,38 @@ package rules
 
 import (
 	"regexp"
+	"sync"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
 )
+
+// regexpCache caches compiled regexp patterns to avoid recompiling on every
+// rule evaluation. Go's regexp uses RE2 (linear-time), so this is a CPU
+// optimisation, not a ReDoS guard.
+var (
+	regexpCacheMu sync.RWMutex
+	regexpCache   = make(map[string]*regexp.Regexp)
+)
+
+func cachedCompile(pattern string) (*regexp.Regexp, error) {
+	regexpCacheMu.RLock()
+	re, ok := regexpCache[pattern]
+	regexpCacheMu.RUnlock()
+	if ok {
+		return re, nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	regexpCacheMu.Lock()
+	regexpCache[pattern] = re
+	regexpCacheMu.Unlock()
+	return re, nil
+}
 
 // customFunctions returns CEL environment options that register convenience
 // functions on top of the built-in map and list operators.
@@ -35,11 +61,11 @@ func customFunctions() []cel.EnvOption {
 					if !ok1 || !ok2 {
 						return types.Bool(false)
 					}
-					matched, err := regexp.MatchString(string(pat), string(str))
+					re, err := cachedCompile(string(pat))
 					if err != nil {
 						return types.Bool(false)
 					}
-					return types.Bool(matched)
+					return types.Bool(re.MatchString(string(str)))
 				}),
 			),
 		),

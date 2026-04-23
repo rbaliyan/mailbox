@@ -1,3 +1,6 @@
+// Package memory provides an in-memory presence.Tracker for testing.
+// Registrations are visible only within the current process and are lost
+// on restart. For production multi-instance deployments use presence/redis.
 package memory
 
 import (

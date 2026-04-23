@@ -1,33 +1,10 @@
 # Advanced Configuration
 
-## Caching
-
-This library does **not** include built-in caching. Caching is an infrastructure concern that varies significantly based on deployment architecture (single instance, multi-instance, serverless, etc.).
-
-If you need caching, implement it at the store level using the decorator pattern:
-
-```go
-// Example: Wrap your store with a caching decorator
-cachedStore := mycache.NewCachedStore(mongoStore, redis.Client, 5*time.Minute)
-svc, _ := mailbox.NewService(mailbox.WithStore(cachedStore))
-```
-
-For cross-deployment synchronization, subscribe to [events](events.md):
-
-```go
-// Subscribe to per-service events for real-time updates
-svc.Events().MessageSent.Subscribe(ctx, func(ctx context.Context, _ event.Event[mailbox.MessageSentEvent], data mailbox.MessageSentEvent) error {
-    // Handle new message notification across all deployments
-    return nil
-})
-```
-
 ## Plugin System
 
-Plugins can hook into message sending for validation, spam filtering, or rate limiting:
+Plugins hook into message sending for validation, spam filtering, or rate limiting:
 
 ```go
-// Create a plugin for spam filtering
 type SpamFilter struct{}
 
 func (p *SpamFilter) Name() string { return "spam-filter" }
@@ -47,7 +24,7 @@ func (p *SpamFilter) AfterSend(ctx context.Context, userID string, msg store.Mes
 }
 
 // Register the plugin
-svc, _ := mailbox.NewService(
+svc, _ := mailbox.New(mailbox.Config{},
     mailbox.WithStore(store),
     mailbox.WithPlugin(&SpamFilter{}),
 )
@@ -70,17 +47,17 @@ tp := trace.NewTracerProvider(/* ... */)
 otel.SetTracerProvider(tp)
 
 // Enable tracing and metrics
-svc, _ := mailbox.NewService(
+svc, _ := mailbox.New(mailbox.Config{},
     mailbox.WithStore(store),
-    mailbox.WithOTel(true),                    // Enable both tracing and metrics
-    mailbox.WithServiceName("my-mailbox"),     // Custom service name
+    mailbox.WithOTel(true),                // Enable both tracing and metrics
+    mailbox.WithServiceName("my-mailbox"), // Custom service name
 )
 
 // Or enable individually
-svc, _ := mailbox.NewService(
+svc, _ := mailbox.New(mailbox.Config{},
     mailbox.WithStore(store),
-    mailbox.WithTracing(true),   // Tracing only
-    mailbox.WithMetrics(true),   // Metrics only
+    mailbox.WithTracing(true), // Tracing only
+    mailbox.WithMetrics(true), // Metrics only
 )
 ```
 
@@ -91,15 +68,17 @@ Tracked metrics:
 
 ## Message Limits
 
-Configure the most commonly adjusted limits:
+All limits live on the `Config` struct passed to `mailbox.New`. Refer to the
+[godoc for Config](https://pkg.go.dev/github.com/rbaliyan/mailbox#Config) for the
+full list and defaults. The most commonly adjusted fields:
 
 ```go
-svc, _ := mailbox.NewService(
+svc, _ := mailbox.New(mailbox.Config{
+    MaxBodySize:       5 * 1024 * 1024,  // Default: 10 MB
+    MaxAttachmentSize: 10 * 1024 * 1024, // Default: 25 MB
+    MaxRecipientCount: 50,               // Default: 100
+},
     mailbox.WithStore(store),
-    mailbox.WithMaxBodySize(5 * 1024 * 1024),       // Default: 10 MB
-    mailbox.WithMaxAttachmentSize(10 * 1024 * 1024), // Default: 25 MB
-    mailbox.WithMaxRecipients(50),                   // Default: 100
-    mailbox.WithMaxHeaderCount(25),                  // Default: 50
 )
 ```
 

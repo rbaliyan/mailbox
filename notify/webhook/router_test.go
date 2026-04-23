@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,39 +23,61 @@ func TestVerifySignature(t *testing.T) {
 	sigHeader := "sha256=" + valid
 
 	t.Run("valid signature passes", func(t *testing.T) {
-		if !VerifySignature(secret, timestamp, body, sigHeader) {
+		if !VerifySignature(secret, timestamp, body, sigHeader, 0) {
 			t.Fatal("expected valid signature to verify")
 		}
 	})
 
 	t.Run("tampered body fails", func(t *testing.T) {
 		tampered := []byte(`{"id":"2","type":"test"}`)
-		if VerifySignature(secret, timestamp, tampered, sigHeader) {
+		if VerifySignature(secret, timestamp, tampered, sigHeader, 0) {
 			t.Fatal("expected tampered body to fail verification")
 		}
 	})
 
 	t.Run("wrong key fails", func(t *testing.T) {
-		if VerifySignature([]byte("other-secret"), timestamp, body, sigHeader) {
+		if VerifySignature([]byte("other-secret"), timestamp, body, sigHeader, 0) {
 			t.Fatal("expected wrong key to fail verification")
 		}
 	})
 
 	t.Run("empty sigHeader fails", func(t *testing.T) {
-		if VerifySignature(secret, timestamp, body, "") {
+		if VerifySignature(secret, timestamp, body, "", 0) {
 			t.Fatal("expected empty sigHeader to fail verification")
 		}
 	})
 
 	t.Run("prefix-only sigHeader fails", func(t *testing.T) {
-		if VerifySignature(secret, timestamp, body, "sha256=") {
+		if VerifySignature(secret, timestamp, body, "sha256=", 0) {
 			t.Fatal("expected prefix-only sigHeader to fail verification")
 		}
 	})
 
 	t.Run("missing prefix fails", func(t *testing.T) {
-		if VerifySignature(secret, timestamp, body, valid) {
+		if VerifySignature(secret, timestamp, body, valid, 0) {
 			t.Fatal("expected sigHeader without prefix to fail verification")
+		}
+	})
+
+	t.Run("empty secret fails", func(t *testing.T) {
+		if VerifySignature([]byte{}, timestamp, body, sigHeader, 0) {
+			t.Fatal("expected empty secret to fail verification")
+		}
+	})
+
+	t.Run("stale timestamp fails with tolerance", func(t *testing.T) {
+		stale := strconv.FormatInt(time.Now().Add(-10*time.Minute).Unix(), 10)
+		staleHeader := "sha256=" + sign(secret, stale, body)
+		if VerifySignature(secret, stale, body, staleHeader, 5*time.Minute) {
+			t.Fatal("expected stale timestamp to fail verification")
+		}
+	})
+
+	t.Run("fresh timestamp passes with tolerance", func(t *testing.T) {
+		now := strconv.FormatInt(time.Now().Unix(), 10)
+		freshHeader := "sha256=" + sign(secret, now, body)
+		if !VerifySignature(secret, now, body, freshHeader, 5*time.Minute) {
+			t.Fatal("expected fresh timestamp to pass verification")
 		}
 	})
 }

@@ -12,9 +12,11 @@
 //
 // Rules have two scopes:
 //   - ScopeReceive: evaluated when a message is delivered to a recipient.
-//     All actions are valid (SetFolder, AddTag, MarkRead, Delete, Archive, Spam).
+//     All actions are valid (SetFolder, AddTag, RemoveTag, MarkRead, Delete,
+//     HardDelete, Archive, Spam, Webhook, Forward).
 //   - ScopeSend: evaluated after the sender's copy is created.
-//     Only SetFolder, AddTag, and Archive are valid; other actions are skipped.
+//     Only SetFolder, AddTag, RemoveTag, Archive, and Webhook are valid;
+//     other actions are silently skipped.
 //
 // # CEL Variables
 //
