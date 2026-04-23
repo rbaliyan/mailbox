@@ -155,12 +155,12 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 			countFilter[k] = v
 		}
 	}
-	total, err := s.collection.CountDocuments(ctx, countFilter) // lgtm[go/nosql-injection] filter keys are whitelisted via MessageFieldKey; values are typed Go objects
+	total, err := s.collection.CountDocuments(ctx, countFilter) // codeql[go/nosql-injection] filter keys are whitelisted via MessageFieldKey; values are typed Go objects
 	if err != nil {
 		return nil, fmt.Errorf("count messages: %w", err)
 	}
 
-	cursor, err := s.collection.Find(ctx, filter, findOpts) // lgtm[go/nosql-injection]
+	cursor, err := s.collection.Find(ctx, filter, findOpts) // codeql[go/nosql-injection]
 	if err != nil {
 		return nil, fmt.Errorf("find messages: %w", err)
 	}
@@ -196,7 +196,7 @@ func (s *Store) Count(ctx context.Context, filters []store.Filter) (int64, error
 	filter["__is_draft"] = bson.M{"$ne": true}
 	addAvailabilityFilter(filter)
 
-	count, err := s.collection.CountDocuments(ctx, filter) // lgtm[go/nosql-injection]
+	count, err := s.collection.CountDocuments(ctx, filter) // codeql[go/nosql-injection]
 	if err != nil {
 		return 0, fmt.Errorf("count messages: %w", err)
 	}
