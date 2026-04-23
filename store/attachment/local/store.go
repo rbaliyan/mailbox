@@ -60,7 +60,7 @@ func (s *Store) Upload(_ context.Context, filename, _ string, content io.Reader)
 		return "", fmt.Errorf("create attachment dir: %w", err)
 	}
 
-	f, err := os.Create(abs)
+	f, err := os.Create(abs) // #nosec G304 — path is server-generated (baseDir + uuid + filepath.Base(filename))
 	if err != nil {
 		return "", fmt.Errorf("create attachment file: %w", err)
 	}
@@ -91,7 +91,7 @@ func (s *Store) Load(_ context.Context, uri string) (io.ReadCloser, error) {
 		return nil, err
 	}
 
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 — path validated by containsPath above
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("attachment not found: %s", uri)
