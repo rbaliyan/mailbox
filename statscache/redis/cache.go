@@ -91,6 +91,17 @@ func (c *Cache) Set(ctx context.Context, ownerID string, stats *store.MailboxSta
 	return nil
 }
 
+// incrByScript atomically checks key existence and increments a hash field.
+// If the key does not exist the script is a no-op, preventing partial entries.
+// Using a script eliminates the TOCTOU window between EXISTS and HINCRBY.
+var incrByScript = redis.NewScript(`
+local exists = redis.call('EXISTS', KEYS[1])
+if exists == 0 then return 0 end
+redis.call('HINCRBY', KEYS[1], ARGV[1], ARGV[2])
+redis.call('PEXPIRE', KEYS[1], ARGV[3])
+return 1
+`)
+
 // IncrBy atomically increments a named field for a user.
 // If the key does not exist (cache miss), the increment is skipped rather than
 // seeding partial data — the next Get will miss and trigger a full store fetch.
@@ -98,24 +109,12 @@ func (c *Cache) IncrBy(ctx context.Context, ownerID string, field string, delta 
 	if delta == 0 {
 		return nil
 	}
-	key := c.key(ownerID)
-
-	// Only increment when the key already exists (i.e., cache is warm).
-	// A missing key means no entry is cached; seeding partial data would
-	// cause the next Get to return an incomplete snapshot.
-	exists, err := c.client.Exists(ctx, key).Result()
-	if err != nil {
-		return fmt.Errorf("stats cache exists: %w", err)
-	}
-	if exists == 0 {
-		return nil
-	}
-
-	pipe := c.client.Pipeline()
-	pipe.HIncrBy(ctx, key, field, delta)
-	pipe.Expire(ctx, key, c.opts.ttl) // reset TTL on each update
-	_, err = pipe.Exec(ctx)
-	if err != nil {
+	ttlMs := c.opts.ttl.Milliseconds()
+	err := incrByScript.Run(ctx, c.client,
+		[]string{c.key(ownerID)},
+		field, delta, ttlMs,
+	).Err()
+	if err != nil && !errors.Is(err, redis.Nil) {
 		return fmt.Errorf("stats cache incrby: %w", err)
 	}
 	return nil

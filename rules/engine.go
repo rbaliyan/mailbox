@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"sync"
 	"time"
@@ -324,7 +326,12 @@ func (e *Engine) applyAction(ctx context.Context, messageID string, action Actio
 // caller's context. The caller's context is typically an event handler scope
 // that is cancelled as soon as the handler returns, which would race the HTTP
 // request.
-func (e *Engine) fireWebhook(_ context.Context, messageID, url string) {
+func (e *Engine) fireWebhook(_ context.Context, messageID, rawURL string) {
+	if err := validateWebhookURL(rawURL); err != nil {
+		e.logger.Warn("rules webhook: invalid url, skipping", "url", rawURL, "error", err)
+		return
+	}
+
 	payload, err := json.Marshal(map[string]string{
 		"message_id": messageID,
 		"timestamp":  time.Now().UTC().Format(time.RFC3339),
@@ -336,28 +343,65 @@ func (e *Engine) fireWebhook(_ context.Context, messageID, url string) {
 
 	client := e.opts.httpClient
 	if client == nil {
-		client = http.DefaultClient
+		client = defaultWebhookClient
 	}
 
 	reqCtx, cancel := context.WithTimeout(context.Background(), defaultWebhookTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, rawURL, bytes.NewReader(payload))
 	if err != nil {
-		e.logger.Error("rules webhook: create request", "url", url, "error", err)
+		e.logger.Error("rules webhook: create request", "url", rawURL, "error", err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		e.logger.Warn("rules webhook: delivery failed", "url", url, "error", err)
+		e.logger.Warn("rules webhook: delivery failed", "url", rawURL, "error", err)
 		return
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		e.logger.Warn("rules webhook: non-success response", "url", url, "status", resp.StatusCode)
+		e.logger.Warn("rules webhook: non-success response", "url", rawURL, "status", resp.StatusCode)
 	}
+}
+
+// defaultWebhookClient is a hardened HTTP client for fire-and-forget webhook delivery.
+// Redirects are disabled to prevent SSRF via redirect chains.
+var defaultWebhookClient = &http.Client{
+	Timeout: defaultWebhookTimeout,
+	CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse // never follow redirects
+	},
+}
+
+// validateWebhookURL rejects URLs that could be used to reach internal services
+// (SSRF). Only http and https schemes are allowed, and the resolved IP must not
+// be loopback, private, or link-local.
+func validateWebhookURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("parse url: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("unsupported scheme %q: only http/https allowed", u.Scheme)
+	}
+	host := u.Hostname()
+	addrs, err := net.LookupHost(host)
+	if err != nil {
+		return fmt.Errorf("dns lookup: %w", err)
+	}
+	for _, addr := range addrs {
+		ip := net.ParseIP(addr)
+		if ip == nil {
+			continue
+		}
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("webhook url resolves to internal address: %s", addr)
+		}
+	}
+	return nil
 }
 
 // handleError logs the error and returns it only if strict mode is enabled.
