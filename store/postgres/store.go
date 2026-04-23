@@ -185,6 +185,13 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 		s.logger.Warn("failed to create idempotency index", "error", err)
 	}
 
+	// FTS: add search_vector column, GIN index, and trigger when enabled.
+	if s.opts.enableFTS {
+		if err := s.ensureFTS(ctx); err != nil {
+			s.logger.Warn("failed to ensure FTS schema", "error", err)
+		}
+	}
+
 	// Create outbox table if outbox is enabled.
 	if s.opts.outboxEnabled {
 		if !validIdentifier.MatchString(s.opts.outboxTable) {

@@ -1,11 +1,16 @@
 package rules
 
-import "log/slog"
+import (
+	"log/slog"
+	"net/http"
+)
 
 type engineOptions struct {
 	logger       *slog.Logger
 	strictMode   bool
 	maxCacheSize int
+	forwarder    Forwarder    // optional: enables ActionForward
+	httpClient   *http.Client // optional: used by ActionWebhook
 }
 
 // Option configures the rules Engine.
@@ -35,5 +40,25 @@ func WithStrictMode(strict bool) Option {
 func WithMaxCacheSize(size int) Option {
 	return func(o *engineOptions) {
 		o.maxCacheSize = size
+	}
+}
+
+// WithForwarder sets the forwarder used by ActionForward rules.
+// Without a forwarder, ActionForward is logged and skipped.
+func WithForwarder(f Forwarder) Option {
+	return func(o *engineOptions) {
+		if f != nil {
+			o.forwarder = f
+		}
+	}
+}
+
+// WithHTTPClient sets the HTTP client used by ActionWebhook rules.
+// Defaults to http.DefaultClient when not set.
+func WithHTTPClient(c *http.Client) Option {
+	return func(o *engineOptions) {
+		if c != nil {
+			o.httpClient = c
+		}
 	}
 }

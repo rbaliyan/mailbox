@@ -19,6 +19,7 @@ type options struct {
 	timeout       time.Duration
 	logger        *slog.Logger
 	outboxEnabled bool
+	enableFTS     bool // Use tsvector/GIN full-text search instead of ILIKE
 }
 
 func newOptions(opts ...Option) *options {
@@ -73,6 +74,16 @@ func WithOutboxTable(name string) Option {
 		if name != "" && validIdentifier.MatchString(name) {
 			o.outboxTable = name
 		}
+	}
+}
+
+// WithFTSEnabled enables PostgreSQL full-text search using tsvector/GIN indexes.
+// When true, Search() uses plainto_tsquery and ts_rank instead of ILIKE.
+// A search_vector column and trigger are created automatically during Connect.
+// Default is false (uses ILIKE for backward compatibility).
+func WithFTSEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.enableFTS = enabled
 	}
 }
 

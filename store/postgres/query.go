@@ -192,13 +192,21 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 	var conditions []string
 	var args []any
 	argIdx := 1
+	ftsArgIdx := 0 // index of the tsquery arg; non-zero when FTS is in use
 
-	// Text search using ILIKE
+	// Text search: prefer tsvector FTS, fall back to ILIKE.
 	if query.Query != "" {
-		searchPattern := "%" + strings.ReplaceAll(query.Query, "%", "\\%") + "%"
-		conditions = append(conditions, fmt.Sprintf("(subject ILIKE $%d OR body ILIKE $%d)", argIdx, argIdx))
-		args = append(args, searchPattern)
-		argIdx++
+		if s.opts.enableFTS {
+			conditions = append(conditions, fmt.Sprintf("search_vector @@ plainto_tsquery('english', $%d)", argIdx))
+			ftsArgIdx = argIdx
+			args = append(args, query.Query)
+			argIdx++
+		} else {
+			searchPattern := "%" + strings.ReplaceAll(query.Query, "%", "\\%") + "%"
+			conditions = append(conditions, fmt.Sprintf("(subject ILIKE $%d OR body ILIKE $%d)", argIdx, argIdx))
+			args = append(args, searchPattern)
+			argIdx++
+		}
 	}
 
 	// Owner filter (required for security)
@@ -263,6 +271,12 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 		return nil, fmt.Errorf("count search: %w", err)
 	}
 
+	// Build ORDER BY: rank by relevance when FTS is active, otherwise by recency.
+	orderBy := "created_at DESC"
+	if ftsArgIdx > 0 {
+		orderBy = fmt.Sprintf("ts_rank(search_vector, plainto_tsquery('english', $%d)) DESC, created_at DESC", ftsArgIdx)
+	}
+
 	// Query
 	var sqlQuery string
 	if query.Options.StartAfter != "" {
@@ -270,18 +284,18 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 			SELECT %s
 			FROM %s
 			WHERE %s
-			ORDER BY created_at DESC
+			ORDER BY %s
 			LIMIT $%d
-		`, messageColumns, s.opts.table, where, argIdx)
+		`, messageColumns, s.opts.table, where, orderBy, argIdx)
 		args = append(args, query.Options.Limit+1)
 	} else {
 		sqlQuery = fmt.Sprintf(`
 			SELECT %s
 			FROM %s
 			WHERE %s
-			ORDER BY created_at DESC
+			ORDER BY %s
 			LIMIT $%d OFFSET $%d
-		`, messageColumns, s.opts.table, where, argIdx, argIdx+1)
+		`, messageColumns, s.opts.table, where, orderBy, argIdx, argIdx+1)
 		args = append(args, query.Options.Limit+1, query.Options.Offset)
 	}
 

@@ -39,3 +39,6 @@ Thumbs.db
 .env.local
 *.local
 .claude/
+
+# Local planning docs
+ROADMAP.md

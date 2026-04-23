@@ -20,6 +20,7 @@ type options struct {
 	timeout          time.Duration
 	logger           *slog.Logger
 	enableRegex      bool // Enable regex-based text search (disabled by default for security)
+	enableFTS        bool // Use MongoDB $text operator instead of regex
 	outboxEnabled    bool // Enable transactional outbox for atomic event persistence
 }
 
@@ -93,6 +94,16 @@ func WithOutboxCollection(name string) Option {
 		if name != "" {
 			o.outboxCollection = name
 		}
+	}
+}
+
+// WithFTSEnabled enables MongoDB native full-text search using the $text operator.
+// A text index on subject and body is created automatically during Connect.
+// When enabled, Search() ignores WithEnableRegex and uses $text instead.
+// Default is false (uses regex when WithEnableRegex is also true).
+func WithFTSEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.enableFTS = enabled
 	}
 }
 

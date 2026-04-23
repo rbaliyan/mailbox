@@ -5,9 +5,10 @@ import (
 	"github.com/rbaliyan/mailbox/store"
 )
 
-// newCELEnv creates the shared CEL environment with message variable declarations.
+// newCELEnv creates the shared CEL environment with message variable declarations
+// and custom helper functions.
 func newCELEnv() (*cel.Env, error) {
-	return cel.NewEnv(
+	opts := []cel.EnvOption{
 		cel.Variable("sender", cel.StringType),
 		cel.Variable("subject", cel.StringType),
 		cel.Variable("body", cel.StringType),
@@ -20,7 +21,9 @@ func newCELEnv() (*cel.Env, error) {
 		cel.Variable("is_reply", cel.BoolType),
 		cel.Variable("folder", cel.StringType),
 		cel.Variable("tags", cel.ListType(cel.StringType)),
-	)
+	}
+	opts = append(opts, customFunctions()...)
+	return cel.NewEnv(opts...)
 }
 
 // buildActivation creates a CEL activation map from a store.Message.

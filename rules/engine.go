@@ -1,11 +1,15 @@
 package rules
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/google/cel-go/cel"
 	"github.com/rbaliyan/mailbox/store"
@@ -13,6 +17,10 @@ import (
 
 // DefaultMaxCacheSize is the default maximum number of compiled CEL programs to cache.
 const DefaultMaxCacheSize = 1000
+
+// defaultWebhookTimeout is the HTTP timeout for fire-and-forget webhook deliveries.
+// It uses a detached context so the caller's cancellation does not abort the request.
+const defaultWebhookTimeout = 10 * time.Second
 
 // Engine evaluates CEL rules and applies actions via store operations.
 // It implements the mailbox.Plugin and mailbox.SendHook interfaces.
@@ -279,6 +287,8 @@ func (e *Engine) applyAction(ctx context.Context, messageID string, action Actio
 		return e.store.MoveToFolder(ctx, messageID, action.Value)
 	case ActionAddTag:
 		return e.store.AddTag(ctx, messageID, action.Value)
+	case ActionRemoveTag:
+		return e.store.RemoveTag(ctx, messageID, action.Value)
 	case ActionMarkRead:
 		return e.store.MarkRead(ctx, messageID, true)
 	case ActionDelete:
@@ -289,12 +299,64 @@ func (e *Engine) applyAction(ctx context.Context, messageID string, action Actio
 		return e.store.MoveToFolder(ctx, messageID, store.FolderArchived)
 	case ActionSpam:
 		return e.store.MoveToFolder(ctx, messageID, store.FolderSpam)
+	case ActionWebhook:
+		e.fireWebhook(ctx, messageID, action.Value)
+		return nil
+	case ActionForward:
+		if e.opts.forwarder == nil {
+			e.logger.Warn("ActionForward requires a Forwarder; set WithForwarder", "message_id", messageID)
+			return nil
+		}
+		return e.opts.forwarder.Forward(ctx, messageID, action.Value)
 	default:
 		e.logger.Warn("unknown action type", "type", action.Type, "message_id", messageID)
 		if e.opts.strictMode {
 			return fmt.Errorf("rules: unknown action type %q", action.Type)
 		}
 		return nil
+	}
+}
+
+// fireWebhook posts the message ID as JSON to the given URL.
+// This is fire-and-forget: errors are logged but not returned.
+//
+// The HTTP call uses a detached context with its own timeout rather than the
+// caller's context. The caller's context is typically an event handler scope
+// that is cancelled as soon as the handler returns, which would race the HTTP
+// request.
+func (e *Engine) fireWebhook(_ context.Context, messageID, url string) {
+	payload, err := json.Marshal(map[string]string{
+		"message_id": messageID,
+		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		e.logger.Error("rules webhook: marshal payload", "error", err)
+		return
+	}
+
+	client := e.opts.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+
+	reqCtx, cancel := context.WithTimeout(context.Background(), defaultWebhookTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		e.logger.Error("rules webhook: create request", "url", url, "error", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		e.logger.Warn("rules webhook: delivery failed", "url", url, "error", err)
+		return
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		e.logger.Warn("rules webhook: non-success response", "url", url, "status", resp.StatusCode)
 	}
 }
 

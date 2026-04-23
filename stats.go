@@ -48,9 +48,18 @@ func (s *service) getOrRefreshStats(ctx context.Context, ownerID string) (*store
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 
-	// Fast path: return cached entry if within TTL.
+	// Fast path: return L1 (in-process) cache if within TTL.
 	if entry.stats != nil && now.Sub(entry.updatedAt) < s.cfg.StatsRefreshInterval {
 		return entry.stats.Clone(), nil
+	}
+
+	// L2 check: try the distributed cache before hitting the store.
+	if s.statsDistCache != nil {
+		if dist, err := s.statsDistCache.Get(ctx, ownerID); err == nil && dist != nil {
+			entry.stats = dist
+			entry.updatedAt = now
+			return dist.Clone(), nil
+		}
 	}
 
 	// Slow path: fetch from store while holding the lock.
@@ -64,11 +73,19 @@ func (s *service) getOrRefreshStats(ctx context.Context, ownerID string) (*store
 	entry.stats = stats
 	entry.updatedAt = now
 
+	// Populate L2 cache for other instances.
+	if s.statsDistCache != nil {
+		if err := s.statsDistCache.Set(ctx, ownerID, stats, s.cfg.StatsRefreshInterval); err != nil {
+			s.logger.Warn("failed to set distributed stats cache", "owner", ownerID, "error", err)
+		}
+	}
+
 	return stats.Clone(), nil
 }
 
 // updateCachedStats applies a mutation to a cached stats entry if it exists.
-// If no cache entry exists for the user, this is a no-op.
+// If no L1 cache entry exists for the user, this is a no-op for L1.
+// L2 (distributed) increments are applied via incrDistCache after the L1 update.
 func (s *service) updateCachedStats(ownerID string, fn func(stats *store.MailboxStats)) {
 	val, ok := s.statsCache.Load(ownerID)
 	if !ok {
@@ -85,6 +102,18 @@ func (s *service) updateCachedStats(ownerID string, fn func(stats *store.Mailbox
 	}
 }
 
+// incrDistCache applies a delta to a single field in the L2 distributed cache.
+// This is best-effort: errors are logged but not returned to the caller.
+func (s *service) incrDistCache(ownerID, field string, delta int64) {
+	if s.statsDistCache == nil || delta == 0 {
+		return
+	}
+	ctx := context.Background()
+	if err := s.statsDistCache.IncrBy(ctx, ownerID, field, delta); err != nil {
+		s.logger.Warn("distributed stats cache increment failed", "owner", ownerID, "field", field, "error", err)
+	}
+}
+
 // onMessageSent handles the MessageSent event for stats cache updates.
 // Increments total and folder counts for sender and each recipient.
 func (s *service) onMessageSent(_ context.Context, _ event.Event[MessageSentEvent], data MessageSentEvent) error {
@@ -95,6 +124,8 @@ func (s *service) onMessageSent(_ context.Context, _ event.Event[MessageSentEven
 		c.Total++
 		stats.Folders[store.FolderSent] = c
 	})
+	s.incrDistCache(data.SenderID, StatsCacheFieldTotal, 1)
+	s.incrDistCache(data.SenderID, StatsCacheFolderTotal(store.FolderSent), 1)
 
 	// Update each recipient's stats: new unread message in inbox.
 	for _, recipientID := range data.RecipientIDs {
@@ -106,6 +137,10 @@ func (s *service) onMessageSent(_ context.Context, _ event.Event[MessageSentEven
 			c.Unread++
 			stats.Folders[store.FolderInbox] = c
 		})
+		s.incrDistCache(recipientID, StatsCacheFieldTotal, 1)
+		s.incrDistCache(recipientID, StatsCacheFieldUnread, 1)
+		s.incrDistCache(recipientID, StatsCacheFolderTotal(store.FolderInbox), 1)
+		s.incrDistCache(recipientID, StatsCacheFolderUnread(store.FolderInbox), 1)
 	}
 
 	return nil
@@ -126,6 +161,10 @@ func (s *service) onMessageRead(_ context.Context, _ event.Event[MessageReadEven
 			}
 		}
 	})
+	s.incrDistCache(data.UserID, StatsCacheFieldUnread, -1)
+	if data.FolderID != "" {
+		s.incrDistCache(data.UserID, StatsCacheFolderUnread(data.FolderID), -1)
+	}
 	return nil
 }
 
@@ -150,6 +189,16 @@ func (s *service) onMessageDeleted(_ context.Context, _ event.Event[MessageDelet
 			stats.Folders[data.FolderID] = c
 		}
 	})
+	s.incrDistCache(data.UserID, StatsCacheFieldTotal, -1)
+	if data.WasUnread {
+		s.incrDistCache(data.UserID, StatsCacheFieldUnread, -1)
+	}
+	if data.FolderID != "" {
+		s.incrDistCache(data.UserID, StatsCacheFolderTotal(data.FolderID), -1)
+		if data.WasUnread {
+			s.incrDistCache(data.UserID, StatsCacheFolderUnread(data.FolderID), -1)
+		}
+	}
 	return nil
 }
 
@@ -177,6 +226,18 @@ func (s *service) onMessageMoved(_ context.Context, _ event.Event[MessageMovedEv
 			stats.Folders[data.ToFolderID] = c
 		}
 	})
+	if data.FromFolderID != "" {
+		s.incrDistCache(data.UserID, StatsCacheFolderTotal(data.FromFolderID), -1)
+		if data.WasUnread {
+			s.incrDistCache(data.UserID, StatsCacheFolderUnread(data.FromFolderID), -1)
+		}
+	}
+	if data.ToFolderID != "" {
+		s.incrDistCache(data.UserID, StatsCacheFolderTotal(data.ToFolderID), 1)
+		if data.WasUnread {
+			s.incrDistCache(data.UserID, StatsCacheFolderUnread(data.ToFolderID), 1)
+		}
+	}
 	return nil
 }
 
