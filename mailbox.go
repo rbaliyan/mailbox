@@ -42,6 +42,7 @@ type service struct {
 	events            *ServiceEvents      // Per-service event instances
 	statsCache        sync.Map            // map[ownerID string]*statsEntry
 	statsCacheEnabled bool                // true when event transport is configured
+	statsDistCache    StatsCache          // optional distributed L2 cache (e.g., Redis)
 	wg                sync.WaitGroup      // Tracks background goroutines
 	bgCancel          context.CancelFunc  // Cancels background goroutine context
 	mailboxID         string              // Assigned by Registrar during Connect; empty when no registrar
@@ -77,15 +78,16 @@ func New(cfg Config, opts ...Option) (Service, error) {
 	}
 
 	return &service{
-		store:       o.store,
-		attachments: o.attachments,
-		notifier:    o.notifier,
-		logger:      o.logger,
-		cfg:         cfg,
-		opts:        o,
-		plugins:     plugins,
-		otel:        otelInstr,
-		sendSem:     semaphore.NewWeighted(int64(cfg.MaxConcurrentSends)),
+		store:          o.store,
+		attachments:    o.attachments,
+		notifier:       o.notifier,
+		logger:         o.logger,
+		cfg:            cfg,
+		opts:           o,
+		plugins:        plugins,
+		otel:           otelInstr,
+		sendSem:        semaphore.NewWeighted(int64(cfg.MaxConcurrentSends)),
+		statsDistCache: o.statsDistCache,
 	}, nil
 }
 

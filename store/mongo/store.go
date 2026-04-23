@@ -145,6 +145,21 @@ func (s *Store) ensureIndexes(ctx context.Context) error {
 		return err
 	}
 
+	// Full-text search index: a single text index covering subject and body.
+	// MongoDB allows only one text index per collection.
+	if s.opts.enableFTS {
+		textIndex := mongo.IndexModel{
+			Keys: bson.D{
+				bson.E{Key: "subject", Value: "text"},
+				bson.E{Key: "body", Value: "text"},
+			},
+			Options: mongoopts.Index().SetName("idx_fts"),
+		}
+		if _, err := s.collection.Indexes().CreateOne(ctx, textIndex); err != nil {
+			s.logger.Warn("failed to create text index for FTS", "error", err)
+		}
+	}
+
 	// Create outbox collection index if outbox is enabled.
 	if s.opts.outboxEnabled {
 		outboxColl := s.db.Collection(s.opts.outboxCollection)

@@ -2,6 +2,13 @@ package rules
 
 import "context"
 
+// Forwarder forwards a message to another user on behalf of the rules engine.
+// Implement this interface and register it via WithForwarder to enable ActionForward.
+type Forwarder interface {
+	// Forward delivers a copy of messageID to toUserID.
+	Forward(ctx context.Context, messageID, toUserID string) error
+}
+
 // RuleScope determines when a rule is evaluated.
 type RuleScope string
 
@@ -20,6 +27,8 @@ const (
 	ActionSetFolder ActionType = "set_folder"
 	// ActionAddTag adds a tag to the message.
 	ActionAddTag ActionType = "add_tag"
+	// ActionRemoveTag removes a tag from the message. Value is the tag ID.
+	ActionRemoveTag ActionType = "remove_tag"
 	// ActionMarkRead marks the message as read. Only valid for receive scope.
 	ActionMarkRead ActionType = "mark_read"
 	// ActionDelete soft-deletes the message (moves to trash). Only valid for receive scope.
@@ -31,13 +40,21 @@ const (
 	ActionArchive ActionType = "archive"
 	// ActionSpam moves the message to the spam folder. Only valid for receive scope.
 	ActionSpam ActionType = "spam"
+	// ActionWebhook POSTs the message payload as JSON to the URL in Value.
+	// Delivery is fire-and-forget; errors are logged but do not abort rule processing.
+	ActionWebhook ActionType = "webhook"
+	// ActionForward forwards the message to another user. Value is the target userID.
+	// Requires a Forwarder configured via WithForwarder.
+	ActionForward ActionType = "forward"
 )
 
 // validSendActions is the set of actions allowed on the send side.
 var validSendActions = map[ActionType]bool{
 	ActionSetFolder: true,
 	ActionAddTag:    true,
+	ActionRemoveTag: true,
 	ActionArchive:   true,
+	ActionWebhook:   true,
 }
 
 // isValidSendAction returns true if the action type is allowed on the send side.

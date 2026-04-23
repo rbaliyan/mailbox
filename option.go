@@ -75,6 +75,9 @@ type options struct {
 	// Notifications
 	notifier *notify.Notifier // Per-user notification system (optional)
 
+	// Distributed stats cache (optional L2 behind the in-process sync.Map)
+	statsDistCache StatsCache
+
 	// Quota
 	quotaProvider QuotaProvider // Optional quota provider for per-user message limits
 
@@ -328,6 +331,18 @@ func WithRedisClient(client redis.UniversalClient) Option {
 }
 
 // --- Notification Options ---
+
+// WithStatsCache sets a distributed cache for aggregate mailbox stats.
+// When set, stats reads check this cache (L2) before the primary store,
+// and event-driven incremental updates propagate to it via HINCRBY.
+// This reduces database load during cold starts and across many instances.
+func WithStatsCache(c StatsCache) Option {
+	return func(o *options) {
+		if c != nil {
+			o.statsDistCache = c
+		}
+	}
+}
 
 // WithNotifier sets the per-user notification system.
 // When provided, the service subscribes to mailbox events using AsWorker

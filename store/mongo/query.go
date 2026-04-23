@@ -221,26 +221,26 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 		filter["owner_id"] = query.OwnerID
 	}
 
-	// Text search using regex on subject and body
+	// Text search: prefer native $text FTS, fall back to regex.
 	if query.Query != "" {
-		if !s.opts.enableRegex {
+		if s.opts.enableFTS {
+			filter["$text"] = bson.M{"$search": query.Query}
+		} else if s.opts.enableRegex {
+			searchFields := query.Fields
+			if len(searchFields) == 0 {
+				searchFields = []string{"subject", "body"}
+			}
+			escapedQuery := escapeRegex(query.Query)
+			orConditions := make([]bson.M, 0, len(searchFields))
+			for _, field := range searchFields {
+				orConditions = append(orConditions, bson.M{
+					field: bson.M{"$regex": escapedQuery, "$options": "i"},
+				})
+			}
+			filter["$or"] = orConditions
+		} else {
 			return nil, store.ErrRegexSearchDisabled
 		}
-
-		searchFields := query.Fields
-		if len(searchFields) == 0 {
-			searchFields = []string{"subject", "body"}
-		}
-
-		escapedQuery := escapeRegex(query.Query)
-
-		orConditions := make([]bson.M, 0, len(searchFields))
-		for _, field := range searchFields {
-			orConditions = append(orConditions, bson.M{
-				field: bson.M{"$regex": escapedQuery, "$options": "i"},
-			})
-		}
-		filter["$or"] = orConditions
 	}
 
 	// Tag filtering
@@ -294,10 +294,19 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 	if query.Options.StartAfter == "" && query.Options.Offset > 0 {
 		findOpts.SetSkip(int64(query.Options.Offset))
 	}
-	findOpts.SetSort(bson.D{
-		bson.E{Key: "created_at", Value: -1},
-		bson.E{Key: "_id", Value: -1},
-	})
+	if s.opts.enableFTS && query.Query != "" {
+		// Sort by relevance score first, then recency.
+		findOpts.SetProjection(bson.M{"score": bson.M{"$meta": "textScore"}})
+		findOpts.SetSort(bson.D{
+			bson.E{Key: "score", Value: bson.M{"$meta": "textScore"}},
+			bson.E{Key: "created_at", Value: -1},
+		})
+	} else {
+		findOpts.SetSort(bson.D{
+			bson.E{Key: "created_at", Value: -1},
+			bson.E{Key: "_id", Value: -1},
+		})
+	}
 
 	cursor, err := s.collection.Find(ctx, filter, findOpts)
 	if err != nil {
