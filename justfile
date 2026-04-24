@@ -25,6 +25,10 @@ test-coverage:
     go test -coverprofile=coverage.out ./...
     go tool cover -html=coverage.out -o coverage.html
 
+# Run benchmarks (pass extra flags via ARGS, e.g. just bench BenchmarkSendMessage)
+bench *ARGS:
+    go test -run='^$' -bench='{{ARGS:-\.}}' -benchmem -benchtime=3s .
+
 # Tidy go modules
 tidy:
     go mod tidy

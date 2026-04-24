@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/rbaliyan/event/v3"
 	"github.com/rbaliyan/event/v3/transport"
 	"github.com/rbaliyan/mailbox/notify"
 	"github.com/rbaliyan/mailbox/router"
@@ -83,6 +84,7 @@ type options struct {
 
 	// Event handling
 	eventErrorsFatal      bool                    // If true, event publishing failures cause operation to fail
+	eventBus              *event.Bus              // Pre-created event bus (optional; caller retains ownership)
 	eventTransport        transport.Transport     // Event transport (optional, uses noop if nil)
 	redisClient           redis.UniversalClient   // Redis client for event transport (optional, uses noop if nil)
 	onEventPublishFailure EventPublishFailureFunc // Callback for event publish failures (always set)
@@ -326,6 +328,29 @@ func WithRedisClient(client redis.UniversalClient) Option {
 	return func(o *options) {
 		if client != nil {
 			o.redisClient = client
+		}
+	}
+}
+
+// WithEventBus sets a pre-created event bus for the service.
+// The caller retains ownership of the bus — the service will NOT close it.
+// This is useful in tests where multiple services share a single bus, or when
+// the bus must be configured with specific options (outbox, transport, etc.)
+// before the service is created.
+//
+// WithEventBus takes priority over WithEventTransport and WithRedisClient.
+// Outbox wiring is skipped because the caller configured the bus.
+//
+// Example:
+//
+//	bus, _ := event.NewBus("test", event.WithTransport(channel.New()))
+//	defer bus.Close(ctx)
+//
+//	svc, _ := mailbox.New(cfg, mailbox.WithStore(store), mailbox.WithEventBus(bus))
+func WithEventBus(bus *event.Bus) Option {
+	return func(o *options) {
+		if bus != nil {
+			o.eventBus = bus
 		}
 	}
 }
