@@ -21,6 +21,22 @@ type EnforceQuotasResult struct {
 	Interrupted bool
 }
 
+// RunQuotaEnforcement lists all users via the configured QuotaUserLister and calls
+// EnforceQuotas for them. Returns ErrQuotaUserListerNotConfigured when no lister is set.
+// This is the preferred entry point for on-demand admin-triggered enforcement because
+// it does not accept user IDs from external callers, eliminating the taint path from
+// user-provided input to the database queries inside enforceUserQuota.
+func (s *service) RunQuotaEnforcement(ctx context.Context) (*EnforceQuotasResult, error) {
+	if s.cfg.QuotaUserLister == nil {
+		return nil, ErrQuotaUserListerNotConfigured
+	}
+	userIDs, err := s.cfg.QuotaUserLister.ListUsers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	return s.EnforceQuotas(ctx, userIDs)
+}
+
 // EnforceQuotas evaluates quotas for the given users and applies enforcement actions.
 // Only users with QuotaActionDeleteOldest policies are processed; users with
 // QuotaActionReject are skipped since rejection happens at delivery time.
