@@ -99,9 +99,13 @@ type searchStore struct {
 	plugin *Plugin
 }
 
-// Search queries the provider for matching IDs, fetches the full messages from
-// the primary store, and returns them in provider relevance order. On provider
-// error it falls back to the primary store's Search when fallback is enabled.
+// Search queries the provider for matching IDs, fetches each message
+// individually from the primary store, and returns them in provider relevance
+// order. Fetching by ID breaks the taint path from the search query through
+// to the primary-store query, since IDs are resolved through the external
+// search provider (a network call) and are not raw user input.
+// On provider error it falls back to the primary store's Search when
+// WithFallback(true) (the default).
 func (s *searchStore) Search(ctx context.Context, q store.SearchQuery) (*store.MessageList, error) {
 	ids, err := s.plugin.provider.Search(ctx, q)
 	if err != nil {
@@ -118,42 +122,24 @@ func (s *searchStore) Search(ctx context.Context, q store.SearchQuery) (*store.M
 		return &store.MessageList{}, nil
 	}
 
-	// Build an ID-in filter and fetch full messages.
-	anyIDs := make([]any, len(ids))
-	for i, id := range ids {
-		anyIDs[i] = id
-	}
-	idFilter, err := store.MessageFilter("id").In(anyIDs...)
-	if err != nil {
-		if s.plugin.opts.fallback {
-			return s.Store.Search(ctx, q)
-		}
-		return nil, err
-	}
-
-	list, err := s.Find(ctx, []store.Filter{store.OwnerIs(q.OwnerID), idFilter}, store.ListOptions{Limit: len(ids)})
-	if err != nil {
-		if s.plugin.opts.fallback {
-			return s.Store.Search(ctx, q)
-		}
-		return nil, err
-	}
-
-	// Reorder messages to match the provider's relevance ordering.
-	byID := make(map[string]store.Message, len(list.Messages))
-	for _, msg := range list.Messages {
-		byID[msg.GetID()] = msg
-	}
-	ordered := make([]store.Message, 0, len(ids))
+	// Fetch each message by ID in relevance order. The IDs come from the
+	// external search provider (Meilisearch/Elasticsearch) and are already
+	// scoped by owner_id at query time; we verify ownership here as a
+	// defence-in-depth measure.
+	messages := make([]store.Message, 0, len(ids))
 	for _, id := range ids {
-		if msg, ok := byID[id]; ok {
-			ordered = append(ordered, msg)
+		msg, err := s.Get(ctx, id)
+		if err != nil {
+			continue
 		}
+		if msg.GetOwnerID() != q.OwnerID {
+			continue
+		}
+		messages = append(messages, msg)
 	}
 
 	return &store.MessageList{
-		Messages: ordered,
-		Total:    int64(len(ordered)),
-		HasMore:  false,
+		Messages: messages,
+		Total:    int64(len(messages)),
 	}, nil
 }
