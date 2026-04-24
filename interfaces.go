@@ -54,6 +54,11 @@ type Service interface {
 	// QuotaActionReject is enforced at delivery time. Called automatically when
 	// Config.QuotaEnforcementInterval and Config.QuotaUserLister are set.
 	EnforceQuotas(ctx context.Context, userIDs []string) (*EnforceQuotasResult, error)
+	// RunQuotaEnforcement lists all users via the configured QuotaUserLister and
+	// calls EnforceQuotas for them. Returns ErrQuotaUserListerNotConfigured when no
+	// lister is set. Prefer this over EnforceQuotas in admin/on-demand contexts
+	// because it does not accept user IDs from external callers.
+	RunQuotaEnforcement(ctx context.Context) (*EnforceQuotasResult, error)
 
 	// Events returns per-service event instances for subscribing and publishing.
 	// Each service has its own events bound to its own event bus, enabling

@@ -1,26 +1,20 @@
 // Package admin provides an HTTP management surface for mailbox service operations.
 // Mount Handler at any path prefix in your HTTP mux:
 //
-//	mux.Handle("/admin/", http.StripPrefix("/admin", admin.NewHandler(svc)))
+//	mux.Handle("/admin/", http.StripPrefix("/admin", admin.NewHandler(svc, admin.WithAuthFunc(myAuth))))
+//
+// Authentication is required: provide WithAuthFunc or WithAllowAll (for trusted environments).
 package admin
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/rbaliyan/mailbox"
+	"github.com/rbaliyan/mailbox/store"
 )
-
-// quotaEnforcer is implemented by the concrete mailbox service. It triggers
-// quota enforcement using the service's configured QuotaUserLister without
-// accepting user IDs from external callers, breaking the taint path from
-// HTTP request data to the underlying database queries.
-type quotaEnforcer interface {
-	RunQuotaEnforcement(ctx context.Context) (*mailbox.EnforceQuotasResult, error)
-}
 
 // Handler exposes mailbox service management operations over HTTP.
 type Handler struct {
@@ -30,7 +24,7 @@ type Handler struct {
 }
 
 // NewHandler creates a new Handler for the given service.
-// Returns an error if svc is nil.
+// Returns an error if svc is nil, or if neither WithAuthFunc nor WithAllowAll is provided.
 func NewHandler(svc mailbox.Service, opts ...Option) (*Handler, error) {
 	if svc == nil {
 		return nil, errors.New("admin: service must not be nil")
@@ -41,6 +35,10 @@ func NewHandler(svc mailbox.Service, opts ...Option) (*Handler, error) {
 	}
 	for _, opt := range opts {
 		opt(&o)
+	}
+
+	if o.authFunc == nil && !o.allowAll {
+		return nil, errors.New("admin: authentication is required; provide WithAuthFunc or WithAllowAll")
 	}
 
 	h := &Handler{
@@ -99,13 +97,7 @@ func (h *Handler) handleCleanupExpired(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleEnforceQuotas(w http.ResponseWriter, r *http.Request) {
-	enforcer, ok := h.svc.(quotaEnforcer)
-	if !ok {
-		writeError(w, errors.New("quota enforcement not supported by this service implementation"))
-		return
-	}
-
-	result, err := enforcer.RunQuotaEnforcement(r.Context())
+	result, err := h.svc.RunQuotaEnforcement(r.Context())
 	if err != nil {
 		h.opts.logger.Error("enforce quotas failed", "error", err)
 		writeError(w, err)
@@ -121,7 +113,22 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeError(w http.ResponseWriter, err error) {
+	code := errorCode(err)
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusInternalServerError)
+	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+}
+
+// errorCode maps sentinel errors to appropriate HTTP status codes.
+func errorCode(err error) int {
+	switch {
+	case errors.Is(err, mailbox.ErrNotConnected):
+		return http.StatusServiceUnavailable // 503
+	case errors.Is(err, mailbox.ErrQuotaUserListerNotConfigured):
+		return http.StatusNotImplemented // 501
+	case errors.Is(err, store.ErrNotFound):
+		return http.StatusNotFound // 404
+	default:
+		return http.StatusInternalServerError // 500
+	}
 }
