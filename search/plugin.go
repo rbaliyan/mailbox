@@ -13,17 +13,27 @@ var _ mailbox.Plugin = (*Plugin)(nil)
 var _ mailbox.SendHook = (*Plugin)(nil)
 
 // Plugin wraps a Provider as a mailbox.Plugin and mailbox.SendHook.
-// It also exposes event handlers for message received and deleted events,
-// and a WrapStore method that returns a store.Store whose Search method
-// delegates to the provider.
+// It exposes event handlers for message received, moved, read, mark-all-read,
+// and deleted events, and overrides the store's Search to delegate to the provider.
 type Plugin struct {
 	provider Provider
-	st       store.Store // set by WrapStore; required for event-based indexing
+	st       store.Store
 	opts     *options
 }
 
-// New creates a new search Plugin wrapping the given provider.
-func New(provider Provider, opts ...Option) *Plugin {
+// New creates a search Plugin wrapping the given provider and primary store.
+// The returned store.Store overrides Search to delegate to the provider; pass it
+// as the store to mailbox.New. The plugin must also be registered via
+// mailbox.WithPlugin so that Init/Close and AfterSend are called by the service.
+//
+// Subscribe to events after the service is created:
+//
+//	svc.Events().MessageReceived.Subscribe(ctx, event.AsWorker(plugin.OnMessageReceived))
+//	svc.Events().MessageDeleted.Subscribe(ctx, event.AsWorker(plugin.OnDelete))
+//	svc.Events().MessageMoved.Subscribe(ctx, event.AsWorker(plugin.OnMessageMoved))
+//	svc.Events().MessageRead.Subscribe(ctx, event.AsWorker(plugin.OnMessageRead))
+//	svc.Events().MarkAllRead.Subscribe(ctx, event.AsWorker(plugin.OnMarkAllRead))
+func New(provider Provider, st store.Store, opts ...Option) (*Plugin, store.Store) {
 	o := &options{
 		fallback: true,
 		logger:   slog.Default(),
@@ -31,23 +41,28 @@ func New(provider Provider, opts ...Option) *Plugin {
 	for _, opt := range opts {
 		opt(o)
 	}
-	return &Plugin{
+	p := &Plugin{
 		provider: provider,
+		st:       st,
 		opts:     o,
 	}
+	return p, &searchStore{Store: st, plugin: p}
 }
 
 // Name returns the plugin identifier.
 func (p *Plugin) Name() string { return "search:" + p.provider.Name() }
 
-// Init pings the provider to verify connectivity.
+// Init connects the provider (creates index / applies settings) then pings it.
 func (p *Plugin) Init(ctx context.Context) error {
+	if err := p.provider.Connect(ctx); err != nil {
+		return err
+	}
 	return p.provider.Ping(ctx)
 }
 
 // Close releases provider resources.
-func (p *Plugin) Close(_ context.Context) error {
-	return p.provider.Close()
+func (p *Plugin) Close(ctx context.Context) error {
+	return p.provider.Close(ctx)
 }
 
 // BeforeSend satisfies mailbox.SendHook. No pre-send action is needed.
@@ -62,16 +77,7 @@ func (p *Plugin) AfterSend(ctx context.Context, _ string, msg store.Message) err
 
 // OnMessageReceived indexes a received message. Register this with
 // svc.Events().MessageReceived.Subscribe(ctx, event.AsWorker(p.OnMessageReceived)).
-//
-// When WrapStore has not been called, indexing is skipped with a warning because
-// the full message cannot be fetched.
 func (p *Plugin) OnMessageReceived(ctx context.Context, _ any, evt mailbox.MessageReceivedEvent) error {
-	if p.st == nil {
-		p.opts.logger.WarnContext(ctx, "search: WrapStore not called, skipping index on MessageReceived",
-			"message_id", evt.MessageID,
-		)
-		return nil
-	}
 	msg, err := p.st.Get(ctx, evt.MessageID)
 	if err != nil {
 		return err
@@ -79,18 +85,58 @@ func (p *Plugin) OnMessageReceived(ctx context.Context, _ any, evt mailbox.Messa
 	return p.provider.Index(ctx, messageToDoc(msg))
 }
 
+// OnMessageMoved re-indexes a moved message to update its folder_id in the index.
+// Register with svc.Events().MessageMoved.Subscribe(ctx, event.AsWorker(p.OnMessageMoved)).
+func (p *Plugin) OnMessageMoved(ctx context.Context, _ any, evt mailbox.MessageMovedEvent) error {
+	msg, err := p.st.Get(ctx, evt.MessageID)
+	if err != nil {
+		return err
+	}
+	return p.provider.Index(ctx, messageToDoc(msg))
+}
+
+// OnMessageRead re-indexes a message whose read status changed.
+// Register with svc.Events().MessageRead.Subscribe(ctx, event.AsWorker(p.OnMessageRead)).
+func (p *Plugin) OnMessageRead(ctx context.Context, _ any, evt mailbox.MessageReadEvent) error {
+	msg, err := p.st.Get(ctx, evt.MessageID)
+	if err != nil {
+		return err
+	}
+	return p.provider.Index(ctx, messageToDoc(msg))
+}
+
+// OnMarkAllRead re-indexes all messages in the folder whose is_read status changed.
+// Register with svc.Events().MarkAllRead.Subscribe(ctx, event.AsWorker(p.OnMarkAllRead)).
+func (p *Plugin) OnMarkAllRead(ctx context.Context, _ any, evt mailbox.MarkAllReadEvent) error {
+	const pageSize = 100
+	var offset int
+	for {
+		list, err := p.st.Find(ctx, []store.Filter{
+			store.OwnerIs(evt.UserID),
+			store.InFolder(evt.FolderID),
+		}, store.ListOptions{Limit: pageSize, Offset: offset})
+		if err != nil {
+			return err
+		}
+		for _, msg := range list.Messages {
+			if indexErr := p.provider.Index(ctx, messageToDoc(msg)); indexErr != nil {
+				p.opts.logger.WarnContext(ctx, "search: failed to re-index message on MarkAllRead",
+					"message_id", msg.GetID(), "error", indexErr,
+				)
+			}
+		}
+		if !list.HasMore {
+			break
+		}
+		offset += pageSize
+	}
+	return nil
+}
+
 // OnDelete removes a deleted message from the search index. Register this with
 // svc.Events().MessageDeleted.Subscribe(ctx, event.AsWorker(p.OnDelete)).
 func (p *Plugin) OnDelete(ctx context.Context, _ any, evt mailbox.MessageDeletedEvent) error {
 	return p.provider.Delete(ctx, evt.MessageID)
-}
-
-// WrapStore returns a store.Store that uses the plugin's provider for Search
-// queries, falling back to the primary store on error when WithFallback(true)
-// (the default). Call this before constructing the mailbox.Service.
-func (p *Plugin) WrapStore(s store.Store) store.Store {
-	p.st = s
-	return &searchStore{Store: s, plugin: p}
 }
 
 // searchStore embeds store.Store and overrides Search to use the plugin provider.
@@ -130,6 +176,9 @@ func (s *searchStore) Search(ctx context.Context, q store.SearchQuery) (*store.M
 	for _, id := range ids {
 		msg, err := s.Get(ctx, id)
 		if err != nil {
+			s.plugin.opts.logger.WarnContext(ctx, "search: failed to fetch message by ID",
+				"message_id", id, "error", err,
+			)
 			continue
 		}
 		if msg.GetOwnerID() != q.OwnerID {

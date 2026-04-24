@@ -3,6 +3,7 @@ package meilisearch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -34,8 +35,8 @@ type Provider struct {
 	opts   *options
 }
 
-// New creates a Meilisearch Provider. It creates the index and applies
-// searchable/filterable attribute settings on construction.
+// New creates a Meilisearch Provider. Call Connect(ctx) (via Plugin.Init) to
+// create the index and apply attribute settings before use.
 func New(opts ...Option) (*Provider, error) {
 	o := &options{
 		host:  "http://localhost:7700",
@@ -61,34 +62,35 @@ func New(opts ...Option) (*Provider, error) {
 	}
 	client := ms.New(o.host, msOpts...)
 
-	p := &Provider{client: client, opts: o}
-
-	// Ensure the index exists with the configured primary key.
-	ctx := context.Background()
-	if _, err := client.CreateIndexWithContext(ctx, &ms.IndexConfig{
-		Uid:        o.index,
-		PrimaryKey: "id",
-	}); err != nil {
-		// Ignore "index already exists" — a previous instance may have created it.
-		if msErr, ok := err.(*ms.Error); !ok || msErr.StatusCode != 409 {
-			return nil, fmt.Errorf("meilisearch: create index: %w", err)
-		}
-	}
-
-	// Apply searchable and filterable attribute settings.
-	idx := client.Index(o.index)
-	if _, err := idx.UpdateSettingsWithContext(ctx, &ms.Settings{
-		SearchableAttributes: o.searchableFields,
-		FilterableAttributes: o.filterableFields,
-	}); err != nil {
-		return nil, fmt.Errorf("meilisearch: update settings: %w", err)
-	}
-
-	return p, nil
+	return &Provider{client: client, opts: o}, nil
 }
 
 // Name returns the provider identifier.
 func (p *Provider) Name() string { return "meilisearch" }
+
+// Connect creates the index (ignoring "already exists") and applies searchable
+// and filterable attribute settings. Called by Plugin.Init.
+func (p *Provider) Connect(ctx context.Context) error {
+	if _, err := p.client.CreateIndexWithContext(ctx, &ms.IndexConfig{
+		Uid:        p.opts.index,
+		PrimaryKey: "id",
+	}); err != nil {
+		var msErr *ms.Error
+		if !errors.As(err, &msErr) || msErr.StatusCode != 409 {
+			return fmt.Errorf("meilisearch: create index: %w", err)
+		}
+		// StatusCode 409 means the index already exists — safe to continue.
+	}
+
+	if _, err := p.client.Index(p.opts.index).UpdateSettingsWithContext(ctx, &ms.Settings{
+		SearchableAttributes: p.opts.searchableFields,
+		FilterableAttributes: p.opts.filterableFields,
+	}); err != nil {
+		return fmt.Errorf("meilisearch: update settings: %w", err)
+	}
+
+	return nil
+}
 
 // Ping checks connectivity to the Meilisearch server.
 func (p *Provider) Ping(ctx context.Context) error {
@@ -164,7 +166,7 @@ func (p *Provider) Search(ctx context.Context, q store.SearchQuery) ([]string, e
 }
 
 // Close is a no-op; the Meilisearch HTTP client has no explicit close.
-func (p *Provider) Close() error {
+func (p *Provider) Close(_ context.Context) error {
 	p.client.Close()
 	return nil
 }

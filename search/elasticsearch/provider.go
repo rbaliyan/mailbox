@@ -36,7 +36,8 @@ type Provider struct {
 	opts   *options
 }
 
-// New creates an Elasticsearch Provider and ensures the target index exists.
+// New creates an Elasticsearch Provider. Call Connect(ctx) (via Plugin.Init) to
+// ensure the target index exists before use.
 func New(opts ...Option) (*Provider, error) {
 	o := &options{
 		index: "mailbox_messages",
@@ -58,25 +59,25 @@ func New(opts ...Option) (*Provider, error) {
 		return nil, fmt.Errorf("elasticsearch: create client: %w", err)
 	}
 
-	p := &Provider{client: client, opts: o}
-
-	// Ensure the index exists.
-	ctx := context.Background()
-	exists, err := client.Indices.Exists(o.index).Do(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("elasticsearch: check index: %w", err)
-	}
-	if !exists {
-		if _, err := client.Indices.Create(o.index).Do(ctx); err != nil {
-			return nil, fmt.Errorf("elasticsearch: create index: %w", err)
-		}
-	}
-
-	return p, nil
+	return &Provider{client: client, opts: o}, nil
 }
 
 // Name returns the provider identifier.
 func (p *Provider) Name() string { return "elasticsearch" }
+
+// Connect ensures the target index exists. Called by Plugin.Init.
+func (p *Provider) Connect(ctx context.Context) error {
+	exists, err := p.client.Indices.Exists(p.opts.index).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("elasticsearch: check index: %w", err)
+	}
+	if !exists {
+		if _, err := p.client.Indices.Create(p.opts.index).Do(ctx); err != nil {
+			return fmt.Errorf("elasticsearch: create index: %w", err)
+		}
+	}
+	return nil
+}
 
 // Ping checks cluster connectivity.
 func (p *Provider) Ping(ctx context.Context) error {
@@ -168,4 +169,4 @@ func (p *Provider) Search(ctx context.Context, q store.SearchQuery) ([]string, e
 }
 
 // Close is a no-op; the Elasticsearch HTTP client has no explicit close.
-func (p *Provider) Close() error { return nil }
+func (p *Provider) Close(_ context.Context) error { return nil }

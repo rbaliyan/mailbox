@@ -3,11 +3,13 @@
 // Usage:
 //
 //	provider, _ := meilisearch.New(meilisearch.WithHost("http://localhost:7700"), meilisearch.WithAPIKey("key"))
-//	p := search.New(provider)
-//	wrappedStore := p.WrapStore(myStore)
-//	svc, _ := mailbox.New(cfg, mailbox.WithStore(wrappedStore), mailbox.WithPlugin(p))
-//	svc.Events().MessageReceived.Subscribe(ctx, event.AsWorker(p.OnMessageReceived))
-//	svc.Events().MessageDeleted.Subscribe(ctx, event.AsWorker(p.OnDelete))
+//	plugin, wrappedStore := search.New(provider, myStore)
+//	svc, _ := mailbox.New(cfg, mailbox.WithStore(wrappedStore), mailbox.WithPlugin(plugin))
+//	svc.Events().MessageReceived.Subscribe(ctx, event.AsWorker(plugin.OnMessageReceived))
+//	svc.Events().MessageDeleted.Subscribe(ctx, event.AsWorker(plugin.OnDelete))
+//	svc.Events().MessageMoved.Subscribe(ctx, event.AsWorker(plugin.OnMessageMoved))
+//	svc.Events().MessageRead.Subscribe(ctx, event.AsWorker(plugin.OnMessageRead))
+//	svc.Events().MarkAllRead.Subscribe(ctx, event.AsWorker(plugin.OnMarkAllRead))
 package search
 
 import (
@@ -21,17 +23,20 @@ import (
 type Provider interface {
 	// Name identifies the backend (e.g., "meilisearch", "elasticsearch").
 	Name() string
-	// Index upserts a document. Called after send and on message received.
+	// Connect initializes the backend (creates index, applies settings).
+	// Called by Plugin.Init; the ctx deadline controls the setup timeout.
+	Connect(ctx context.Context) error
+	// Index upserts a document. Called after send and on message received/moved/read.
 	Index(ctx context.Context, doc Document) error
 	// Delete removes a document by message ID.
 	Delete(ctx context.Context, messageID string) error
 	// Search returns message IDs matching q, in relevance order.
 	// OwnerID is always set; implementations must scope results to it.
 	Search(ctx context.Context, q store.SearchQuery) ([]string, error)
-	// Ping checks backend connectivity. Called during Init.
+	// Ping checks backend connectivity. Called during Init after Connect.
 	Ping(ctx context.Context) error
 	// Close releases resources.
-	Close() error
+	Close(ctx context.Context) error
 }
 
 // Document is a flat message representation for indexing.
