@@ -20,6 +20,7 @@ import (
 	"crypto/rand"
 	"testing"
 
+	"github.com/rbaliyan/event/v3"
 	"github.com/rbaliyan/event/v3/transport/channel"
 	"github.com/rbaliyan/mailbox"
 	"github.com/rbaliyan/mailbox/store"
@@ -56,6 +57,45 @@ func NewMemoryStore(t *testing.T) *memory.Store {
 	}
 	t.Cleanup(func() { _ = s.Close(context.Background()) })
 	return s
+}
+
+// NewBus creates a connected in-memory event bus for tests.
+// The bus uses a channel transport (in-process delivery) and must be closed
+// by the caller or via t.Cleanup.
+//
+// Use this when multiple services need to share a single event bus:
+//
+//	bus := mailboxtest.NewBus(t)
+//	svc1 := mailboxtest.NewServiceWithBus(t, mailbox.Config{}, bus)
+//	svc2 := mailboxtest.NewServiceWithBus(t, mailbox.Config{}, bus)
+func NewBus(t *testing.T) *event.Bus {
+	t.Helper()
+	bus, err := event.NewBus("test", event.WithTransport(channel.New()))
+	if err != nil {
+		t.Fatalf("mailboxtest: create event bus: %v", err)
+	}
+	t.Cleanup(func() { _ = bus.Close(context.Background()) })
+	return bus
+}
+
+// NewServiceWithBus creates a connected service using the given pre-created bus.
+// The caller retains ownership of the bus — the service will not close it.
+// Use NewBus to create a shared bus for tests that need cross-service event routing.
+func NewServiceWithBus(t *testing.T, cfg mailbox.Config, bus *event.Bus, opts ...mailbox.Option) mailbox.Service {
+	t.Helper()
+	allOpts := append([]mailbox.Option{
+		mailbox.WithStore(memory.New()),
+		mailbox.WithEventBus(bus),
+	}, opts...)
+	svc, err := mailbox.New(cfg, allOpts...)
+	if err != nil {
+		t.Fatalf("mailboxtest: create service: %v", err)
+	}
+	if err := svc.Connect(context.Background()); err != nil {
+		t.Fatalf("mailboxtest: connect: %v", err)
+	}
+	t.Cleanup(func() { _ = svc.Close(context.Background()) })
+	return svc
 }
 
 // NewServiceWithStore creates a connected service using the given store.

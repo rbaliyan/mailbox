@@ -184,83 +184,98 @@ func (s *service) initEventBus(ctx context.Context) error {
 	busName := fmt.Sprintf("%s-%d", serviceName, atomic.AddInt64(&busCounter, 1))
 
 	var bus *event.Bus
-	var err error
+	ownsBus := s.opts.eventBus == nil // true when we create the bus; false when caller provided it
 
-	// Collect bus options.
-	var busOpts []event.BusOption
+	if !ownsBus {
+		// Caller-provided bus: use as-is. Outbox wiring is the caller's responsibility.
+		bus = s.opts.eventBus
+		s.statsCacheEnabled = true
+	} else {
+		// Collect bus options.
+		var busOpts []event.BusOption
 
-	switch {
-	case s.opts.eventTransport != nil:
-		s.logger.Info("initializing event bus with custom transport")
-		busOpts = append(busOpts, event.WithTransport(s.opts.eventTransport))
-		s.statsCacheEnabled = true
-	case s.opts.redisClient != nil:
-		s.logger.Info("initializing event bus with Redis transport")
-		redisOpts := []eventredis.Option{
-			eventredis.WithClaimInterval(s.cfg.ClaimInterval, s.cfg.ClaimMinIdle),
-			eventredis.WithClaimBatchSize(s.cfg.ClaimBatchSize),
+		switch {
+		case s.opts.eventTransport != nil:
+			s.logger.Info("initializing event bus with custom transport")
+			busOpts = append(busOpts, event.WithTransport(s.opts.eventTransport))
+			s.statsCacheEnabled = true
+		case s.opts.redisClient != nil:
+			s.logger.Info("initializing event bus with Redis transport")
+			redisOpts := []eventredis.Option{
+				eventredis.WithClaimInterval(s.cfg.ClaimInterval, s.cfg.ClaimMinIdle),
+				eventredis.WithClaimBatchSize(s.cfg.ClaimBatchSize),
+			}
+			if s.cfg.EventStreamMaxLen > 0 {
+				redisOpts = append(redisOpts, eventredis.WithMaxLen(s.cfg.EventStreamMaxLen))
+			}
+			t, transportErr := eventredis.New(s.opts.redisClient, redisOpts...)
+			if transportErr != nil {
+				return fmt.Errorf("create redis transport: %w", transportErr)
+			}
+			busOpts = append(busOpts, event.WithTransport(t))
+			s.statsCacheEnabled = true
+		default:
+			s.logger.Debug("initializing event bus with noop transport (stats cache disabled)")
+			busOpts = append(busOpts, event.WithTransport(noop.New()))
+			s.statsCacheEnabled = false
 		}
-		if s.cfg.EventStreamMaxLen > 0 {
-			redisOpts = append(redisOpts, eventredis.WithMaxLen(s.cfg.EventStreamMaxLen))
+
+		// Wire outbox store from the store implementation if available.
+		if provider, ok := s.store.(store.EventOutboxProvider); ok {
+			if outboxStore := provider.EventOutboxStore(); outboxStore != nil {
+				busOpts = append(busOpts, event.WithOutbox(outboxStore))
+				s.logger.Info("event bus outbox enabled")
+			}
 		}
-		t, transportErr := eventredis.New(s.opts.redisClient, redisOpts...)
-		if transportErr != nil {
-			return fmt.Errorf("create redis transport: %w", transportErr)
+
+		var err error
+		bus, err = event.NewBus(busName, busOpts...)
+		if err != nil {
+			return fmt.Errorf("create event bus: %w", err)
 		}
-		busOpts = append(busOpts, event.WithTransport(t))
-		s.statsCacheEnabled = true
-	default:
-		s.logger.Debug("initializing event bus with noop transport (stats cache disabled)")
-		busOpts = append(busOpts, event.WithTransport(noop.New()))
-		s.statsCacheEnabled = false
 	}
 
-	// Wire outbox store from the store implementation if available.
-	if provider, ok := s.store.(store.EventOutboxProvider); ok {
-		if outboxStore := provider.EventOutboxStore(); outboxStore != nil {
-			busOpts = append(busOpts, event.WithOutbox(outboxStore))
-			s.logger.Info("event bus outbox enabled")
+	// closeOnErr tears down the bus on setup failure, but only if we created it.
+	// An externally-provided bus is the caller's responsibility to close.
+	closeOnErr := func() {
+		if ownsBus {
+			_ = bus.Close(ctx)
 		}
-	}
-
-	bus, err = event.NewBus(busName, busOpts...)
-	if err != nil {
-		return fmt.Errorf("create event bus: %w", err)
 	}
 
 	// Don't assign bus to s.eventBus until all setup succeeds.
-	// On failure, bus.Close() is called and s.eventBus remains nil,
-	// preventing later code from seeing a partially-initialized closed bus.
+	// On failure, closeOnErr() is called and s.eventBus remains nil,
+	// preventing later code from seeing a partially-initialized bus.
 	events := newServiceEvents(busName)
 
 	// Register per-service events (unique per service instance).
 	if err := registerServiceEvents(ctx, bus, events); err != nil {
-		_ = bus.Close(ctx)
+		closeOnErr()
 		return fmt.Errorf("register service events: %w", err)
 	}
 
 	// Also register global events for backward compatibility.
 	// Global events use "first registration wins" - subsequent calls are no-ops.
 	if err := registerEvents(ctx, bus); err != nil {
-		_ = bus.Close(ctx)
+		closeOnErr()
 		return fmt.Errorf("register events: %w", err)
 	}
 
 	// Subscribe internal handlers for stats cache updates.
 	if err := events.MessageSent.Subscribe(ctx, s.onMessageSent); err != nil {
-		_ = bus.Close(ctx)
+		closeOnErr()
 		return fmt.Errorf("subscribe stats MessageSent: %w", err)
 	}
 	if err := events.MessageRead.Subscribe(ctx, s.onMessageRead); err != nil {
-		_ = bus.Close(ctx)
+		closeOnErr()
 		return fmt.Errorf("subscribe stats MessageRead: %w", err)
 	}
 	if err := events.MessageDeleted.Subscribe(ctx, s.onMessageDeleted); err != nil {
-		_ = bus.Close(ctx)
+		closeOnErr()
 		return fmt.Errorf("subscribe stats MessageDeleted: %w", err)
 	}
 	if err := events.MessageMoved.Subscribe(ctx, s.onMessageMoved); err != nil {
-		_ = bus.Close(ctx)
+		closeOnErr()
 		return fmt.Errorf("subscribe stats MessageMoved: %w", err)
 	}
 
@@ -271,27 +286,27 @@ func (s *service) initEventBus(ctx context.Context) error {
 	if s.notifier != nil {
 		coalesce := s.opts.notifyCoalesce
 		if err := events.MessageSent.Subscribe(ctx, s.onNotifyMessageSent, notifySubOpts[MessageSentEvent](coalesce)...); err != nil {
-			_ = bus.Close(ctx)
+			closeOnErr()
 			return fmt.Errorf("subscribe notify MessageSent: %w", err)
 		}
 		if err := events.MessageReceived.Subscribe(ctx, s.onNotifyMessageReceived, notifySubOpts[MessageReceivedEvent](coalesce)...); err != nil {
-			_ = bus.Close(ctx)
+			closeOnErr()
 			return fmt.Errorf("subscribe notify MessageReceived: %w", err)
 		}
 		if err := events.MessageRead.Subscribe(ctx, s.onNotifyMessageRead, notifySubOpts[MessageReadEvent](coalesce)...); err != nil {
-			_ = bus.Close(ctx)
+			closeOnErr()
 			return fmt.Errorf("subscribe notify MessageRead: %w", err)
 		}
 		if err := events.MessageDeleted.Subscribe(ctx, s.onNotifyMessageDeleted, notifySubOpts[MessageDeletedEvent](coalesce)...); err != nil {
-			_ = bus.Close(ctx)
+			closeOnErr()
 			return fmt.Errorf("subscribe notify MessageDeleted: %w", err)
 		}
 		if err := events.MessageMoved.Subscribe(ctx, s.onNotifyMessageMoved, notifySubOpts[MessageMovedEvent](coalesce)...); err != nil {
-			_ = bus.Close(ctx)
+			closeOnErr()
 			return fmt.Errorf("subscribe notify MessageMoved: %w", err)
 		}
 		if err := events.MarkAllRead.Subscribe(ctx, s.onNotifyMarkAllRead, notifySubOpts[MarkAllReadEvent](coalesce)...); err != nil {
-			_ = bus.Close(ctx)
+			closeOnErr()
 			return fmt.Errorf("subscribe notify MarkAllRead: %w", err)
 		}
 	}
@@ -358,10 +373,11 @@ func (s *service) Close(ctx context.Context) error {
 		errs = append(errs, fmt.Errorf("close plugins: %w", err))
 	}
 
-	// Close event bus only if using a real transport.
+	// Close event bus only if we created it with a real transport.
 	// For noop transport, the bus doesn't hold resources and closing would
 	// break events for other services sharing the same global events.
-	if s.eventBus != nil && (s.opts.eventTransport != nil || s.opts.redisClient != nil) {
+	// For externally-provided buses, the caller is responsible for closing.
+	if s.eventBus != nil && s.opts.eventBus == nil && (s.opts.eventTransport != nil || s.opts.redisClient != nil) {
 		if err := s.eventBus.Close(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("close event bus: %w", err))
 		}
