@@ -162,6 +162,10 @@ var (
 	// Use errors.As with *QuotaExceededError to get details (user ID, current count, limit).
 	ErrQuotaExceeded = errors.New("mailbox: quota exceeded")
 
+	// ErrQuotaUserListerNotConfigured is returned by RunQuotaEnforcement when no
+	// QuotaUserLister has been configured in Config.
+	ErrQuotaUserListerNotConfigured = errors.New("mailbox: quota user lister not configured")
+
 	// ErrUserResolveFailed is returned when the UserResolver fails to resolve
 	// the sender's identity. The message is not sent.
 	ErrUserResolveFailed = errors.New("mailbox: user resolve failed")
@@ -297,6 +301,7 @@ func IsRetryableError(err error) bool {
 		ErrHeadersTooLarge,
 		ErrQuotaExceeded,
 		ErrUserResolveFailed,
+		ErrQuotaUserListerNotConfigured,
 	}
 
 	for _, permErr := range permanentErrors {

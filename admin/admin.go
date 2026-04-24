@@ -5,6 +5,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -12,6 +13,14 @@ import (
 
 	"github.com/rbaliyan/mailbox"
 )
+
+// quotaEnforcer is implemented by the concrete mailbox service. It triggers
+// quota enforcement using the service's configured QuotaUserLister without
+// accepting user IDs from external callers, breaking the taint path from
+// HTTP request data to the underlying database queries.
+type quotaEnforcer interface {
+	RunQuotaEnforcement(ctx context.Context) (*mailbox.EnforceQuotasResult, error)
+}
 
 // Handler exposes mailbox service management operations over HTTP.
 type Handler struct {
@@ -90,16 +99,13 @@ func (h *Handler) handleCleanupExpired(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleEnforceQuotas(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		UserIDs []string `json:"user_ids"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		h.opts.logger.Error("enforce quotas: decode request body failed", "error", err)
-		writeError(w, err)
+	enforcer, ok := h.svc.(quotaEnforcer)
+	if !ok {
+		writeError(w, errors.New("quota enforcement not supported by this service implementation"))
 		return
 	}
 
-	result, err := h.svc.EnforceQuotas(r.Context(), body.UserIDs)
+	result, err := enforcer.RunQuotaEnforcement(r.Context())
 	if err != nil {
 		h.opts.logger.Error("enforce quotas failed", "error", err)
 		writeError(w, err)
