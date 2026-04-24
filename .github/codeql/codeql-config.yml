@@ -1,8 +1,7 @@
 name: "CodeQL Config"
 
-query-filters:
-  # store/mongo/query.go uses buildFilter which validates all keys via MessageFieldKey
-  # whitelist and values are typed Go objects, not raw strings. The nosql-injection
-  # alerts on Find/Count/Search are false positives.
-  - exclude:
-      id: go/nosql-injection
+# store/mongo/query.go uses buildFilter which validates all keys via MessageFieldKey
+# and values are typed Go objects, not raw strings. Exclude from sink reporting to
+# suppress false-positive nosql-injection alerts on Find/Count/Search.
+paths-ignore:
+  - store/mongo/query.go
