@@ -47,6 +47,7 @@ func newMessageDocFromData(data store.MessageData, now time.Time) *messageDoc {
 		IsDraft:      false,
 		ThreadID:     data.ThreadID,
 		ReplyToID:    data.ReplyToID,
+		ExternalID:   data.ExternalID,
 		ExpiresAt:    data.ExpiresAt,
 		AvailableAt:  data.AvailableAt,
 	}

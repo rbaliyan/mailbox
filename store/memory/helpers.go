@@ -50,6 +50,8 @@ func matchesFilter(m *message, f store.Filter) bool {
 		fieldValue = m.threadID
 	case "reply_to_id":
 		fieldValue = m.replyToID
+	case "external_id":
+		fieldValue = m.externalID
 	case "created_at":
 		fieldValue = m.createdAt
 	case "updated_at":

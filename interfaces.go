@@ -276,8 +276,9 @@ type SendRequest struct {
 	Metadata      map[string]any
 	Attachments   []store.Attachment
 	AttachmentIDs []string
-	ThreadID      string
-	ReplyToID     string
+	ThreadID   string
+	ReplyToID  string
+	ExternalID string // caller-defined external identifier (e.g. SMTP Message-ID); stored indexed
 
 	// DeliverTo optionally restricts which recipients receive inbox copies
 	// on this instance. The message's RecipientIDs stores the full recipient

@@ -21,6 +21,7 @@ type DraftReader interface {
 	Attachments() []store.Attachment
 	ThreadID() string
 	ReplyToID() string
+	ExternalID() string
 }
 
 // DraftComposer provides fluent setter methods for composing a draft.
@@ -47,6 +48,11 @@ type DraftComposer interface {
 	// recipients. Before this time, the message is hidden from queries.
 	// A zero time clears any previously set schedule.
 	SetScheduleAt(t time.Time) DraftComposer
+
+	// SetExternalID sets a caller-defined external identifier for correlation
+	// with external systems (e.g. SMTP Message-ID). Stored indexed; use
+	// store.ExternalIDIs to look up messages by this value.
+	SetExternalID(id string) DraftComposer
 }
 
 // DraftPreparer provides draft preparation methods that can fail.
@@ -130,6 +136,7 @@ type draft struct {
 	saved      bool
 	threadID   string
 	replyToID  string
+	externalID string
 	ttl        time.Duration
 	scheduleAt *time.Time
 	deliverTo  []string // transient delivery targets (mailbox-layer only)
@@ -352,12 +359,24 @@ func (d *draft) ReplyToID() string {
 	return d.replyToID
 }
 
+// ExternalID returns the caller-defined external identifier.
+func (d *draft) ExternalID() string {
+	return d.externalID
+}
+
+// SetExternalID sets a caller-defined external identifier for correlation
+// with external systems (e.g. SMTP Message-ID).
+func (d *draft) SetExternalID(id string) DraftComposer {
+	d.externalID = id
+	return d
+}
+
 // Send validates and sends the draft.
 // Creates recipient copies and moves sender's copy to sent folder.
 // On partial delivery, returns both the sent message and a PartialDeliveryError.
 // On event publish failure, returns both the sent message and an EventPublishError.
 func (d *draft) Send(ctx context.Context) (Message, error) {
-	msg, err := d.mailbox.sendDraft(ctx, d.message, d.threadID, d.replyToID, d.ttl, d.scheduleAt, d.deliverTo)
+	msg, err := d.mailbox.sendDraft(ctx, d.message, d.threadID, d.replyToID, d.externalID, d.ttl, d.scheduleAt, d.deliverTo)
 	if msg != nil {
 		d.saved = true
 		return newMessage(msg, d.mailbox), err

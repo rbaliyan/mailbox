@@ -15,7 +15,7 @@ import (
 // It must match the field order expected by scanMessage / scanMessageFromRows.
 const messageColumns = `id, owner_id, sender_id, subject, body, headers, metadata, status, folder_id,
        is_read, read_at, recipient_ids, tags, attachments, is_deleted, is_draft,
-       idempotency_key, thread_id, reply_to_id, expires_at, available_at,
+       idempotency_key, thread_id, reply_to_id, external_id, expires_at, available_at,
        created_at, updated_at`
 
 func (s *Store) Get(ctx context.Context, id string) (store.Message, error) {

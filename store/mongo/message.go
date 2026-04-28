@@ -34,6 +34,7 @@ type messageDoc struct {
 	IdempotencyKey string          `bson:"idempotency_key,omitempty"` // For atomic idempotent creates
 	ThreadID       string          `bson:"thread_id,omitempty"`
 	ReplyToID      string          `bson:"reply_to_id,omitempty"`
+	ExternalID     string          `bson:"external_id,omitempty"`
 	ExpiresAt      *time.Time      `bson:"expires_at,omitempty"`
 	AvailableAt    *time.Time      `bson:"available_at,omitempty"`
 }
@@ -69,6 +70,7 @@ type message struct {
 	isDraft      bool
 	threadID     string
 	replyToID    string
+	externalID   string
 	expiresAt    *time.Time
 	availableAt  *time.Time
 
@@ -117,6 +119,7 @@ func (m *message) GetCreatedAt() time.Time        { return m.createdAt }
 func (m *message) GetUpdatedAt() time.Time        { return m.updatedAt }
 func (m *message) GetThreadID() string            { return m.threadID }
 func (m *message) GetReplyToID() string           { return m.replyToID }
+func (m *message) GetExternalID() string          { return m.externalID }
 func (m *message) GetExpiresAt() *time.Time       { return m.expiresAt }
 func (m *message) GetAvailableAt() *time.Time     { return m.availableAt }
 func (m *message) GetAttachments() []store.Attachment {
@@ -197,6 +200,11 @@ func (m *message) SetScheduleAt(t time.Time) store.DraftMessage {
 	return m
 }
 
+func (m *message) SetExternalID(id string) store.DraftMessage {
+	m.externalID = id
+	return m
+}
+
 func (m *message) AddAttachment(att store.Attachment) store.DraftMessage {
 	if att == nil {
 		return m
@@ -263,6 +271,7 @@ func messageToDoc(msg *message) *messageDoc {
 		IsDraft:      msg.isDraft,
 		ThreadID:     msg.threadID,
 		ReplyToID:    msg.replyToID,
+		ExternalID:   msg.externalID,
 		ExpiresAt:    msg.expiresAt,
 		AvailableAt:  msg.availableAt,
 	}
@@ -309,6 +318,7 @@ func docToMessage(doc *messageDoc) *message {
 		isDraft:      doc.IsDraft,
 		threadID:     doc.ThreadID,
 		replyToID:    doc.ReplyToID,
+		externalID:   doc.ExternalID,
 		expiresAt:    doc.ExpiresAt,
 		availableAt:  doc.AvailableAt,
 	}
