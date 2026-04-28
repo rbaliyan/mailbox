@@ -341,12 +341,17 @@ func WithRedisClient(client redis.UniversalClient) Option {
 // WithEventBus takes priority over WithEventTransport and WithRedisClient.
 // Outbox wiring is skipped because the caller configured the bus.
 //
+// Shutdown order: always call svc.Close(ctx) BEFORE bus.Close(ctx). The service
+// may publish events during its own shutdown (notifier teardown, plugin hooks),
+// and a closed bus will cause those publishes to fail.
+//
 // Example:
 //
 //	bus, _ := event.NewBus("test", event.WithTransport(channel.New()))
-//	defer bus.Close(ctx)
-//
 //	svc, _ := mailbox.New(cfg, mailbox.WithStore(store), mailbox.WithEventBus(bus))
+//	// ...
+//	svc.Close(ctx) // close service first
+//	bus.Close(ctx) // then close bus
 func WithEventBus(bus *event.Bus) Option {
 	return func(o *options) {
 		if bus != nil {

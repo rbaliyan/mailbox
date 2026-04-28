@@ -234,7 +234,9 @@ func BenchmarkDelete(b *testing.B) {
 				b.Fatal(err)
 			}
 		} else {
-			_ = mb.Restore(context.Background(), id)
+			if err := mb.Restore(context.Background(), id); err != nil {
+				b.Fatal(err)
+			}
 		}
 		i++
 	}

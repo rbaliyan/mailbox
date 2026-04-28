@@ -7,9 +7,38 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rbaliyan/mailbox/store"
 	"go.opentelemetry.io/otel/attribute"
 )
+
+// resolveThreadID determines the thread ID for an outgoing message.
+//
+// Priority:
+//  1. Explicit caller value — used as-is (allows forwarding to a different thread).
+//  2. Inherited from reply target — the sender must own the referenced message
+//     (canAccess). If not owned, the lookup is silently skipped and a new
+//     thread is started, preventing cross-user thread-ID enumeration.
+//     When the parent exists but has no thread ID itself (first reply to a
+//     legacy or threadless message), replyToID becomes the thread root — the
+//     same behaviour as draft.ReplyTo.
+//  3. New UUID — every new conversation gets a globally unique thread ID.
+func (m *userMailbox) resolveThreadID(ctx context.Context, threadID, replyToID string) string {
+	if threadID != "" {
+		return threadID
+	}
+	if replyToID != "" {
+		orig, err := m.service.store.Get(ctx, replyToID)
+		if err == nil && m.canAccess(orig) {
+			if tid := orig.GetThreadID(); tid != "" {
+				return tid
+			}
+			// Parent has no thread ID — use it as the thread root (matches draft.ReplyTo).
+			return replyToID
+		}
+	}
+	return uuid.New().String()
+}
 
 // Compose starts a new message draft.
 func (m *userMailbox) Compose() (Draft, error) {
@@ -422,7 +451,11 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 		return nil, sendErr
 	}
 
-	// Step 5: Compute TTL fields at send time
+	// Step 5a: Resolve thread ID before creating any message copies so that
+	// all copies (sender + all recipients) carry the same thread ID.
+	threadID = m.resolveThreadID(ctx, threadID, replyToID)
+
+	// Step 5b: Compute TTL fields at send time
 	expiresAt, availableAt, err := m.computeTTLFields(ttl, scheduleAt)
 	if err != nil {
 		sendErr = err

@@ -204,6 +204,41 @@ func (s *Store) Count(ctx context.Context, filters []store.Filter) (int64, error
 	return count, nil
 }
 
+// ThreadParticipants returns distinct owner IDs of all non-deleted, non-draft
+// messages with the given thread_id.
+func (s *Store) ThreadParticipants(ctx context.Context, threadID string) ([]string, error) {
+	if atomic.LoadInt32(&s.connected) == 0 {
+		return nil, store.ErrNotConnected
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	filter := bson.M{
+		"thread_id":  threadID,
+		"__is_draft": bson.M{"$ne": true},
+		"folder_id":  bson.M{"$nin": bson.A{store.FolderTrash, store.FolderDrafts}},
+	}
+
+	result := s.collection.Distinct(ctx, "owner_id", filter)
+	if err := result.Err(); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("thread participants: %w", err)
+	}
+
+	var ownerIDs []string
+	if err := result.Decode(&ownerIDs); err != nil {
+		return nil, fmt.Errorf("thread participants decode: %w", err)
+	}
+
+	if len(ownerIDs) == 0 {
+		return nil, store.ErrNotFound
+	}
+	return ownerIDs, nil
+}
+
 // Search performs full-text search on messages.
 func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.MessageList, error) {
 	if atomic.LoadInt32(&s.connected) == 0 {

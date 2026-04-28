@@ -175,6 +175,48 @@ func (s *Store) Count(ctx context.Context, filters []store.Filter) (int64, error
 	return count, nil
 }
 
+// ThreadParticipants returns distinct owner IDs of all non-deleted, non-draft
+// messages with the given thread_id.
+func (s *Store) ThreadParticipants(ctx context.Context, threadID string) ([]string, error) {
+	if err := s.checkConnected(); err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
+	defer cancel()
+
+	query := fmt.Sprintf(`
+		SELECT DISTINCT owner_id
+		FROM %s
+		WHERE thread_id = $1
+		  AND is_draft = false
+		  AND folder_id NOT IN ('%s', '%s')
+	`, s.opts.table, store.FolderTrash, store.FolderDrafts)
+
+	rows, err := s.exec(ctx).QueryContext(ctx, query, threadID)
+	if err != nil {
+		return nil, fmt.Errorf("thread participants: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var participants []string
+	for rows.Next() {
+		var ownerID string
+		if err := rows.Scan(&ownerID); err != nil {
+			return nil, fmt.Errorf("thread participants scan: %w", err)
+		}
+		participants = append(participants, ownerID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("thread participants rows: %w", err)
+	}
+
+	if len(participants) == 0 {
+		return nil, store.ErrNotFound
+	}
+	return participants, nil
+}
+
 func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.MessageList, error) {
 	if err := s.checkConnected(); err != nil {
 		return nil, err

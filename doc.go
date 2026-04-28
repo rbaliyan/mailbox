@@ -83,6 +83,36 @@
 //   - MessageMoved - when a message is moved between folders
 //   - MarkAllRead - when all messages in a folder are marked as read
 //
+// # Threads
+//
+// Every sent message is automatically assigned a thread ID. When no ThreadID
+// is provided, one is generated as follows:
+//  1. If ReplyToID is set and the sender owns the referenced message,
+//     the thread ID is inherited from that message (or the message ID itself
+//     is used as the thread root for the first reply to a threadless message).
+//  2. Otherwise a new UUID is generated, starting a fresh conversation.
+//
+// Access per-user thread views via the Mailbox interface:
+//
+//	thread, _ := mb.GetThread(ctx, threadID, store.ListOptions{Limit: 50})
+//	replies, _ := mb.GetReplies(ctx, messageID, store.ListOptions{Limit: 20})
+//
+// For external delivery systems (e.g., SMTP gateways) that know only the
+// thread_id and need to find all participants:
+//
+//	participants, err := svc.ThreadParticipants(ctx, threadID)
+//	if err != nil { ... } // store.ErrNotFound when thread does not exist
+//
+//	_, err = svc.Client(senderID).SendMessage(ctx, mailbox.SendRequest{
+//	    RecipientIDs: participants,
+//	    ThreadID:     threadID,
+//	    Subject:      "Re: original",
+//	    Body:         body,
+//	})
+//
+// ThreadParticipants is a cross-owner query (not scoped to a single user) so
+// it lives on Service rather than Mailbox.
+//
 // # Transactional Outbox
 //
 // For guaranteed event delivery, enable the transactional outbox on your store:

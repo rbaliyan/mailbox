@@ -293,6 +293,16 @@ type FolderLister interface {
 	ListDistinctFolders(ctx context.Context, ownerID string) ([]string, error)
 }
 
+// ThreadParticipantLister is an optional interface for cross-owner thread queries.
+// When implemented, Service.ThreadParticipants delegates to this single-query path.
+// All three built-in backends implement this.
+type ThreadParticipantLister interface {
+	// ThreadParticipants returns the distinct owner IDs of all non-deleted,
+	// non-draft messages with the given thread_id. The result is unordered.
+	// Returns ErrNotFound when no messages exist for the given thread_id.
+	ThreadParticipants(ctx context.Context, threadID string) ([]string, error)
+}
+
 // BulkReadMarker is an optional interface for efficient bulk read marking.
 // When implemented, MarkAllRead uses a single database operation instead of
 // N individual MarkRead calls. All three built-in backends implement this.
