@@ -197,7 +197,7 @@ func (s *Store) ThreadParticipants(ctx context.Context, threadID string) ([]stri
 	if err != nil {
 		return nil, fmt.Errorf("thread participants: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var participants []string
 	for rows.Next() {
