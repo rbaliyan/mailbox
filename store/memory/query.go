@@ -15,6 +15,33 @@ func isAvailableNow(m *message) bool {
 	return m.availableAt == nil || !m.availableAt.After(time.Now().UTC())
 }
 
+// ThreadParticipants returns distinct owner IDs of all non-deleted, non-draft
+// messages with the given thread_id.
+func (s *Store) ThreadParticipants(ctx context.Context, threadID string) ([]string, error) {
+	if err := s.checkConnected(); err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]struct{})
+	s.messages.Range(func(_, v any) bool {
+		m := v.(*message)
+		if !m.isDraft && m.threadID == threadID && m.folderID != store.FolderTrash && m.folderID != store.FolderDrafts {
+			seen[m.ownerID] = struct{}{}
+		}
+		return true
+	})
+
+	if len(seen) == 0 {
+		return nil, store.ErrNotFound
+	}
+
+	participants := make([]string, 0, len(seen))
+	for ownerID := range seen {
+		participants = append(participants, ownerID)
+	}
+	return participants, nil
+}
+
 // Get retrieves a message by ID.
 func (s *Store) Get(ctx context.Context, id string) (store.Message, error) {
 	if err := s.checkConnected(); err != nil {

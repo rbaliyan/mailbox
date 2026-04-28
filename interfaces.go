@@ -75,6 +75,25 @@ type Service interface {
 	// Returns an empty string when no registrar was configured or Connect has not
 	// completed successfully.
 	MailboxID() string
+
+	// ThreadParticipants returns the distinct user IDs of all non-deleted participants
+	// in the given thread. A participant is any user who has a non-trash copy of a
+	// message with that thread_id (sender or recipient).
+	//
+	// This is a cross-owner query used by external delivery systems (e.g., SMTP gateways)
+	// that know the thread_id but not the individual recipient IDs:
+	//
+	//	participants, err := svc.ThreadParticipants(ctx, threadID)
+	//	if err != nil { ... }
+	//	_, err = svc.Client(senderID).SendMessage(ctx, mailbox.SendRequest{
+	//	    RecipientIDs: participants,
+	//	    ThreadID:     threadID,
+	//	    Subject:      subject,
+	//	    Body:         body,
+	//	})
+	//
+	// Returns store.ErrNotFound when no messages exist for the given thread_id.
+	ThreadParticipants(ctx context.Context, threadID string) ([]string, error)
 }
 
 // MessageReader provides single message retrieval.
