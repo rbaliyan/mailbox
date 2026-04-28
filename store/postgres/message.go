@@ -39,6 +39,7 @@ type message struct {
 	idempotencyKey string
 	threadID       string
 	replyToID      string
+	externalID     string
 	expiresAt      *time.Time
 	availableAt    *time.Time
 	createdAt      time.Time
@@ -64,6 +65,7 @@ func (m *message) GetCreatedAt() time.Time            { return m.createdAt }
 func (m *message) GetUpdatedAt() time.Time            { return m.updatedAt }
 func (m *message) GetThreadID() string                { return m.threadID }
 func (m *message) GetReplyToID() string               { return m.replyToID }
+func (m *message) GetExternalID() string              { return m.externalID }
 func (m *message) GetExpiresAt() *time.Time           { return m.expiresAt }
 func (m *message) GetAvailableAt() *time.Time         { return m.availableAt }
 
@@ -124,6 +126,11 @@ func (m *message) SetScheduleAt(t time.Time) store.DraftMessage {
 	return m
 }
 
+func (m *message) SetExternalID(id string) store.DraftMessage {
+	m.externalID = id
+	return m
+}
+
 // =============================================================================
 // Attachment type
 // =============================================================================
@@ -165,13 +172,13 @@ func (s *Store) scanMessage(row rowScanner) (*message, error) {
 	var msg message
 	var headersJSON, metadataJSON, attachmentsJSON []byte
 	var readAt, expiresAt, availableAt sql.NullTime
-	var idempotencyKey, threadID, replyToID sql.NullString
+	var idempotencyKey, threadID, replyToID, externalID sql.NullString
 
 	err := row.Scan(
 		&msg.id, &msg.ownerID, &msg.senderID, &msg.subject, &msg.body,
 		&headersJSON, &metadataJSON, &msg.status, &msg.folderID, &msg.isRead, &readAt,
 		pq.Array(&msg.recipientIDs), pq.Array(&msg.tags), &attachmentsJSON,
-		&msg.isDeleted, &msg.isDraft, &idempotencyKey, &threadID, &replyToID,
+		&msg.isDeleted, &msg.isDraft, &idempotencyKey, &threadID, &replyToID, &externalID,
 		&expiresAt, &availableAt,
 		&msg.createdAt, &msg.updatedAt,
 	)
@@ -190,6 +197,9 @@ func (s *Store) scanMessage(row rowScanner) (*message, error) {
 	}
 	if replyToID.Valid {
 		msg.replyToID = replyToID.String
+	}
+	if externalID.Valid {
+		msg.externalID = externalID.String
 	}
 	if expiresAt.Valid {
 		msg.expiresAt = &expiresAt.Time

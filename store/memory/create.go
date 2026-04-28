@@ -12,17 +12,18 @@ import (
 // Shared by CreateMessage and CreateMessageIdempotent to avoid duplication.
 func newMessageFromData(data store.MessageData, id string, now time.Time) *message {
 	m := &message{
-		id:        id,
-		ownerID:   data.OwnerID,
-		senderID:  data.SenderID,
-		subject:   data.Subject,
-		body:      data.Body,
-		status:    data.Status,
-		folderID:  data.FolderID,
-		threadID:  data.ThreadID,
-		replyToID: data.ReplyToID,
-		createdAt: now,
-		updatedAt: now,
+		id:         id,
+		ownerID:    data.OwnerID,
+		senderID:   data.SenderID,
+		subject:    data.Subject,
+		body:       data.Body,
+		status:     data.Status,
+		folderID:   data.FolderID,
+		threadID:   data.ThreadID,
+		replyToID:  data.ReplyToID,
+		externalID: data.ExternalID,
+		createdAt:  now,
+		updatedAt:  now,
 	}
 
 	if data.RecipientIDs != nil {
@@ -72,6 +73,9 @@ func (s *Store) CreateMessage(ctx context.Context, data store.MessageData) (stor
 	m := newMessageFromData(data, uuid.New().String(), now)
 
 	s.messages.Store(m.id, m)
+	if m.externalID != "" {
+		s.externalIdx.Store(m.externalID, m.id)
+	}
 	return m.clone(), nil
 }
 

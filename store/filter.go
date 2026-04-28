@@ -160,6 +160,8 @@ func MessageFieldKey(field string) (string, bool) {
 		return "thread_id", true
 	case "ReplyToID", "reply_to_id":
 		return "reply_to_id", true
+	case "ExternalID", "external_id":
+		return "external_id", true
 	case "IsDraft", "is_draft":
 		return "is_draft", true
 	case "ExpiresAt", "expires_at":
@@ -255,6 +257,12 @@ func ThreadIs(threadID string) Filter {
 // ReplyToIs returns a filter for messages that are replies to a specific message.
 func ReplyToIs(messageID string) Filter {
 	f, _ := MessageFilter("ReplyToID").Equal(messageID)
+	return f
+}
+
+// ExternalIDIs returns a filter for messages with a specific external identifier.
+func ExternalIDIs(id string) Filter {
+	f, _ := MessageFilter("ExternalID").Equal(id)
 	return f
 }
 

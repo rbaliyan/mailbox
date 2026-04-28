@@ -17,6 +17,7 @@ import (
 type Store struct {
 	messages       sync.Map // map[string]*message (both drafts and messages)
 	idempotencyIdx sync.Map // map[string]string (ownerID:idempotencyKey -> messageID)
+	externalIdx    sync.Map // map[string]string (externalID -> messageID) secondary index
 	msgLocks       sync.Map // map[string]*sync.Mutex (per-message locks for mutations)
 	connected      int32
 }

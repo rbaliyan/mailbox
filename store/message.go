@@ -119,6 +119,10 @@ type Message interface {
 	// Thread support
 	GetThreadID() string
 	GetReplyToID() string
+
+	// GetExternalID returns the caller-defined external identifier for this
+	// message (e.g. an SMTP Message-ID). Empty string if not set.
+	GetExternalID() string
 }
 
 // DraftMessage is a mutable message being composed.
@@ -161,8 +165,9 @@ type MessageData struct {
 	FolderID     string
 	Attachments  []Attachment
 	Tags         []string
-	ThreadID     string
-	ReplyToID    string
+	ThreadID   string
+	ReplyToID  string
+	ExternalID string // caller-defined external identifier (e.g. SMTP Message-ID); indexed
 
 	// ExpiresAt is the UTC time after which this message is eligible for
 	// automatic deletion via DeleteTTLExpiredMessages. Nil means no expiry.

@@ -27,6 +27,7 @@ type message struct {
 	isDraft      bool // true for drafts, false for sent messages
 	threadID     string
 	replyToID    string
+	externalID   string
 	expiresAt    *time.Time
 	availableAt  *time.Time
 }
@@ -44,9 +45,10 @@ func (m *message) clone() *message {
 		folderID:  m.folderID,
 		createdAt: m.createdAt,
 		updatedAt: m.updatedAt,
-		isDraft:   m.isDraft,
-		threadID:  m.threadID,
-		replyToID: m.replyToID,
+		isDraft:    m.isDraft,
+		threadID:   m.threadID,
+		replyToID:  m.replyToID,
+		externalID: m.externalID,
 	}
 
 	if m.recipientIDs != nil {
@@ -107,6 +109,7 @@ func (m *message) GetCreatedAt() time.Time            { return m.createdAt }
 func (m *message) GetUpdatedAt() time.Time            { return m.updatedAt }
 func (m *message) GetThreadID() string                { return m.threadID }
 func (m *message) GetReplyToID() string               { return m.replyToID }
+func (m *message) GetExternalID() string              { return m.externalID }
 func (m *message) GetExpiresAt() *time.Time           { return m.expiresAt }
 func (m *message) GetAvailableAt() *time.Time         { return m.availableAt }
 
@@ -160,6 +163,12 @@ func (m *message) SetTTL(d time.Duration) store.DraftMessage {
 		t := time.Now().UTC().Add(d)
 		m.expiresAt = &t
 	}
+	m.updatedAt = time.Now().UTC()
+	return m
+}
+
+func (m *message) SetExternalID(id string) store.DraftMessage {
+	m.externalID = id
 	m.updatedAt = time.Now().UTC()
 	return m
 }

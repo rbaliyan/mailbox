@@ -100,7 +100,7 @@ func (m *userMailbox) computeTTLFields(ttl time.Duration, scheduleAt *time.Time)
 
 // createSenderMessage creates the sender's copy in the outbox.
 // Returns the created message or an error. Handles attachment ref counting and rollback.
-func (m *userMailbox) createSenderMessage(ctx context.Context, draft store.DraftMessage, threadID, replyToID string, expiresAt, availableAt *time.Time) (store.Message, error) {
+func (m *userMailbox) createSenderMessage(ctx context.Context, draft store.DraftMessage, threadID, replyToID, externalID string, expiresAt, availableAt *time.Time) (store.Message, error) {
 	senderData := store.MessageData{
 		OwnerID:      m.userID,
 		SenderID:     m.userID,
@@ -114,6 +114,7 @@ func (m *userMailbox) createSenderMessage(ctx context.Context, draft store.Draft
 		Attachments:  draft.GetAttachments(),
 		ThreadID:     threadID,
 		ReplyToID:    replyToID,
+		ExternalID:   externalID,
 		ExpiresAt:    expiresAt,
 		AvailableAt:  availableAt,
 	}
@@ -194,7 +195,7 @@ func deduplicateRecipients(recipientIDs []string) []string {
 // deliveryTargets is the subset of recipients to deliver to on this instance;
 // when nil/empty, the full RecipientIDs list from the draft is used.
 // Returns lists of successful and failed recipients.
-func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.DraftMessage, threadID, replyToID, senderMsgID string, expiresAt, availableAt *time.Time, deliveryTargets []string) ([]string, map[string]error) {
+func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.DraftMessage, threadID, replyToID, externalID, senderMsgID string, expiresAt, availableAt *time.Time, deliveryTargets []string) ([]string, map[string]error) {
 	// Recipients are already deduplicated in sendDraft before validation.
 	idempotencyBase := senderMsgID
 
@@ -248,6 +249,7 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 				Attachments:  draft.GetAttachments(),
 				ThreadID:     threadID,
 				ReplyToID:    replyToID,
+				ExternalID:   externalID,
 				ExpiresAt:    expiresAt,
 				AvailableAt:  availableAt,
 			},
@@ -374,7 +376,7 @@ func (m *userMailbox) finalizeDelivery(ctx context.Context, senderCopy store.Mes
 // threadID and replyToID are optional thread context for conversation support.
 // deliverTo, when non-empty, restricts delivery to that subset of recipients;
 // otherwise all recipients on the draft receive inbox copies.
-func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, threadID, replyToID string, ttl time.Duration, scheduleAt *time.Time, deliverTo []string) (store.Message, error) {
+func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, threadID, replyToID, externalID string, ttl time.Duration, scheduleAt *time.Time, deliverTo []string) (store.Message, error) {
 	if err := m.checkAccess(); err != nil {
 		return nil, err
 	}
@@ -463,14 +465,14 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 	}
 
 	// Step 6: Create sender's copy
-	senderCopy, err := m.createSenderMessage(ctx, draft, threadID, replyToID, expiresAt, availableAt)
+	senderCopy, err := m.createSenderMessage(ctx, draft, threadID, replyToID, externalID, expiresAt, availableAt)
 	if err != nil {
 		sendErr = err
 		return nil, sendErr
 	}
 
 	// Step 7: Deliver to recipients (use sender message ID for idempotency)
-	deliveredTo, failedRecipients := m.deliverToRecipients(ctx, draft, threadID, replyToID, senderCopy.GetID(), expiresAt, availableAt, deliverTo)
+	deliveredTo, failedRecipients := m.deliverToRecipients(ctx, draft, threadID, replyToID, externalID, senderCopy.GetID(), expiresAt, availableAt, deliverTo)
 
 	// Step 8: Handle total delivery failure
 	if len(deliveredTo) == 0 {
@@ -545,7 +547,7 @@ func (m *userMailbox) SendMessage(ctx context.Context, req SendRequest) (Message
 	}
 
 	// Send via existing flow — return message even on partial delivery or event error
-	msg, err := m.sendDraft(ctx, draft, req.ThreadID, req.ReplyToID, req.TTL, req.ScheduleAt, req.DeliverTo)
+	msg, err := m.sendDraft(ctx, draft, req.ThreadID, req.ReplyToID, req.ExternalID, req.TTL, req.ScheduleAt, req.DeliverTo)
 	if msg != nil {
 		return newMessage(msg, m), err
 	}
