@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/rbaliyan/mailbox/router"
 	"github.com/rbaliyan/mailbox/store/memory"
 )
 
@@ -22,8 +21,7 @@ func (r *fakeRegistrar) Register(_ context.Context) (string, error) {
 	return r.id, r.err
 }
 
-// Compile-time check that fakeRegistrar implements router.Registrar.
-var _ router.Registrar = (*fakeRegistrar)(nil)
+var _ Registrar = (*fakeRegistrar)(nil)
 
 func TestRegistrar(t *testing.T) {
 	ctx := context.Background()

@@ -17,9 +17,13 @@ type testUser struct {
 	email     string
 }
 
-func (u *testUser) FirstName() string { return u.firstName }
-func (u *testUser) LastName() string  { return u.lastName }
-func (u *testUser) Email() string     { return u.email }
+func (u *testUser) ID() string                       { return u.email }
+func (u *testUser) FirstName() string                { return u.firstName }
+func (u *testUser) LastName() string                 { return u.lastName }
+func (u *testUser) Email() string                    { return u.email }
+func (u *testUser) Type() string                     { return "" }
+func (u *testUser) PublicKey() string                { return "" }
+func (u *testUser) Capabilities() map[string]string  { return nil }
 
 // testUserResolver is a map-based UserResolver for tests.
 type testUserResolver struct {
