@@ -19,8 +19,8 @@ require (
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lib/pq v1.12.3
 	github.com/meilisearch/meilisearch-go v0.36.2
-	github.com/rbaliyan/event-mongodb v0.6.9
-	github.com/rbaliyan/event/v3 v3.16.8
+	github.com/rbaliyan/event-mongodb v0.7.0
+	github.com/rbaliyan/event/v3 v3.17.0
 	github.com/redis/go-redis/v9 v9.19.0
 	go.mongodb.org/mongo-driver/v2 v2.6.0
 	go.opentelemetry.io/otel v1.43.0
