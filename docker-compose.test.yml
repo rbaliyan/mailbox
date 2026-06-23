@@ -1,0 +1,45 @@
+# docker-compose.test.yml provisions the backing services for the mailbox
+# integration test suites (store/mongo and store/postgres, build tag "integration").
+#
+#   docker compose -f docker-compose.test.yml up -d
+#
+#   MONGO_URI=mongodb://localhost:27019/?directConnection=true \
+#   POSTGRES_DSN=postgres://mailbox_test:mailbox_test@localhost:5433/mailbox_test?sslmode=disable \
+#       go test -tags integration -race ./store/...
+#
+#   docker compose -f docker-compose.test.yml down -v
+#
+# Ports match the workspace convention (Mongo 27019, Postgres 5433) so multiple
+# repos can share these services without colliding with default local instances.
+
+services:
+  mongo:
+    image: mongo:7
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--port", "27017"]
+    ports:
+      - "27019:27017"
+    healthcheck:
+      # Initiate the single-node replica set on first healthy ping. Transactions
+      # (required by the outbox suite) need a replica set, not a standalone.
+      test: >
+        mongosh --quiet --port 27017 --eval
+        "try { rs.status().ok } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:27017' }] }).ok }"
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 5s
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: mailbox_test
+      POSTGRES_PASSWORD: mailbox_test
+      POSTGRES_DB: mailbox_test
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mailbox_test -d mailbox_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s

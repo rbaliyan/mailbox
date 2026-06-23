@@ -255,17 +255,12 @@ func TestStatsCaching(t *testing.T) {
 			t.Fatalf("create message: %v", err)
 		}
 
-		// Wait for TTL to expire
-		time.Sleep(5 * time.Millisecond)
-
-		// Should refresh and see the new message
-		stats2, err := mb.Stats(ctx)
-		if err != nil {
-			t.Fatalf("stats: %v", err)
-		}
-		if stats2.TotalMessages != 1 {
-			t.Errorf("expected refreshed total=1, got %d", stats2.TotalMessages)
-		}
+		// Once the cache TTL expires, Stats refreshes from the store and sees
+		// the new message. Poll rather than sleep on the wall clock.
+		eventually(t, 2*time.Second, time.Millisecond, func() bool {
+			stats2, statsErr := mb.Stats(ctx)
+			return statsErr == nil && stats2.TotalMessages == 1
+		}, "stats never refreshed to total=1 after TTL expiry")
 	})
 }
 
@@ -291,21 +286,14 @@ func TestStatsEventUpdates(t *testing.T) {
 			t.Fatalf("send: %v", err)
 		}
 
-		// Channel transport delivers asynchronously via goroutines
-		time.Sleep(50 * time.Millisecond)
-
-		aliceStats, _ := alice.Stats(ctx)
-		if aliceStats.TotalMessages != 1 {
-			t.Errorf("expected alice total=1, got %d", aliceStats.TotalMessages)
-		}
-
-		bobStats, _ := bob.Stats(ctx)
-		if bobStats.TotalMessages != 1 {
-			t.Errorf("expected bob total=1, got %d", bobStats.TotalMessages)
-		}
-		if bobStats.UnreadCount != 1 {
-			t.Errorf("expected bob unread=1, got %d", bobStats.UnreadCount)
-		}
+		// Channel transport delivers events asynchronously via goroutines; poll
+		// the caches until the event-driven updates land.
+		eventually(t, 2*time.Second, 5*time.Millisecond, func() bool {
+			aliceStats, _ := alice.Stats(ctx)
+			bobStats, _ := bob.Stats(ctx)
+			return aliceStats.TotalMessages == 1 &&
+				bobStats.TotalMessages == 1 && bobStats.UnreadCount == 1
+		}, "send did not update sender and recipient caches")
 	})
 
 	t.Run("read decrements unread", func(t *testing.T) {
@@ -322,17 +310,12 @@ func TestStatsEventUpdates(t *testing.T) {
 			t.Fatalf("mark read: %v", err)
 		}
 
-		time.Sleep(50 * time.Millisecond)
-
-		bobStats, _ := bob.Stats(ctx)
-		if bobStats.UnreadCount != 0 {
-			t.Errorf("expected bob unread=0, got %d", bobStats.UnreadCount)
-		}
-		// Verify per-folder unread also decremented
-		inboxCounts := bobStats.Folders[store.FolderInbox]
-		if inboxCounts.Unread != 0 {
-			t.Errorf("expected inbox unread=0, got %d", inboxCounts.Unread)
-		}
+		// Poll until the read event decrements the unread counters.
+		eventually(t, 2*time.Second, 5*time.Millisecond, func() bool {
+			bobStats, _ := bob.Stats(ctx)
+			return bobStats.UnreadCount == 0 &&
+				bobStats.Folders[store.FolderInbox].Unread == 0
+		}, "read did not decrement unread counts")
 	})
 
 	t.Run("permanent delete decrements total", func(t *testing.T) {
@@ -346,17 +329,23 @@ func TestStatsEventUpdates(t *testing.T) {
 			t.Fatalf("send: %v", err)
 		}
 
-		time.Sleep(50 * time.Millisecond)
+		// Wait until the send event has propagated to the stats cache: the
+		// cached total must agree with the actual number of inbox messages.
+		// This avoids snapshotting a stale total while the event is in flight.
+		var totalBefore int64
+		eventually(t, 2*time.Second, 5*time.Millisecond, func() bool {
+			inbox, _ := bob.Folder(ctx, store.FolderInbox, store.ListOptions{})
+			n := int64(len(inbox.All()))
+			if n == 0 {
+				return false
+			}
+			bobStatsBefore, _ := bob.Stats(ctx)
+			totalBefore = bobStatsBefore.TotalMessages
+			return totalBefore == n
+		}, "send event never reached bob's stats cache")
 
 		inbox, _ := bob.Folder(ctx, store.FolderInbox, store.ListOptions{})
-		msgs := inbox.All()
-		if len(msgs) == 0 {
-			t.Fatal("expected messages")
-		}
-
-		msgID := msgs[0].GetID()
-		bobStatsBefore, _ := bob.Stats(ctx)
-		totalBefore := bobStatsBefore.TotalMessages
+		msgID := inbox.All()[0].GetID()
 
 		if err := bob.Delete(ctx, msgID); err != nil {
 			t.Fatalf("delete: %v", err)
@@ -365,12 +354,11 @@ func TestStatsEventUpdates(t *testing.T) {
 			t.Fatalf("permanent delete: %v", err)
 		}
 
-		time.Sleep(50 * time.Millisecond)
-
-		bobStatsAfter, _ := bob.Stats(ctx)
-		if bobStatsAfter.TotalMessages != totalBefore-1 {
-			t.Errorf("expected total=%d, got %d", totalBefore-1, bobStatsAfter.TotalMessages)
-		}
+		// Poll until the permanent-delete event decrements the cached total.
+		eventually(t, 2*time.Second, 5*time.Millisecond, func() bool {
+			bobStatsAfter, _ := bob.Stats(ctx)
+			return bobStatsAfter.TotalMessages == totalBefore-1
+		}, "permanent delete did not decrement cached total")
 	})
 }
 

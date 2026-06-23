@@ -25,6 +25,30 @@ test-coverage:
     go test -coverprofile=coverage.out ./...
     go tool cover -html=coverage.out -o coverage.html
 
+# Run the fast, dependency-free smoke suite (and runnable examples)
+smoke:
+    go test -race -run '^(TestSmoke|Example)' -count=1 .
+
+# Spin up backing services, run all integration suites, then tear down
+test-integration:
+    docker compose -f docker-compose.test.yml up -d --wait
+    MONGO_URI=mongodb://localhost:27019/?directConnection=true \
+    POSTGRES_DSN=postgres://mailbox_test:mailbox_test@localhost:5433/mailbox_test?sslmode=disable \
+        go test -tags integration -race ./store/... ; \
+        status=$? ; \
+        docker compose -f docker-compose.test.yml down -v ; \
+        exit $status
+
+# Run MongoDB integration tests only (expects services from docker-compose.test.yml)
+test-mongo:
+    MONGO_URI=mongodb://localhost:27019/?directConnection=true \
+        go test -tags integration -race ./store/mongo/...
+
+# Run PostgreSQL integration tests only (expects services from docker-compose.test.yml)
+test-pg:
+    POSTGRES_DSN=postgres://mailbox_test:mailbox_test@localhost:5433/mailbox_test?sslmode=disable \
+        go test -tags integration -race ./store/postgres/...
+
 # Run benchmarks (pass extra flags via ARGS, e.g. just bench BenchmarkSendMessage)
 bench *ARGS:
     go test -run='^$' -bench='{{ARGS:-\.}}' -benchmem -benchtime=3s .
