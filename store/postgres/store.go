@@ -179,16 +179,37 @@ func (s *Store) ensureCoreSchema(ctx context.Context) error {
 		if !validIdentifier.MatchString(s.opts.outboxTable) {
 			return fmt.Errorf("invalid outbox table name: %q", s.opts.outboxTable)
 		}
+		// The schema must match exactly what the event/v3 outbox PostgresStore
+		// (returned by EventOutboxStore) reads and writes: it inserts
+		// (event_name, event_id, payload, metadata, status, created_at, priority)
+		// and selects/updates published_at, retry_count, and last_error. A
+		// mismatch silently breaks the transactional-outbox publish path.
 		outboxDDL := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 			id BIGSERIAL PRIMARY KEY,
-			name TEXT NOT NULL,
-			message_id TEXT NOT NULL,
-			payload JSONB NOT NULL,
-			status TEXT NOT NULL DEFAULT 'pending',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			event_name VARCHAR(255) NOT NULL,
+			event_id VARCHAR(36) NOT NULL,
+			payload BYTEA NOT NULL,
+			metadata JSONB,
+			status VARCHAR(20) NOT NULL DEFAULT 'pending',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			published_at TIMESTAMPTZ,
+			retry_count INT NOT NULL DEFAULT 0,
+			last_error TEXT,
+			priority INT NOT NULL DEFAULT 0
 		)`, s.opts.outboxTable)
 		if _, err := s.db.ExecContext(ctx, outboxDDL); err != nil {
 			return fmt.Errorf("create outbox table: %w", err)
+		}
+
+		// Partial index mirroring the event/v3 GetPending/ProcessPending query
+		// (status IN ('pending','failed') ORDER BY priority DESC, created_at).
+		outboxIdx := fmt.Sprintf(`
+			CREATE INDEX IF NOT EXISTS idx_%s_pending
+			ON %s(status, priority DESC, created_at)
+			WHERE status IN ('pending', 'failed')
+		`, s.opts.outboxTable, s.opts.outboxTable)
+		if _, err := s.db.ExecContext(ctx, outboxIdx); err != nil {
+			return fmt.Errorf("create outbox pending index: %w", err)
 		}
 	}
 

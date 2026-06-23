@@ -29,6 +29,10 @@ test-coverage:
     go test -coverprofile=coverage.out ./...
     go tool cover -html=coverage.out -o coverage.html
 
+# Enforce per-package unit-coverage floors on the core packages
+cover-check:
+    ./scripts/coverage_gate.sh
+
 # Run the fast, dependency-free smoke suite (and runnable examples)
 smoke:
     go test -race -run '^(TestSmoke|Example)' -count=1 .

@@ -3,6 +3,9 @@ package mailbox_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,10 +15,71 @@ import (
 	notifymem "github.com/rbaliyan/mailbox/notify/memory"
 	"github.com/rbaliyan/mailbox/store"
 	"github.com/rbaliyan/mailbox/store/memory"
+	mongostore "github.com/rbaliyan/mailbox/store/mongo"
+	pgstore "github.com/rbaliyan/mailbox/store/postgres"
 
 	"github.com/rbaliyan/event/v3"
 	"github.com/rbaliyan/event/v3/transport/channel"
+
+	"github.com/jmoiron/sqlx"
+	_ "github.com/lib/pq"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	mongoopts "go.mongodb.org/mongo-driver/v2/mongo/options"
 )
+
+// smokeStoreSeq makes per-test table/collection names process-unique so a
+// DSN-gated smoke run never collides with concurrently running integration
+// tests against the same database.
+var smokeStoreSeq uint64
+
+func uniqueSmokeName(prefix string) string {
+	n := atomic.AddUint64(&smokeStoreSeq, 1)
+	return fmt.Sprintf("%s_%d_%d", prefix, time.Now().UnixNano(), n)
+}
+
+// sendAndGetOverStore runs the core send->get assertion against an arbitrary
+// connected store, used by the production-backend constructor smokes. It builds
+// a mailbox service over the store, sends a message from alice to bob, fetches
+// it back from bob's inbox, and asserts the subject round-trips.
+func sendAndGetOverStore(t *testing.T, st store.Store) {
+	t.Helper()
+	ctx := context.Background()
+
+	svc, err := mailbox.New(mailbox.Config{}, mailbox.WithStore(st))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := svc.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = svc.Close(ctx) })
+
+	const subject = "Backend smoke"
+	if _, err := svc.Client("alice").SendMessage(ctx, mailbox.SendRequest{
+		RecipientIDs: []string{"bob"},
+		Subject:      subject,
+		Body:         "body",
+	}); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	inbox, err := svc.Client("bob").Folder(ctx, store.FolderInbox, store.ListOptions{})
+	if err != nil {
+		t.Fatalf("Folder(inbox): %v", err)
+	}
+	msgs := inbox.All()
+	if len(msgs) != 1 {
+		t.Fatalf("bob inbox count = %d, want 1", len(msgs))
+	}
+
+	got, err := svc.Client("bob").Get(ctx, msgs[0].GetID())
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.GetSubject() != subject {
+		t.Fatalf("got subject = %q, want %q", got.GetSubject(), subject)
+	}
+}
 
 // eventuallySmoke polls cond until it returns true or the timeout elapses.
 // It fails the test with msg if the condition never holds. This is the
@@ -531,4 +595,85 @@ func TestSmoke_OutboxRelay_MemoryStore(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("did not observe relayed MessageSent event")
 	}
+}
+
+// TestSmoke_PostgresConstructor exercises the PostgreSQL store construction path
+// (pgstore.New + Connect + send/get) against a real database. It is hermetic by
+// default: with POSTGRES_DSN unset it skips, keeping the fast smoke run free of
+// external dependencies while still compiling in the default (no-tag) build.
+//
+// Set POSTGRES_DSN to run it, e.g.:
+//
+//	POSTGRES_DSN=postgres://mailbox_test:mailbox_test@localhost:5433/mailbox_test?sslmode=disable \
+//	    go test -run TestSmoke_PostgresConstructor .
+func TestSmoke_PostgresConstructor(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_DSN to run the PostgreSQL constructor smoke")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db, err := sqlx.ConnectContext(ctx, "postgres", dsn)
+	if err != nil {
+		t.Fatalf("postgres connect: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	table := uniqueSmokeName("smoke_messages")
+	outboxTable := uniqueSmokeName("smoke_outbox")
+	st := pgstore.New(db,
+		pgstore.WithTable(table),
+		pgstore.WithOutboxTable(outboxTable),
+	)
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		_, _ = db.ExecContext(cctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", table))
+		_, _ = db.ExecContext(cctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", outboxTable))
+	})
+
+	sendAndGetOverStore(t, st)
+}
+
+// TestSmoke_MongoConstructor exercises the MongoDB store construction path
+// (mongostore.New + Connect + send/get) against a real database. Like the
+// PostgreSQL smoke it skips when MONGO_URI is unset, so the default smoke run
+// stays hermetic while the construction path is covered when a URI is provided.
+//
+// Set MONGO_URI to run it, e.g.:
+//
+//	MONGO_URI=mongodb://localhost:27019/?directConnection=true \
+//	    go test -run TestSmoke_MongoConstructor .
+func TestSmoke_MongoConstructor(t *testing.T) {
+	uri := os.Getenv("MONGO_URI")
+	if uri == "" {
+		t.Skip("set MONGO_URI to run the MongoDB constructor smoke")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client, err := mongo.Connect(mongoopts.Client().ApplyURI(uri))
+	if err != nil {
+		t.Fatalf("mongo connect: %v", err)
+	}
+	if err := client.Ping(ctx, nil); err != nil {
+		t.Fatalf("mongo ping: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Disconnect(context.Background()) })
+
+	coll := uniqueSmokeName("smoke_messages")
+	st := mongostore.New(client,
+		mongostore.WithDatabase("mailbox_smoke"),
+		mongostore.WithCollection(coll),
+		mongostore.WithOutboxCollection(coll+"_outbox"),
+	)
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		_ = client.Database("mailbox_smoke").Collection(coll).Drop(cctx)
+		_ = client.Database("mailbox_smoke").Collection(coll + "_outbox").Drop(cctx)
+	})
+
+	sendAndGetOverStore(t, st)
 }

@@ -775,13 +775,16 @@ func TestGracefulShutdown(t *testing.T) {
 	// Start a send
 	var wg sync.WaitGroup
 	wg.Add(1)
+	started := make(chan struct{})
 	go func() {
 		defer wg.Done()
+		close(started)
 		_, _ = draft.Send(ctx)
 	}()
 
-	// Give it a moment to start
-	time.Sleep(10 * time.Millisecond)
+	// Wait for the goroutine to be scheduled before closing rather than
+	// sleeping a fixed interval (faster and not flaky under load).
+	<-started
 
 	// Close should wait for in-flight operations
 	closeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)

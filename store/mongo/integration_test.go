@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rbaliyan/event-mongodb/outbox"
+	"github.com/rbaliyan/event/v3/transport"
 	"github.com/rbaliyan/mailbox/store"
 	"github.com/rbaliyan/mailbox/store/storetest"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -109,4 +111,33 @@ func TestMongoConcurrency(t *testing.T) {
 func TestMongoOutbox(t *testing.T) {
 	client := dialClient(t)
 	storetest.RunOutboxSuite(t, sharedStoreFactory(t, client, WithOutbox(true)))
+}
+
+// TestMongoFailure runs the failure-mode suite (context cancellation/deadline)
+// against live MongoDB, where the driver propagates context cancellation.
+func TestMongoFailure(t *testing.T) {
+	client := dialClient(t)
+	storetest.RunFailureSuite(t, sharedStoreFactory(t, client))
+}
+
+// mongoRelayFactory builds a real event-mongodb MongoRelay that reads the same
+// outbox collection the store writes to and publishes to the supplied transport.
+// Poll mode works against the single-node replica set in docker-compose.test.yml.
+func mongoRelayFactory(t *testing.T, s store.Store, tr transport.Transport) storetest.RelayRunner {
+	t.Helper()
+	ms, ok := s.(*Store)
+	if !ok {
+		t.Fatalf("mongoRelayFactory: store is %T, want *Store", s)
+	}
+	outboxStore, err := outbox.NewMongoStore(ms.db, outbox.WithCollection(ms.opts.outboxCollection))
+	if err != nil {
+		t.Fatalf("create mongo outbox store: %v", err)
+	}
+	return outbox.NewMongoRelay(outboxStore, tr).WithMode(outbox.RelayModePoll)
+}
+
+// TestMongoRelay runs the end-to-end outbox relay suite against live MongoDB.
+func TestMongoRelay(t *testing.T) {
+	client := dialClient(t)
+	storetest.RunRelaySuite(t, sharedStoreFactory(t, client, WithOutbox(true)), mongoRelayFactory)
 }

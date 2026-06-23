@@ -22,6 +22,8 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
+	"github.com/rbaliyan/event/v3/outbox"
+	"github.com/rbaliyan/event/v3/transport"
 	"github.com/rbaliyan/mailbox/store"
 	"github.com/rbaliyan/mailbox/store/storetest"
 )
@@ -101,4 +103,32 @@ func TestPostgresConcurrency(t *testing.T) {
 func TestPostgresOutbox(t *testing.T) {
 	db := dialDB(t)
 	storetest.RunOutboxSuite(t, sharedStoreFactory(t, db, WithOutbox(true)))
+}
+
+// TestPostgresFailure runs the failure-mode suite (context cancellation/deadline)
+// against live PostgreSQL, where database/sql propagates context cancellation.
+func TestPostgresFailure(t *testing.T) {
+	db := dialDB(t)
+	storetest.RunFailureSuite(t, sharedStoreFactory(t, db))
+}
+
+// pgRelayFactory builds a real event/v3 outbox Relay that reads the same outbox
+// table the store writes to and publishes to the supplied transport.
+func pgRelayFactory(t *testing.T, s store.Store, tr transport.Transport) storetest.RelayRunner {
+	t.Helper()
+	ps, ok := s.(*Store)
+	if !ok {
+		t.Fatalf("pgRelayFactory: store is %T, want *Store", s)
+	}
+	outboxStore, err := outbox.NewPostgresStore(ps.db.DB, outbox.WithTable(ps.opts.outboxTable))
+	if err != nil {
+		t.Fatalf("create postgres outbox store: %v", err)
+	}
+	return outbox.NewRelay(outboxStore, tr, outbox.WithBatchSize(100))
+}
+
+// TestPostgresRelay runs the end-to-end outbox relay suite against live PostgreSQL.
+func TestPostgresRelay(t *testing.T) {
+	db := dialDB(t)
+	storetest.RunRelaySuite(t, sharedStoreFactory(t, db, WithOutbox(true)), pgRelayFactory)
 }

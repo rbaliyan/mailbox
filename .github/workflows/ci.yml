@@ -43,6 +43,9 @@ jobs:
       - name: Test
         run: go test -v -race ./...
 
+      - name: Coverage gate
+        run: ./scripts/coverage_gate.sh
+
   integration:
     name: Integration
     runs-on: ubuntu-latest

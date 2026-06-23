@@ -203,8 +203,21 @@ func TestEnforceQuotas(t *testing.T) {
 		}
 	}
 
-	// Wait for messages to age past the threshold.
-	time.Sleep(5 * time.Millisecond)
+	// Wait for messages to age past the 1ms DeleteOlderThan threshold rather
+	// than sleeping a fixed interval: poll until every inbox message is old
+	// enough to be eligible for deletion.
+	eventually(t, time.Second, time.Millisecond, func() bool {
+		inbox, err := svc.Client("recipient").Folder(ctx, store.FolderInbox, store.ListOptions{})
+		if err != nil || len(inbox.All()) == 0 {
+			return false
+		}
+		for _, msg := range inbox.All() {
+			if time.Since(msg.GetCreatedAt()) <= time.Millisecond {
+				return false
+			}
+		}
+		return true
+	}, "messages did not age past the quota threshold")
 
 	// Enforce quotas.
 	result, err := svc.EnforceQuotas(ctx, []string{"recipient"})
