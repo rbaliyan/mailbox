@@ -52,9 +52,9 @@ func (s *Store) Get(ctx context.Context, id string) (store.Message, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := bson.ObjectIDFromHex(id)
+	oid, err := parseID(id)
 	if err != nil {
-		return nil, store.ErrInvalidID
+		return nil, err
 	}
 
 	filter := bson.M{

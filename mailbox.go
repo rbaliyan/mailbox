@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/rbaliyan/event/v3"
+	"github.com/rbaliyan/event/v3/transport"
 	"github.com/rbaliyan/event/v3/transport/noop"
 	eventredis "github.com/rbaliyan/event/v3/transport/redis"
 	"github.com/rbaliyan/mailbox/notify"
@@ -378,7 +379,11 @@ func (s *service) Close(ctx context.Context) error {
 	// break events for other services sharing the same global events.
 	// For externally-provided buses, the caller is responsible for closing.
 	if s.eventBus != nil && s.opts.eventBus == nil && (s.opts.eventTransport != nil || s.opts.redisClient != nil) {
-		if err := s.eventBus.Close(ctx); err != nil {
+		// The bus closes its transport before unregistering events, so the
+		// per-event unregister calls report transport.ErrTransportClosed. Those
+		// are benign during shutdown (the transport is already closed and its
+		// resources released); only surface a genuine bus-close failure.
+		if err := s.eventBus.Close(ctx); err != nil && !allTransportClosed(err) {
 			errs = append(errs, fmt.Errorf("close event bus: %w", err))
 		}
 	}
@@ -388,6 +393,29 @@ func (s *service) Close(ctx context.Context) error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// allTransportClosed reports whether err consists solely of
+// transport.ErrTransportClosed errors. The event bus unregisters events after
+// closing its transport during shutdown, producing these benign errors; any
+// other error (or an empty/nil error) returns false so it is surfaced.
+func allTransportClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		leaves := joined.Unwrap()
+		if len(leaves) == 0 {
+			return false
+		}
+		for _, e := range leaves {
+			if !errors.Is(e, transport.ErrTransportClosed) {
+				return false
+			}
+		}
+		return true
+	}
+	return errors.Is(err, transport.ErrTransportClosed)
 }
 
 // Client returns a mailbox client for the given user.

@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
-	"github.com/lib/pq"
 	"github.com/rbaliyan/mailbox/store"
 )
 
@@ -256,6 +255,20 @@ func (s *Store) checkConnected() error {
 	return nil
 }
 
+// validateID checks that id is a usable message identifier. An empty id is
+// rejected with ErrInvalidID, matching the in-memory backend. A non-empty but
+// malformed id (not a UUID) cannot correspond to any stored row, so it is
+// reported as ErrNotFound for cross-backend consistency.
+func validateID(id string) error {
+	if id == "" {
+		return store.ErrInvalidID
+	}
+	if _, err := uuid.Parse(id); err != nil {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
 // txCtxKey carries a *sql.Tx through context for transaction propagation.
 type txCtxKey struct{}
 
@@ -294,9 +307,9 @@ func (s *Store) GetDraft(ctx context.Context, id string) (store.DraftMessage, er
 		return nil, err
 	}
 
-	// Validate UUID
-	if _, err := uuid.Parse(id); err != nil {
-		return nil, store.ErrInvalidID
+	// Validate ID
+	if err := validateID(id); err != nil {
+		return nil, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
@@ -387,7 +400,7 @@ func (s *Store) SaveDraft(ctx context.Context, draft store.DraftMessage) (store.
 
 		err := s.exec(ctx).QueryRowContext(ctx, query,
 			msg.id, msg.ownerID, msg.senderID, msg.subject, msg.body, headersJSON, metadataJSON,
-			msg.status, msg.folderID, pq.Array(msg.recipientIDs), pq.Array(msg.tags),
+			msg.status, msg.folderID, textArray(msg.recipientIDs), textArray(msg.tags),
 			attachmentsJSON, true, msg.threadID, msg.replyToID,
 			msg.externalID, msg.expiresAt, msg.availableAt, msg.createdAt, msg.updatedAt,
 		).Scan(&msg.id)
@@ -407,7 +420,7 @@ func (s *Store) SaveDraft(ctx context.Context, draft store.DraftMessage) (store.
 
 		var returnedID string
 		err := s.exec(ctx).QueryRowContext(ctx, query,
-			msg.subject, msg.body, headersJSON, metadataJSON, pq.Array(msg.recipientIDs),
+			msg.subject, msg.body, headersJSON, metadataJSON, textArray(msg.recipientIDs),
 			attachmentsJSON, msg.threadID, msg.replyToID,
 			msg.externalID, msg.expiresAt, msg.availableAt, msg.updatedAt, msg.id,
 		).Scan(&returnedID)
@@ -427,8 +440,8 @@ func (s *Store) DeleteDraft(ctx context.Context, id string) error {
 		return err
 	}
 
-	if _, err := uuid.Parse(id); err != nil {
-		return store.ErrInvalidID
+	if err := validateID(id); err != nil {
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)

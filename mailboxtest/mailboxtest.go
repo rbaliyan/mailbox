@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/rand"
 	"testing"
+	"time"
 
 	"github.com/rbaliyan/event/v3"
 	"github.com/rbaliyan/event/v3/transport/channel"
@@ -27,6 +28,34 @@ import (
 	"github.com/rbaliyan/mailbox/store/memory"
 	"golang.org/x/crypto/curve25519"
 )
+
+// Eventually polls cond until it returns true or the timeout elapses, failing
+// the test via t.Fatalf with msg if the condition never holds. It is the
+// preferred alternative to time.Sleep for synchronizing on asynchronous work
+// (background goroutines, store polling, notification delivery): it returns as
+// soon as the condition is met, so it is both faster and not flaky under load.
+//
+//	mailboxtest.Eventually(t, time.Second, 5*time.Millisecond, func() bool {
+//	    return len(mailboxtest.Inbox(t, bob)) == 1
+//	}, "message never arrived in bob's inbox")
+func Eventually(t *testing.T, timeout, interval time.Duration, cond func() bool, msg string) {
+	t.Helper()
+	if cond() {
+		return
+	}
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		if cond() {
+			return
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+	}
+	t.Fatalf("mailboxtest: condition not met within %s: %s", timeout, msg)
+}
 
 // NewService creates a connected mailbox service with in-memory store and
 // channel event transport. The service is ready to use immediately.

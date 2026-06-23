@@ -23,8 +23,8 @@ func (s *Store) Get(ctx context.Context, id string) (store.Message, error) {
 		return nil, err
 	}
 
-	if _, err := uuid.Parse(id); err != nil {
-		return nil, store.ErrInvalidID
+	if err := validateID(id); err != nil {
+		return nil, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)

@@ -12,6 +12,17 @@ import (
 	"github.com/rbaliyan/mailbox/store"
 )
 
+// textArray wraps a string slice for insertion into a NOT NULL TEXT[] column.
+// A nil slice is coerced to a non-nil empty slice so pq.Array persists '{}'
+// rather than NULL — messages and drafts may legitimately have no recipients or
+// tags, and the in-memory backend tolerates nil the same way.
+func textArray(values []string) any {
+	if values == nil {
+		values = []string{}
+	}
+	return pq.Array(values)
+}
+
 func (s *Store) CreateMessage(ctx context.Context, data store.MessageData) (store.Message, error) {
 	if err := s.checkConnected(); err != nil {
 		return nil, err
@@ -49,7 +60,7 @@ func (s *Store) CreateMessage(ctx context.Context, data store.MessageData) (stor
 	var returnedID string
 	err = s.exec(ctx).QueryRowContext(ctx, query,
 		id, data.OwnerID, data.SenderID, data.Subject, data.Body, headersJSON, metadataJSON,
-		data.Status, data.FolderID, pq.Array(data.RecipientIDs), pq.Array(data.Tags),
+		data.Status, data.FolderID, textArray(data.RecipientIDs), textArray(data.Tags),
 		attachmentsJSON, false, data.ThreadID, data.ReplyToID, data.ExternalID,
 		data.ExpiresAt, data.AvailableAt, now, now,
 	).Scan(&returnedID)
@@ -137,7 +148,7 @@ func (s *Store) CreateMessages(ctx context.Context, data []store.MessageData) ([
 
 		_, err = tx.ExecContext(ctx, query,
 			id, d.OwnerID, d.SenderID, d.Subject, d.Body, headersJSON, metadataJSON,
-			d.Status, d.FolderID, pq.Array(d.RecipientIDs), pq.Array(d.Tags),
+			d.Status, d.FolderID, textArray(d.RecipientIDs), textArray(d.Tags),
 			attachmentsJSON, false, d.ThreadID, d.ReplyToID, d.ExternalID,
 			d.ExpiresAt, d.AvailableAt, now, now,
 		)
@@ -222,7 +233,7 @@ func (s *Store) CreateMessageIdempotent(ctx context.Context, data store.MessageD
 	var createdAt time.Time
 	err = s.exec(ctx).QueryRowContext(ctx, insertQuery,
 		id, data.OwnerID, data.SenderID, data.Subject, data.Body, headersJSON, metadataJSON,
-		data.Status, data.FolderID, pq.Array(data.RecipientIDs), pq.Array(data.Tags),
+		data.Status, data.FolderID, textArray(data.RecipientIDs), textArray(data.Tags),
 		attachmentsJSON, false, idempotencyKey, data.ThreadID, data.ReplyToID, data.ExternalID,
 		data.ExpiresAt, data.AvailableAt, now, now,
 	).Scan(&returnedID, &createdAt)
@@ -383,13 +394,26 @@ func (s *Store) DeleteMessagesByIDs(ctx context.Context, ids []string) ([]string
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
+	// Drop IDs that are not valid UUIDs: they can never match a stored row, and
+	// passing them to ANY($1) would fail the whole query with a syntax error.
+	// This mirrors the in-memory and MongoDB backends, which skip absent IDs.
+	valid := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, err := uuid.Parse(id); err == nil {
+			valid = append(valid, id)
+		}
+	}
+	if len(valid) == 0 {
+		return nil, nil
+	}
+
 	query := fmt.Sprintf(`
 		DELETE FROM %s
 		WHERE id = ANY($1)
 		RETURNING id
 	`, s.opts.table)
 
-	rows, err := s.exec(ctx).QueryContext(ctx, query, pq.Array(ids))
+	rows, err := s.exec(ctx).QueryContext(ctx, query, pq.Array(valid))
 	if err != nil {
 		return nil, fmt.Errorf("delete messages by IDs: %w", err)
 	}

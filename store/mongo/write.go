@@ -21,9 +21,9 @@ func (s *Store) MarkRead(ctx context.Context, id string, read bool) error {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := bson.ObjectIDFromHex(id)
+	oid, err := parseID(id)
 	if err != nil {
-		return store.ErrInvalidID
+		return err
 	}
 
 	now := time.Now().UTC()
@@ -76,9 +76,9 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string, op
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := bson.ObjectIDFromHex(id)
+	oid, err := parseID(id)
 	if err != nil {
-		return store.ErrInvalidID
+		return err
 	}
 
 	filter := bson.M{
@@ -130,9 +130,9 @@ func (s *Store) AddTag(ctx context.Context, id string, tagID string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := bson.ObjectIDFromHex(id)
+	oid, err := parseID(id)
 	if err != nil {
-		return store.ErrInvalidID
+		return err
 	}
 
 	filter := bson.M{
@@ -165,9 +165,9 @@ func (s *Store) RemoveTag(ctx context.Context, id string, tagID string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := bson.ObjectIDFromHex(id)
+	oid, err := parseID(id)
 	if err != nil {
-		return store.ErrInvalidID
+		return err
 	}
 
 	filter := bson.M{
@@ -200,9 +200,9 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := bson.ObjectIDFromHex(id)
+	oid, err := parseID(id)
 	if err != nil {
-		return store.ErrInvalidID
+		return err
 	}
 
 	filter := bson.M{
@@ -238,9 +238,9 @@ func (s *Store) HardDelete(ctx context.Context, id string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := bson.ObjectIDFromHex(id)
+	oid, err := parseID(id)
 	if err != nil {
-		return store.ErrInvalidID
+		return err
 	}
 
 	filter := bson.M{
@@ -303,9 +303,9 @@ func (s *Store) Restore(ctx context.Context, id string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := bson.ObjectIDFromHex(id)
+	oid, err := parseID(id)
 	if err != nil {
-		return store.ErrInvalidID
+		return err
 	}
 
 	// Read the message to determine the correct restore folder

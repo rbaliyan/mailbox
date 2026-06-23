@@ -611,18 +611,16 @@ func Example_notifications() {
 	}
 	defer stream.Close()
 
-	// Send a message to bob in the background.
-	go func() {
-		time.Sleep(150 * time.Millisecond)
-		alice := svc.Client("alice")
-		alice.SendMessage(ctx, mailbox.SendRequest{
-			RecipientIDs: []string{"bob"},
-			Subject:      "Real-time!",
-			Body:         "body",
-		})
-	}()
+	// Send a message to bob. The stream's store poller backfills persisted
+	// events, so no artificial delay is needed before reading.
+	alice := svc.Client("alice")
+	alice.SendMessage(ctx, mailbox.SendRequest{
+		RecipientIDs: []string{"bob"},
+		Subject:      "Real-time!",
+		Body:         "body",
+	})
 
-	// Read notifications until we get the received event.
+	// Block on Next until we get the received event.
 	// Multiple events may fire (sent, received) — find the one for bob.
 	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -702,10 +700,9 @@ func Example_sseServer() {
 		done <- n > 0
 	}()
 
-	// Give the SSE client time to connect.
-	time.Sleep(200 * time.Millisecond)
-
-	// Send a message to trigger an SSE event.
+	// Send a message to trigger an SSE event. No connect delay is needed: the
+	// notification is persisted, and the SSE handler's stream poller backfills
+	// it from the store regardless of connection ordering.
 	alice := svc.Client("alice")
 	alice.SendMessage(ctx, mailbox.SendRequest{
 		RecipientIDs: []string{"bob"},

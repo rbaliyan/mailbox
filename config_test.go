@@ -11,6 +11,31 @@ import (
 	"github.com/rbaliyan/mailbox/store/memory"
 )
 
+// eventually polls cond until it returns true or the timeout elapses, failing
+// the test via t.Fatalf with msg if the condition never holds. It is the
+// in-package equivalent of mailboxtest.Eventually (which cannot be imported
+// here because mailboxtest depends on this package). Use it instead of
+// time.Sleep to synchronize on background goroutines: it returns as soon as the
+// condition is met, so it is both faster and not flaky under load.
+func eventually(t *testing.T, timeout, interval time.Duration, cond func() bool, msg string) {
+	t.Helper()
+	if cond() {
+		return
+	}
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		if cond() {
+			return
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+	}
+	t.Fatalf("condition not met within %s: %s", timeout, msg)
+}
+
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 	if cfg.TrashCleanupInterval != 0 {
@@ -63,11 +88,33 @@ func TestNewWithConfig(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("connect and close with background tasks", func(t *testing.T) {
-		cfg := Config{
-			TrashCleanupInterval:          100 * time.Millisecond,
-			ExpiredMessageCleanupInterval: 100 * time.Millisecond,
+		// Seed an aged trash message before Connect so the background trash
+		// cleanup goroutine has observable work to do.
+		memStore := memory.New()
+		if err := memStore.Connect(ctx); err != nil {
+			t.Fatalf("connect store: %v", err)
 		}
-		svc, err := New(cfg, WithStore(memory.New()))
+		msg, err := memStore.CreateMessage(ctx, store.MessageData{
+			OwnerID:  "alice",
+			SenderID: "alice",
+			Subject:  "Aged",
+			Body:     "Body",
+			FolderID: store.FolderTrash,
+			Status:   store.MessageStatusSent,
+		})
+		if err != nil {
+			t.Fatalf("create message: %v", err)
+		}
+		memStore.AgeMessagesByID(31*24*time.Hour, msg.GetID())
+		if err := memStore.Close(ctx); err != nil {
+			t.Fatalf("close store: %v", err)
+		}
+
+		cfg := Config{
+			TrashCleanupInterval:          50 * time.Millisecond,
+			ExpiredMessageCleanupInterval: 50 * time.Millisecond,
+		}
+		svc, err := New(cfg, WithStore(memStore))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -76,8 +123,12 @@ func TestNewWithConfig(t *testing.T) {
 			t.Fatalf("connect failed: %v", err)
 		}
 
-		// Let background tasks tick at least once
-		time.Sleep(150 * time.Millisecond)
+		// Background trash cleanup must remove the aged message at least once,
+		// proving the goroutine actually ran.
+		eventually(t, 2*time.Second, 10*time.Millisecond, func() bool {
+			_, getErr := memStore.Get(ctx, msg.GetID())
+			return errors.Is(getErr, store.ErrNotFound)
+		}, "background trash cleanup never removed the aged message")
 
 		// Close should stop goroutines and not hang
 		if err := svc.Close(ctx); err != nil {
@@ -138,13 +189,11 @@ func TestBackgroundTrashCleanup(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 
-	// Wait for background cleanup to tick
-	time.Sleep(250 * time.Millisecond)
-
-	_, storeErr := memStore.Get(ctx, msg.GetID())
-	if !errors.Is(storeErr, store.ErrNotFound) {
-		t.Errorf("expected store.ErrNotFound after background trash cleanup, got %v", storeErr)
-	}
+	// Wait for background cleanup to remove the aged trash message.
+	eventually(t, 2*time.Second, 10*time.Millisecond, func() bool {
+		_, getErr := memStore.Get(ctx, msg.GetID())
+		return errors.Is(getErr, store.ErrNotFound)
+	}, "background trash cleanup never removed the aged message")
 
 	if err := svc.Close(ctx); err != nil {
 		t.Fatalf("close: %v", err)
@@ -192,13 +241,11 @@ func TestBackgroundExpiredMessageCleanup(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 
-	// Wait for background cleanup to tick
-	time.Sleep(250 * time.Millisecond)
-
-	_, storeErr := memStore.Get(ctx, msg.GetID())
-	if !errors.Is(storeErr, store.ErrNotFound) {
-		t.Errorf("expected store.ErrNotFound after background expired cleanup, got %v", storeErr)
-	}
+	// Wait for background cleanup to remove the expired message.
+	eventually(t, 2*time.Second, 10*time.Millisecond, func() bool {
+		_, getErr := memStore.Get(ctx, msg.GetID())
+		return errors.Is(getErr, store.ErrNotFound)
+	}, "background expired cleanup never removed the message")
 
 	if err := svc.Close(ctx); err != nil {
 		t.Fatalf("close: %v", err)
@@ -250,13 +297,10 @@ func TestBackgroundQuotaEnforcement(t *testing.T) {
 			t.Fatalf("connect: %v", err)
 		}
 
-		// Wait for at least one enforcement tick
-		time.Sleep(120 * time.Millisecond)
-
-		calls := atomic.LoadInt64(&lister.calls)
-		if calls == 0 {
-			t.Error("expected QuotaUserLister.ListUsers to be called at least once")
-		}
+		// The enforcement goroutine must call ListUsers at least once.
+		eventually(t, 2*time.Second, 10*time.Millisecond, func() bool {
+			return atomic.LoadInt64(&lister.calls) > 0
+		}, "expected QuotaUserLister.ListUsers to be called at least once")
 
 		if err := svc.Close(ctx); err != nil {
 			t.Fatalf("close: %v", err)
@@ -276,9 +320,9 @@ func TestBackgroundQuotaEnforcement(t *testing.T) {
 			t.Fatalf("connect: %v", err)
 		}
 
-		// Should not panic or hang
-		time.Sleep(100 * time.Millisecond)
-
+		// With a nil lister the enforcement goroutine must skip its work without
+		// panicking or hanging. Close waits for the goroutine to drain, so a
+		// clean Close proves it stopped safely.
 		if err := svc.Close(ctx); err != nil {
 			t.Fatalf("close: %v", err)
 		}
