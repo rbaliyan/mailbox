@@ -25,10 +25,12 @@ func NewStatic(recipients map[string]*mailbox.Recipient) *Static {
 }
 
 // Resolve returns recipient information for a single user ID.
+// It returns mailbox.ErrRecipientNotFound (wrapped with the user ID) when the
+// ID is not present, honoring the RecipientResolver contract.
 func (s *Static) Resolve(_ context.Context, userID string) (*mailbox.Recipient, error) {
 	r, ok := s.recipients[userID]
 	if !ok {
-		return nil, fmt.Errorf("recipient not found: %s", userID)
+		return nil, fmt.Errorf("%w: %s", mailbox.ErrRecipientNotFound, userID)
 	}
 	return r, nil
 }

@@ -60,16 +60,9 @@ func TestStatic_Resolve(t *testing.T) {
 	}
 }
 
-// TestStatic_Resolve_MissError documents the error returned for an unknown user.
-//
-// The RecipientResolver interface contract states that Resolve "Returns
-// ErrRecipientNotFound if the user ID is unknown", but resolver.Static instead
-// returns a plain fmt.Errorf value. This characterization test pins the current
-// behavior: errors.Is(err, mailbox.ErrRecipientNotFound) is false today.
-//
-// TODO: real bug — resolver.Static.Resolve should return (or wrap)
-// mailbox.ErrRecipientNotFound to satisfy the RecipientResolver contract;
-// callers using errors.Is cannot currently detect a not-found result.
+// TestStatic_Resolve_MissError verifies the RecipientResolver contract: Resolve
+// returns (a value wrapping) mailbox.ErrRecipientNotFound when the user ID is
+// unknown, so callers can detect a miss with errors.Is.
 func TestStatic_Resolve_MissError(t *testing.T) {
 	s := resolver.NewStatic(fixtureRecipients())
 
@@ -77,8 +70,8 @@ func TestStatic_Resolve_MissError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error for an unknown user")
 	}
-	if errors.Is(err, mailbox.ErrRecipientNotFound) {
-		t.Fatal("resolver.Static now returns ErrRecipientNotFound; update this characterization test to assert the contract")
+	if !errors.Is(err, mailbox.ErrRecipientNotFound) {
+		t.Errorf("error %v does not match mailbox.ErrRecipientNotFound", err)
 	}
 }
 

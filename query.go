@@ -31,6 +31,9 @@ func (m *userMailbox) Get(ctx context.Context, messageID string) (Message, error
 	msg, storeErr := m.service.store.Get(ctx, messageID)
 	if storeErr != nil {
 		getErr = storeErr
+		if errors.Is(storeErr, store.ErrNotFound) {
+			return nil, ErrNotFound
+		}
 		return nil, fmt.Errorf("get message: %w", storeErr)
 	}
 

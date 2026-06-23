@@ -33,21 +33,10 @@ func TestGetMessage_Happy(t *testing.T) {
 	}
 }
 
-// TestGetMessage_NotFound is a characterization test documenting current
-// behavior for a missing message.
-//
-// Expected (per server/errors.go) is codes.NotFound. In practice GetMessage
-// returns codes.Internal: userMailbox.Get (query.go) wraps the store error as
-// fmt.Errorf("get message: %w", store.ErrNotFound), whose chain contains
-// store.ErrNotFound but NOT mailbox.ErrNotFound (mailbox.ErrNotFound is a
-// distinct value that itself wraps store.ErrNotFound). toGRPCError only checks
-// errors.Is(err, mailbox.ErrNotFound), so the mapping misses and the default
-// codes.Internal is returned.
-//
-// TODO: real bug — userMailbox.Get should translate store.ErrNotFound to
-// mailbox.ErrNotFound (as GetDraft already does), or toGRPCError should also
-// match store.ErrNotFound, so GetMessage reports codes.NotFound. See
-// query.go userMailbox.Get and server/errors.go toGRPCError.
+// TestGetMessage_NotFound verifies that requesting a missing message maps to
+// codes.NotFound. userMailbox.Get normalizes the store's not-found error to
+// mailbox.ErrNotFound (as GetDraft does), and toGRPCError maps that sentinel to
+// codes.NotFound.
 func TestGetMessage_NotFound(t *testing.T) {
 	t.Parallel()
 	client := startServer(t, server.AllowAll())
@@ -56,12 +45,8 @@ func TestGetMessage_NotFound(t *testing.T) {
 		UserId:    "bob",
 		MessageId: "does-not-exist",
 	})
-	got := codeOf(t, err)
-	if got == codes.NotFound {
-		t.Fatal("GetMessage now returns codes.NotFound; the not-found mapping is fixed — update this characterization test to assert codes.NotFound")
-	}
-	if got != codes.Internal {
-		t.Errorf("code = %v, want %v (current behavior); see TODO in this test", got, codes.Internal)
+	if got := codeOf(t, err); got != codes.NotFound {
+		t.Errorf("code = %v, want %v", got, codes.NotFound)
 	}
 }
 

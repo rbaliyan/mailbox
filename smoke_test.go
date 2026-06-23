@@ -3,7 +3,6 @@ package mailbox_test
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -40,9 +39,8 @@ func eventuallySmoke(t *testing.T, timeout, interval time.Duration, cond func() 
 func TestSmoke_Lifecycle_MemoryBackend(t *testing.T) {
 	ctx := context.Background()
 
-	// No event transport is wired here so the happy path includes a clean Close
-	// that returns nil. (See TestSmoke_Close_ChannelTransport_ReturnsError for
-	// the channel-transport Close behavior.)
+	// No event transport is wired here, keeping the happy path minimal.
+	// (See TestSmoke_Close_ChannelTransport for the channel-transport Close path.)
 	svc, err := mailbox.New(mailbox.Config{},
 		mailbox.WithStore(memory.New()),
 	)
@@ -165,19 +163,10 @@ func TestSmoke_CriticalJourney(t *testing.T) {
 	}
 }
 
-// TestSmoke_NotFound_Sentinel verifies that Get on an unknown ID returns a
-// not-found error checkable via errors.Is.
-//
-// NOTE 1: the prompt referenced mailbox.ErrMessageNotFound, which does not
-// exist. The exported sentinel is mailbox.ErrNotFound.
-//
-// NOTE 2 (characterization of a real inconsistency): Mailbox.Get wraps the
-// raw store sentinel ("get message: %w", store.ErrNotFound) rather than the
-// package sentinel, so errors.Is(err, store.ErrNotFound) MATCHES while
-// errors.Is(err, mailbox.ErrNotFound) does NOT — even though
-// mailbox.ErrNotFound is documented as the not-found sentinel and itself wraps
-// store.ErrNotFound. GetDraft, by contrast, does normalize to
-// mailbox.ErrNotFound. This test pins the current (real) behavior of Get.
+// TestSmoke_NotFound_Sentinel verifies that Get on an unknown ID returns the
+// mailbox.ErrNotFound sentinel (which itself wraps store.ErrNotFound), so it is
+// checkable via errors.Is against either sentinel. The exported sentinel is
+// mailbox.ErrNotFound.
 func TestSmoke_NotFound_Sentinel(t *testing.T) {
 	ctx := context.Background()
 	svc := mailboxtest.NewService(t, mailbox.Config{})
@@ -186,14 +175,12 @@ func TestSmoke_NotFound_Sentinel(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unknown message ID, got nil")
 	}
-	// The store sentinel matches because Get wraps it directly.
+	if !errors.Is(err, mailbox.ErrNotFound) {
+		t.Fatalf("error = %v, want errors.Is(err, mailbox.ErrNotFound)", err)
+	}
+	// mailbox.ErrNotFound wraps store.ErrNotFound, so this matches too.
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("error = %v, want errors.Is(err, store.ErrNotFound)", err)
-	}
-	// Characterization: Get does NOT surface mailbox.ErrNotFound today.
-	if errors.Is(err, mailbox.ErrNotFound) {
-		t.Fatalf("error = %v unexpectedly matches mailbox.ErrNotFound; "+
-			"Get may now normalize the sentinel — update this characterization test", err)
 	}
 }
 
@@ -428,14 +415,12 @@ func TestSmoke_BackgroundMaintenance_StartStop(t *testing.T) {
 	}
 }
 
-// TestSmoke_Close_ChannelTransport_ReturnsError characterizes a real defect:
-// when a service owns a channel-transport event bus, Close returns a non-nil
-// error ("close event bus: unregister ...: transport closed"). The bus closes
-// the transport before unregistering its subscriptions, so each unregister
-// fails. mailboxtest.NewService and the example tests mask this by ignoring the
-// Close return value. This test pins the current behavior so a future fix is
-// noticed.
-func TestSmoke_Close_ChannelTransport_ReturnsError(t *testing.T) {
+// TestSmoke_Close_ChannelTransport verifies that closing a service which owns a
+// channel-transport event bus returns nil. The bus closes its transport before
+// unregistering subscriptions, so those unregister calls report
+// transport.ErrTransportClosed; Close treats those benign shutdown errors as
+// success while still surfacing any genuine close failure.
+func TestSmoke_Close_ChannelTransport(t *testing.T) {
 	ctx := context.Background()
 
 	svc, err := mailbox.New(mailbox.Config{},
@@ -449,13 +434,8 @@ func TestSmoke_Close_ChannelTransport_ReturnsError(t *testing.T) {
 		t.Fatalf("Connect: %v", err)
 	}
 
-	closeErr := svc.Close(ctx)
-	if closeErr == nil {
-		t.Fatal("Close with a channel transport unexpectedly returned nil; " +
-			"the bus-Close ordering defect may be fixed — remove this characterization test")
-	}
-	if !strings.Contains(closeErr.Error(), "transport closed") {
-		t.Fatalf("Close error = %v, want it to mention \"transport closed\"", closeErr)
+	if closeErr := svc.Close(ctx); closeErr != nil {
+		t.Fatalf("Close with a channel transport returned %v, want nil", closeErr)
 	}
 }
 
