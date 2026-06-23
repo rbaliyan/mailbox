@@ -1,5 +1,9 @@
 # Mailbox build commands
 
+# Container engine for integration services: prefer docker, fall back to podman.
+# Both expose a compatible `compose` subcommand.
+container-engine := `command -v docker >/dev/null 2>&1 && echo docker || echo podman`
+
 # Default recipe
 default:
     @just --list
@@ -30,13 +34,14 @@ smoke:
     go test -race -run '^(TestSmoke|Example)' -count=1 .
 
 # Spin up backing services, run all integration suites, then tear down
+# (uses docker if installed, otherwise podman)
 test-integration:
-    docker compose -f docker-compose.test.yml up -d --wait
+    {{container-engine}} compose -f docker-compose.test.yml up -d --wait
     MONGO_URI=mongodb://localhost:27019/?directConnection=true \
     POSTGRES_DSN=postgres://mailbox_test:mailbox_test@localhost:5433/mailbox_test?sslmode=disable \
         go test -tags integration -race ./store/... ; \
         status=$? ; \
-        docker compose -f docker-compose.test.yml down -v ; \
+        {{container-engine}} compose -f docker-compose.test.yml down -v ; \
         exit $status
 
 # Run MongoDB integration tests only (expects services from docker-compose.test.yml)
