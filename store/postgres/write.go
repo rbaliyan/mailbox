@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/rbaliyan/mailbox/store"
 )
 
@@ -14,8 +13,8 @@ func (s *Store) MarkRead(ctx context.Context, id string, read bool) error {
 		return err
 	}
 
-	if _, err := uuid.Parse(id); err != nil {
-		return store.ErrInvalidID
+	if err := validateID(id); err != nil {
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
@@ -60,8 +59,8 @@ func (s *Store) MoveToFolder(ctx context.Context, id string, folderID string, op
 		return err
 	}
 
-	if _, err := uuid.Parse(id); err != nil {
-		return store.ErrInvalidID
+	if err := validateID(id); err != nil {
+		return err
 	}
 
 	if !store.IsValidFolderID(folderID) {
@@ -125,8 +124,8 @@ func (s *Store) AddTag(ctx context.Context, id string, tagID string) error {
 		return err
 	}
 
-	if _, err := uuid.Parse(id); err != nil {
-		return store.ErrInvalidID
+	if err := validateID(id); err != nil {
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
@@ -164,8 +163,8 @@ func (s *Store) RemoveTag(ctx context.Context, id string, tagID string) error {
 		return err
 	}
 
-	if _, err := uuid.Parse(id); err != nil {
-		return store.ErrInvalidID
+	if err := validateID(id); err != nil {
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
@@ -219,8 +218,8 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		return err
 	}
 
-	if _, err := uuid.Parse(id); err != nil {
-		return store.ErrInvalidID
+	if err := validateID(id); err != nil {
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
@@ -252,8 +251,8 @@ func (s *Store) HardDelete(ctx context.Context, id string) error {
 		return err
 	}
 
-	if _, err := uuid.Parse(id); err != nil {
-		return store.ErrInvalidID
+	if err := validateID(id); err != nil {
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
@@ -281,8 +280,8 @@ func (s *Store) Restore(ctx context.Context, id string) error {
 		return err
 	}
 
-	if _, err := uuid.Parse(id); err != nil {
-		return store.ErrInvalidID
+	if err := validateID(id); err != nil {
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)

@@ -85,23 +85,28 @@ func newStore(t *testing.T, client *mongo.Client, extra ...Option) store.Store {
 	return s
 }
 
+// sharedStoreFactory returns a NewStoreFunc that hands every subtest the same
+// connected store. The conformance and concurrency suites isolate subtests with
+// unique owner IDs, so a single collection is sufficient — and sharing it avoids
+// building the full secondary-index set on a throwaway collection per subtest,
+// which otherwise floods the single-node test server with index builds.
+func sharedStoreFactory(t *testing.T, client *mongo.Client, extra ...Option) storetest.NewStoreFunc {
+	t.Helper()
+	s := newStore(t, client, extra...)
+	return func(t *testing.T) store.Store { return s }
+}
+
 func TestMongoConformance(t *testing.T) {
 	client := dialClient(t)
-	storetest.RunStoreSuite(t, func(t *testing.T) store.Store {
-		return newStore(t, client)
-	})
+	storetest.RunStoreSuite(t, sharedStoreFactory(t, client))
 }
 
 func TestMongoConcurrency(t *testing.T) {
 	client := dialClient(t)
-	storetest.RunConcurrencySuite(t, func(t *testing.T) store.Store {
-		return newStore(t, client)
-	})
+	storetest.RunConcurrencySuite(t, sharedStoreFactory(t, client))
 }
 
 func TestMongoOutbox(t *testing.T) {
 	client := dialClient(t)
-	storetest.RunOutboxSuite(t, func(t *testing.T) store.Store {
-		return newStore(t, client, WithOutbox(true))
-	})
+	storetest.RunOutboxSuite(t, sharedStoreFactory(t, client, WithOutbox(true)))
 }

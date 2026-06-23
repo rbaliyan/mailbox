@@ -77,23 +77,28 @@ func newStore(t *testing.T, db *sqlx.DB, extra ...Option) store.Store {
 	return s
 }
 
+// sharedStoreFactory returns a NewStoreFunc that hands every subtest the same
+// connected store. The conformance and concurrency suites isolate subtests with
+// unique owner IDs, so a single table is sufficient — and sharing it avoids
+// creating a table and its secondary-index set per subtest, which otherwise
+// churns the test database with DDL on throwaway tables.
+func sharedStoreFactory(t *testing.T, db *sqlx.DB, extra ...Option) storetest.NewStoreFunc {
+	t.Helper()
+	s := newStore(t, db, extra...)
+	return func(t *testing.T) store.Store { return s }
+}
+
 func TestPostgresConformance(t *testing.T) {
 	db := dialDB(t)
-	storetest.RunStoreSuite(t, func(t *testing.T) store.Store {
-		return newStore(t, db)
-	})
+	storetest.RunStoreSuite(t, sharedStoreFactory(t, db))
 }
 
 func TestPostgresConcurrency(t *testing.T) {
 	db := dialDB(t)
-	storetest.RunConcurrencySuite(t, func(t *testing.T) store.Store {
-		return newStore(t, db)
-	})
+	storetest.RunConcurrencySuite(t, sharedStoreFactory(t, db))
 }
 
 func TestPostgresOutbox(t *testing.T) {
 	db := dialDB(t)
-	storetest.RunOutboxSuite(t, func(t *testing.T) store.Store {
-		return newStore(t, db, WithOutbox(true))
-	})
+	storetest.RunOutboxSuite(t, sharedStoreFactory(t, db, WithOutbox(true)))
 }

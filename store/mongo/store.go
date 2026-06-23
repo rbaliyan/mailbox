@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,6 +32,12 @@ type Store struct {
 	opts       *options
 	connected  int32
 	logger     *slog.Logger
+
+	// bgCancel stops the background index-build goroutine; bgWG lets Close wait
+	// for it to return so it does not outlive the store (or, in tests, race a
+	// per-test collection drop).
+	bgCancel context.CancelFunc
+	bgWG     sync.WaitGroup
 }
 
 // New creates a new MongoDB store with the provided client.
@@ -66,10 +73,25 @@ func (s *Store) Connect(ctx context.Context) error {
 	s.db = s.client.Database(s.opts.database)
 	s.collection = s.db.Collection(s.opts.collection)
 
-	// Create indexes asynchronously — index creation on large collections can
-	// take a long time and should not block service startup.
+	// Build the idempotency unique index synchronously. It is correctness-critical:
+	// until it exists, concurrent CreateMessageIdempotent upserts on the same
+	// (owner_id, idempotency_key) can both insert, so a failure here aborts Connect.
+	if err := s.ensureIdempotencyIndex(ctx); err != nil {
+		atomic.StoreInt32(&s.connected, 0)
+		return fmt.Errorf("ensure idempotency index: %w", err)
+	}
+
+	// Secondary, performance, and text indexes only affect query speed, not
+	// correctness, and can take a long time to build on large collections — create
+	// them in the background so they do not block service startup. The build is
+	// tied to a cancelable context so Close can signal it to stop from outliving
+	// the store.
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	s.bgCancel = bgCancel
+	s.bgWG.Add(1)
 	go func() { // #nosec G118 — background goroutine intentionally outlives request context
-		if err := s.ensureIndexes(context.Background()); err != nil {
+		defer s.bgWG.Done()
+		if err := s.ensureSecondaryIndexes(bgCtx); err != nil && !errors.Is(err, context.Canceled) {
 			s.logger.Error("failed to ensure indexes", "error", err)
 		}
 	}()
@@ -78,18 +100,60 @@ func (s *Store) Connect(ctx context.Context) error {
 	return nil
 }
 
-// Close marks the store as disconnected.
+// parseID converts a hex string to an ObjectID. An empty id is rejected with
+// ErrInvalidID, matching the in-memory backend. A non-empty but malformed id
+// cannot correspond to any stored document, so it is reported as ErrNotFound for
+// cross-backend consistency (the in-memory and PostgreSQL backends treat any
+// absent id the same way, regardless of its format).
+func parseID(id string) (bson.ObjectID, error) {
+	if id == "" {
+		return bson.ObjectID{}, store.ErrInvalidID
+	}
+	oid, err := bson.ObjectIDFromHex(id)
+	if err != nil {
+		return bson.ObjectID{}, store.ErrNotFound
+	}
+	return oid, nil
+}
+
+// Close marks the store as disconnected and stops the background index build.
 // The caller is responsible for closing the MongoDB client.
 func (s *Store) Close(ctx context.Context) error {
 	if atomic.LoadInt32(&s.connected) == 0 {
 		return nil
 	}
 	atomic.StoreInt32(&s.connected, 0)
+	if s.bgCancel != nil {
+		s.bgCancel()
+	}
+	s.bgWG.Wait()
 	return nil
 }
 
-// ensureIndexes creates required indexes.
-func (s *Store) ensureIndexes(ctx context.Context) error {
+// ensureIdempotencyIndex creates the correctness-critical unique index on
+// (owner_id, idempotency_key) for non-null keys. It is what makes
+// CreateMessageIdempotent's upsert atomic across concurrent callers, so it is
+// built synchronously in Connect and its error is surfaced to the caller.
+func (s *Store) ensureIdempotencyIndex(ctx context.Context) error {
+	idx := mongo.IndexModel{
+		Keys: bson.D{
+			bson.E{Key: "owner_id", Value: 1},
+			bson.E{Key: "idempotency_key", Value: 1},
+		},
+		Options: mongoopts.Index().
+			SetUnique(true).
+			SetPartialFilterExpression(bson.M{"idempotency_key": bson.M{"$exists": true}}),
+	}
+	if _, err := s.collection.Indexes().CreateOne(ctx, idx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ensureSecondaryIndexes creates non-correctness indexes (performance, text, and
+// outbox indexes) in the background. These only affect query speed, so failures
+// are logged rather than surfaced to Connect.
+func (s *Store) ensureSecondaryIndexes(ctx context.Context) error {
 	indexes := []mongo.IndexModel{
 		{Keys: bson.D{bson.E{Key: "owner_id", Value: 1}}},
 		{Keys: bson.D{bson.E{Key: "sender_id", Value: 1}}},
@@ -100,17 +164,6 @@ func (s *Store) ensureIndexes(ctx context.Context) error {
 		{Keys: bson.D{bson.E{Key: "tags", Value: 1}}},
 		{Keys: bson.D{bson.E{Key: "created_at", Value: -1}}},
 		{Keys: bson.D{bson.E{Key: "__is_draft", Value: 1}}},
-		// Idempotency index: unique constraint on (owner_id, idempotency_key) for non-null keys
-		// This enables atomic idempotent message creation without distributed locks
-		{
-			Keys: bson.D{
-				bson.E{Key: "owner_id", Value: 1},
-				bson.E{Key: "idempotency_key", Value: 1},
-			},
-			Options: mongoopts.Index().
-				SetUnique(true).
-				SetPartialFilterExpression(bson.M{"idempotency_key": bson.M{"$exists": true}}),
-		},
 		// Trash cleanup index: for efficient expired trash deletion
 		{Keys: bson.D{
 			bson.E{Key: "folder_id", Value: 1},
@@ -200,9 +253,9 @@ func (s *Store) GetDraft(ctx context.Context, id string) (store.DraftMessage, er
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := bson.ObjectIDFromHex(id)
+	oid, err := parseID(id)
 	if err != nil {
-		return nil, store.ErrInvalidID
+		return nil, err
 	}
 
 	filter := bson.M{
@@ -302,9 +355,9 @@ func (s *Store) DeleteDraft(ctx context.Context, id string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.timeout)
 	defer cancel()
 
-	oid, err := bson.ObjectIDFromHex(id)
+	oid, err := parseID(id)
 	if err != nil {
-		return store.ErrInvalidID
+		return err
 	}
 
 	filter := bson.M{
