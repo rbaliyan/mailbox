@@ -106,18 +106,16 @@ func RunRelaySuite(t *testing.T, newStore NewStoreFunc, relayFactory RelayFactor
 		return evt.Publish(txCtx, relayTestEvent{MessageID: m.GetID(), OwnerID: owner})
 	})
 	if err != nil {
-		// A failure here while routing Event.Publish() into the outbox indicates
-		// the store's outbox storage schema is incompatible with the
+		// A failure here while routing Event.Publish() into the outbox would
+		// indicate the store's outbox storage schema is incompatible with the
 		// event.OutboxStore returned by EventOutboxStore() — i.e. the two halves
 		// of the store's own outbox wiring disagree on the table/collection
-		// shape. This is a real backend defect, not a test-harness problem, so it
-		// is recorded as a captured FINDING and the relay assertions are skipped
-		// rather than masked as a pass. See the suite docs for the full
-		// reproduction.
-		t.Logf("FINDING: writing an event into the outbox via EventOutboxStore() failed: %v", err)
-		t.Logf("FINDING: the store's outbox-table schema (created in Connect) does not match the "+
-			"schema the event.OutboxStore reads/writes; the transactional outbox publish path is broken for this backend")
-		t.Skipf("relay suite cannot proceed: outbox publish path is broken (captured above)")
+		// shape. That is a real backend defect, so it is asserted strictly rather
+		// than masked: the transactional-outbox publish path must succeed for an
+		// outbox-enabled store.
+		t.Fatalf("writing an event into the outbox via EventOutboxStore() failed (the store's "+
+			"outbox-table schema created in Connect must match the schema the event.OutboxStore "+
+			"reads/writes): %v", err)
 	}
 
 	// The committed mutation must be visible.
