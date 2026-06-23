@@ -582,8 +582,19 @@ func Example_eventSubscription() {
 		Body:         "body",
 	})
 
-	// Wait for async event delivery.
-	time.Sleep(100 * time.Millisecond)
+	// Block until both events (sent + received) have been delivered, rather
+	// than sleeping for a fixed duration. The handlers append under mu, so the
+	// count is read under the same lock. A deadline bounds the wait so a
+	// delivery regression fails fast instead of hanging.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		done := len(received) == 2
+		mu.Unlock()
+		if done || time.Now().After(deadline) {
+			break
+		}
+	}
 
 	mu.Lock()
 	sort.Strings(received)

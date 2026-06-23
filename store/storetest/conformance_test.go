@@ -39,3 +39,12 @@ func TestMemoryConcurrency(t *testing.T) {
 func TestMemoryOutbox(t *testing.T) {
 	storetest.RunOutboxSuite(t, newMemoryStore)
 }
+
+// TestMemoryFailure runs the failure-mode suite against the in-memory backend.
+// The in-memory store performs no context-aware I/O, so the suite records that
+// behavioural gap via t.Log (visible with -v) while still proving the store
+// never exposes torn state. Real database backends are asserted strictly under
+// the integration build tag.
+func TestMemoryFailure(t *testing.T) {
+	storetest.RunFailureSuite(t, newMemoryStore)
+}
