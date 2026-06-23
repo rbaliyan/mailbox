@@ -86,6 +86,15 @@ type messageDelta struct {
 	recipientsSet bool
 	headers       map[string]string
 	metadata      map[string]any
+	// Draft linkage and scheduling fields. Each *Set flag records that the
+	// corresponding setter was called so the field is included in update.
+	threadID       *string
+	replyToID      *string
+	externalID     *string
+	expiresAt      *time.Time
+	expiresAtSet   bool
+	availableAt    *time.Time
+	availableAtSet bool
 }
 
 // attachment implements store.Attachment for MongoDB.
@@ -187,6 +196,8 @@ func (m *message) SetTTL(d time.Duration) store.DraftMessage {
 		t := time.Now().UTC().Add(d)
 		m.expiresAt = &t
 	}
+	m.delta.expiresAt = m.expiresAt
+	m.delta.expiresAtSet = true
 	return m
 }
 
@@ -197,11 +208,26 @@ func (m *message) SetScheduleAt(t time.Time) store.DraftMessage {
 		ut := t.UTC()
 		m.availableAt = &ut
 	}
+	m.delta.availableAt = m.availableAt
+	m.delta.availableAtSet = true
 	return m
 }
 
 func (m *message) SetExternalID(id string) store.DraftMessage {
 	m.externalID = id
+	m.delta.externalID = &id
+	return m
+}
+
+func (m *message) SetThreadID(id string) store.DraftMessage {
+	m.threadID = id
+	m.delta.threadID = &id
+	return m
+}
+
+func (m *message) SetReplyToID(id string) store.DraftMessage {
+	m.replyToID = id
+	m.delta.replyToID = &id
 	return m
 }
 
@@ -230,7 +256,12 @@ func (m *message) hasChanges() bool {
 		m.delta.body != nil ||
 		m.delta.recipientsSet ||
 		len(m.delta.headers) > 0 ||
-		len(m.delta.metadata) > 0
+		len(m.delta.metadata) > 0 ||
+		m.delta.threadID != nil ||
+		m.delta.replyToID != nil ||
+		m.delta.externalID != nil ||
+		m.delta.expiresAtSet ||
+		m.delta.availableAtSet
 }
 
 func (m *message) resetDelta() {

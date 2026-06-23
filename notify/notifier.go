@@ -203,6 +203,7 @@ func (n *Notifier) Subscribe(ctx context.Context, userID string, lastEventID str
 		store:        n.opts.store,
 		userID:       userID,
 		lastID:       lastEventID,
+		pollCursor:   lastEventID,
 		pollInterval: n.opts.pollInterval,
 		ctx:          streamCtx,
 		cancel:       cancel,
@@ -219,8 +220,12 @@ func (n *Notifier) Subscribe(ctx context.Context, userID string, lastEventID str
 			select {
 			case s.ch <- evt:
 				s.lastID = evt.ID
+				// Advance the poll cursor so the poller does not re-fetch
+				// events already delivered during backfill.
+				s.pollCursor = evt.ID
 			default:
-				// Buffer full — consumer will pick up via polling.
+				// Buffer full — consumer will pick up via polling. Leave the
+				// poll cursor where it is so the poller re-fetches from here.
 			}
 		}
 	}

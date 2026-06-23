@@ -138,7 +138,9 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 
 	findOpts := mongoopts.Find()
 	if opts.Limit > 0 {
-		findOpts.SetLimit(int64(opts.Limit))
+		// Over-fetch one extra row so we can reliably detect whether more
+		// results exist beyond this page (mirrors the postgres backend).
+		findOpts.SetLimit(int64(opts.Limit) + 1)
 	}
 	if opts.StartAfter == "" && opts.Offset > 0 {
 		findOpts.SetSkip(int64(opts.Offset))
@@ -171,15 +173,27 @@ func (s *Store) Find(ctx context.Context, filters []store.Filter, opts store.Lis
 		return nil, fmt.Errorf("decode messages: %w", err)
 	}
 
+	// Detect "has more" via the over-fetched extra row, then trim it off.
+	hasMore := opts.Limit > 0 && len(docs) > opts.Limit
+	if hasMore {
+		docs = docs[:opts.Limit]
+	}
+
 	messages := make([]store.Message, len(docs))
 	for i := range docs {
 		messages[i] = docToMessage(&docs[i])
 	}
 
+	var nextCursor string
+	if hasMore && len(messages) > 0 {
+		nextCursor = messages[len(messages)-1].GetID()
+	}
+
 	return &store.MessageList{
-		Messages: messages,
-		Total:    total,
-		HasMore:  opts.Limit > 0 && len(messages) >= opts.Limit,
+		Messages:   messages,
+		Total:      total,
+		HasMore:    hasMore,
+		NextCursor: nextCursor,
 	}, nil
 }
 
@@ -324,7 +338,9 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 
 	findOpts := mongoopts.Find()
 	if query.Options.Limit > 0 {
-		findOpts.SetLimit(int64(query.Options.Limit))
+		// Over-fetch one extra row so we can reliably detect whether more
+		// results exist beyond this page (mirrors Find and the postgres backend).
+		findOpts.SetLimit(int64(query.Options.Limit) + 1)
 	}
 	if query.Options.StartAfter == "" && query.Options.Offset > 0 {
 		findOpts.SetSkip(int64(query.Options.Offset))
@@ -354,20 +370,26 @@ func (s *Store) Search(ctx context.Context, query store.SearchQuery) (*store.Mes
 		return nil, fmt.Errorf("decode messages: %w", err)
 	}
 
+	// Detect "has more" via the over-fetched extra row, then trim it off.
+	hasMore := query.Options.Limit > 0 && len(docs) > query.Options.Limit
+	if hasMore {
+		docs = docs[:query.Options.Limit]
+	}
+
 	messages := make([]store.Message, len(docs))
 	for i := range docs {
 		messages[i] = docToMessage(&docs[i])
 	}
 
 	var nextCursor string
-	if query.Options.Limit > 0 && len(messages) >= query.Options.Limit {
+	if hasMore && len(messages) > 0 {
 		nextCursor = messages[len(messages)-1].GetID()
 	}
 
 	return &store.MessageList{
 		Messages:   messages,
 		Total:      total,
-		HasMore:    query.Options.Limit > 0 && len(messages) >= query.Options.Limit,
+		HasMore:    hasMore,
 		NextCursor: nextCursor,
 	}, nil
 }
@@ -384,6 +406,51 @@ func mapKey(key string) string {
 	}
 }
 
+// matchNothing is a filter clause that never matches any document. It is used
+// when an id filter carries a value that cannot be a valid ObjectID, so the
+// query returns no results rather than erroring or silently matching all.
+var matchNothing = bson.M{"$in": bson.A{}}
+
+// idValue converts a single hex id string to an ObjectID. The second return is
+// false when the value is not a convertible hex id (in which case the caller
+// should make the clause match nothing).
+func idValue(value any) (bson.ObjectID, bool) {
+	hex, ok := value.(string)
+	if !ok {
+		return bson.ObjectID{}, false
+	}
+	oid, err := bson.ObjectIDFromHex(hex)
+	if err != nil {
+		return bson.ObjectID{}, false
+	}
+	return oid, true
+}
+
+// idValues converts a slice of hex id strings to ObjectIDs, dropping any that
+// are not convertible. Accepts []string or []any holding strings.
+func idValues(value any) []bson.ObjectID {
+	var raw []string
+	switch v := value.(type) {
+	case []string:
+		raw = v
+	case []any:
+		for _, e := range v {
+			if s, ok := e.(string); ok {
+				raw = append(raw, s)
+			}
+		}
+	default:
+		return nil
+	}
+	oids := make([]bson.ObjectID, 0, len(raw))
+	for _, hex := range raw {
+		if oid, err := bson.ObjectIDFromHex(hex); err == nil {
+			oids = append(oids, oid)
+		}
+	}
+	return oids
+}
+
 // buildFilter converts a slice of store.Filter to a MongoDB filter document.
 func buildFilter(filters []store.Filter) bson.M {
 	if len(filters) == 0 {
@@ -398,6 +465,40 @@ func buildFilter(filters []store.Filter) bson.M {
 		key := mapKey(f.Key())
 		value := f.Value()
 		op := f.Operator()
+
+		// The _id field stores ObjectIDs, but filter values arrive as hex
+		// strings. Convert them so id filters actually match. A malformed id
+		// must match nothing rather than crash or match everything.
+		if key == "_id" {
+			switch op {
+			case "eq", "gt", "gte", "lt", "lte":
+				oid, ok := idValue(value)
+				if !ok {
+					result[key] = matchNothing
+					continue
+				}
+				if op == "eq" {
+					result[key] = oid
+				} else {
+					result[key] = bson.M{"$" + op: oid}
+				}
+			case "ne":
+				oid, ok := idValue(value)
+				if !ok {
+					// A non-id value can never equal any _id, so $ne is always
+					// true — impose no constraint for this clause.
+					continue
+				}
+				result[key] = bson.M{"$ne": oid}
+			case "in":
+				result[key] = bson.M{"$in": idValues(value)}
+			case "nin":
+				result[key] = bson.M{"$nin": idValues(value)}
+			default:
+				result[key] = matchNothing
+			}
+			continue
+		}
 
 		switch op {
 		case "eq":

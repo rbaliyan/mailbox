@@ -102,6 +102,15 @@ type MessageReader interface {
 	// GetAvailableAt returns the UTC time before which this message is hidden
 	// from queries. Returns nil if the message is immediately available.
 	GetAvailableAt() *time.Time
+
+	// GetThreadID returns the conversation thread ID, or "" if none.
+	GetThreadID() string
+
+	// GetReplyToID returns the ID of the message this one replies to, or "".
+	GetReplyToID() string
+
+	// GetExternalID returns the caller-defined external identifier, or "".
+	GetExternalID() string
 }
 
 // Message is a read-only view of a sent or received message.
@@ -115,14 +124,6 @@ type Message interface {
 	GetReadAt() *time.Time
 	GetFolderID() string
 	GetTags() []string
-
-	// Thread support
-	GetThreadID() string
-	GetReplyToID() string
-
-	// GetExternalID returns the caller-defined external identifier for this
-	// message (e.g. an SMTP Message-ID). Empty string if not set.
-	GetExternalID() string
 }
 
 // DraftMessage is a mutable message being composed.
@@ -149,6 +150,18 @@ type DraftMessage interface {
 	// recipients. Before this time, the message is hidden from queries.
 	// A zero time clears any previously set schedule.
 	SetScheduleAt(t time.Time) DraftMessage
+
+	// SetThreadID sets the conversation thread ID this draft belongs to.
+	// An empty string clears any previously set thread ID.
+	SetThreadID(id string) DraftMessage
+
+	// SetReplyToID sets the ID of the message this draft replies to.
+	// An empty string clears any previously set reply target.
+	SetReplyToID(id string) DraftMessage
+
+	// SetExternalID sets a caller-defined external identifier for correlation
+	// with external systems (e.g. an SMTP Message-ID).
+	SetExternalID(id string) DraftMessage
 }
 
 // MessageData contains data for creating a new message.

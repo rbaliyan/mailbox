@@ -31,6 +31,9 @@ func (m *mockMessage) GetCreatedAt() time.Time            { return time.Time{} }
 func (m *mockMessage) GetUpdatedAt() time.Time            { return time.Time{} }
 func (m *mockMessage) GetExpiresAt() *time.Time           { return nil }
 func (m *mockMessage) GetAvailableAt() *time.Time         { return nil }
+func (m *mockMessage) GetThreadID() string                { return "" }
+func (m *mockMessage) GetReplyToID() string               { return "" }
+func (m *mockMessage) GetExternalID() string              { return "" }
 
 var _ store.MessageReader = (*mockMessage)(nil)
 

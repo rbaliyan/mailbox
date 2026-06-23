@@ -173,6 +173,18 @@ func (m *message) SetExternalID(id string) store.DraftMessage {
 	return m
 }
 
+func (m *message) SetThreadID(id string) store.DraftMessage {
+	m.threadID = id
+	m.updatedAt = time.Now().UTC()
+	return m
+}
+
+func (m *message) SetReplyToID(id string) store.DraftMessage {
+	m.replyToID = id
+	m.updatedAt = time.Now().UTC()
+	return m
+}
+
 func (m *message) SetScheduleAt(t time.Time) store.DraftMessage {
 	if t.IsZero() {
 		m.availableAt = nil

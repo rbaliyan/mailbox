@@ -68,11 +68,21 @@ func (s *Store) Connect(ctx context.Context) error {
 		return fmt.Errorf("postgres ping: %w", err)
 	}
 
-	// Create schema and indexes asynchronously — index creation on large
-	// tables can take a long time and should not block service startup.
+	// Create the base table and the idempotency unique index synchronously.
+	// These are correctness-critical: requests landing before the partial
+	// UNIQUE INDEX exists would either error on ON CONFLICT or allow duplicate
+	// idempotent inserts to both succeed. Surface any failure to the caller.
+	if err := s.ensureCoreSchema(ctx); err != nil {
+		atomic.StoreInt32(&s.connected, 0)
+		return fmt.Errorf("ensure core schema: %w", err)
+	}
+
+	// Secondary indexes only affect query performance, not correctness, and can
+	// take a long time to build on large tables — create them in the background
+	// so they do not block service startup.
 	go func() { // #nosec G118 — background goroutine intentionally outlives request context
-		if err := s.ensureSchema(context.Background()); err != nil {
-			s.logger.Error("failed to ensure schema", "error", err)
+		if err := s.ensureSecondaryIndexes(context.Background()); err != nil {
+			s.logger.Error("failed to ensure secondary indexes", "error", err)
 		}
 	}()
 
@@ -90,8 +100,11 @@ func (s *Store) Close(ctx context.Context) error {
 	return nil
 }
 
-// ensureSchema creates the required table and indexes.
-func (s *Store) ensureSchema(ctx context.Context) error {
+// ensureCoreSchema creates the correctness-critical schema synchronously: the
+// base table, column migrations, the idempotency partial-unique index, and the
+// outbox table (when enabled). Any failure here is returned so Connect can fail
+// fast rather than serve requests against an incomplete schema.
+func (s *Store) ensureCoreSchema(ctx context.Context) error {
 	// Defense-in-depth: validate table names before interpolation into SQL.
 	// Option setters already validate, but this catches direct struct construction.
 	if !validIdentifier.MatchString(s.opts.table) {
@@ -148,6 +161,45 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 		s.logger.Warn("failed to add available_at column (may already exist)", "error", err)
 	}
 
+	// Create unique index for idempotency (with partial filter). This is
+	// correctness-critical — it is what makes CreateMessageIdempotent's
+	// ON CONFLICT atomic — so a failure here aborts Connect.
+	idempotencyIdx := fmt.Sprintf(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_%s_idempotency
+		ON %s(owner_id, idempotency_key)
+		WHERE idempotency_key IS NOT NULL
+	`, s.opts.table, s.opts.table)
+	if _, err := s.db.ExecContext(ctx, idempotencyIdx); err != nil {
+		return fmt.Errorf("create idempotency index: %w", err)
+	}
+
+	// Create outbox table if outbox is enabled. The outbox table itself is
+	// correctness-critical when enabled (mutations write to it transactionally),
+	// so it is created synchronously here.
+	if s.opts.outboxEnabled {
+		if !validIdentifier.MatchString(s.opts.outboxTable) {
+			return fmt.Errorf("invalid outbox table name: %q", s.opts.outboxTable)
+		}
+		outboxDDL := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
+			id BIGSERIAL PRIMARY KEY,
+			name TEXT NOT NULL,
+			message_id TEXT NOT NULL,
+			payload JSONB NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`, s.opts.outboxTable)
+		if _, err := s.db.ExecContext(ctx, outboxDDL); err != nil {
+			return fmt.Errorf("create outbox table: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// ensureSecondaryIndexes creates non-correctness indexes (and FTS schema) in
+// the background. These only affect query performance, so failures are logged
+// rather than surfaced to Connect.
+func (s *Store) ensureSecondaryIndexes(ctx context.Context) error {
 	// Create indexes
 	indexes := []string{
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_owner ON %s(owner_id)`, s.opts.table, s.opts.table),
@@ -177,16 +229,6 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 		}
 	}
 
-	// Create unique index for idempotency (with partial filter)
-	idempotencyIdx := fmt.Sprintf(`
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_%s_idempotency
-		ON %s(owner_id, idempotency_key)
-		WHERE idempotency_key IS NOT NULL
-	`, s.opts.table, s.opts.table)
-	if _, err := s.db.ExecContext(ctx, idempotencyIdx); err != nil {
-		s.logger.Warn("failed to create idempotency index", "error", err)
-	}
-
 	// FTS: add search_vector column, GIN index, and trigger when enabled.
 	if s.opts.enableFTS {
 		if err := s.ensureFTS(ctx); err != nil {
@@ -194,22 +236,8 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 		}
 	}
 
-	// Create outbox table if outbox is enabled.
+	// Secondary outbox index for relay polling performance.
 	if s.opts.outboxEnabled {
-		if !validIdentifier.MatchString(s.opts.outboxTable) {
-			return fmt.Errorf("invalid outbox table name: %q", s.opts.outboxTable)
-		}
-		outboxDDL := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
-			id BIGSERIAL PRIMARY KEY,
-			name TEXT NOT NULL,
-			message_id TEXT NOT NULL,
-			payload JSONB NOT NULL,
-			status TEXT NOT NULL DEFAULT 'pending',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`, s.opts.outboxTable)
-		if _, err := s.db.ExecContext(ctx, outboxDDL); err != nil {
-			return fmt.Errorf("create outbox table: %w", err)
-		}
 		outboxIdx := fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_status_created ON %s(status, created_at)`,
 			s.opts.outboxTable, s.opts.outboxTable)
 		if _, err := s.db.ExecContext(ctx, outboxIdx); err != nil {
@@ -314,6 +342,11 @@ func (s *Store) SaveDraft(ctx context.Context, draft store.DraftMessage) (store.
 			status:       store.MessageStatusDraft,
 			folderID:     store.FolderDrafts,
 			attachments:  draft.GetAttachments(),
+			threadID:     draft.GetThreadID(),
+			replyToID:    draft.GetReplyToID(),
+			externalID:   draft.GetExternalID(),
+			expiresAt:    draft.GetExpiresAt(),
+			availableAt:  draft.GetAvailableAt(),
 			isDraft:      true,
 		}
 	}
@@ -346,15 +379,17 @@ func (s *Store) SaveDraft(ctx context.Context, draft store.DraftMessage) (store.
 
 		query := fmt.Sprintf(`
 			INSERT INTO %s (id, owner_id, sender_id, subject, body, headers, metadata, status, folder_id,
-			                recipient_ids, tags, attachments, is_draft, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			                recipient_ids, tags, attachments, is_draft, thread_id, reply_to_id, external_id,
+			                expires_at, available_at, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 			RETURNING id
 		`, s.opts.table)
 
 		err := s.exec(ctx).QueryRowContext(ctx, query,
 			msg.id, msg.ownerID, msg.senderID, msg.subject, msg.body, headersJSON, metadataJSON,
 			msg.status, msg.folderID, pq.Array(msg.recipientIDs), pq.Array(msg.tags),
-			attachmentsJSON, true, msg.createdAt, msg.updatedAt,
+			attachmentsJSON, true, msg.threadID, msg.replyToID,
+			msg.externalID, msg.expiresAt, msg.availableAt, msg.createdAt, msg.updatedAt,
 		).Scan(&msg.id)
 		if err != nil {
 			return nil, fmt.Errorf("insert draft: %w", err)
@@ -364,15 +399,17 @@ func (s *Store) SaveDraft(ctx context.Context, draft store.DraftMessage) (store.
 		query := fmt.Sprintf(`
 			UPDATE %s
 			SET subject = $1, body = $2, headers = $3, metadata = $4, recipient_ids = $5,
-			    attachments = $6, updated_at = $7
-			WHERE id = $8 AND is_draft = true
+			    attachments = $6, thread_id = $7, reply_to_id = $8, external_id = $9,
+			    expires_at = $10, available_at = $11, updated_at = $12
+			WHERE id = $13 AND is_draft = true
 			RETURNING id
 		`, s.opts.table)
 
 		var returnedID string
 		err := s.exec(ctx).QueryRowContext(ctx, query,
 			msg.subject, msg.body, headersJSON, metadataJSON, pq.Array(msg.recipientIDs),
-			attachmentsJSON, msg.updatedAt, msg.id,
+			attachmentsJSON, msg.threadID, msg.replyToID,
+			msg.externalID, msg.expiresAt, msg.availableAt, msg.updatedAt, msg.id,
 		).Scan(&returnedID)
 		if err != nil {
 			if err == sql.ErrNoRows {

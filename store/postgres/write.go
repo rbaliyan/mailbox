@@ -326,6 +326,18 @@ func (s *Store) Restore(ctx context.Context, id string) error {
 
 var _ store.BulkUpdater = (*Store)(nil)
 
+// Optional-capability interface assertions: these methods exist on *Store and
+// the service layer uses them as fast paths, so assert them at compile time.
+var (
+	_ store.ThreadParticipantLister = (*Store)(nil)
+	_ store.BulkReadMarker          = (*Store)(nil)
+	_ store.FolderCounter           = (*Store)(nil)
+	_ store.FindWithCounter         = (*Store)(nil)
+	_ store.FolderLister            = (*Store)(nil)
+	_ store.OutboxPersister         = (*Store)(nil)
+	_ store.EventOutboxProvider     = (*Store)(nil)
+)
+
 func (s *Store) bulkWhere(ownerID string, filters []store.Filter) (string, []any) {
 	where, args := s.buildWhereClauseFrom(filters, 2) // $1 is ownerID
 	fullWhere := "owner_id = $1 AND is_draft = false AND (available_at IS NULL OR available_at <= NOW())"

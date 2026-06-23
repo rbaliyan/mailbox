@@ -340,7 +340,9 @@ func (s *Store) ListDrafts(ctx context.Context, ownerID string, opts store.ListO
 
 	findOpts := mongoopts.Find()
 	if opts.Limit > 0 {
-		findOpts.SetLimit(int64(opts.Limit))
+		// Over-fetch one extra row so we can reliably detect whether more
+		// results exist beyond this page (mirrors Find/Search).
+		findOpts.SetLimit(int64(opts.Limit) + 1)
 	}
 	if opts.Offset > 0 {
 		findOpts.SetSkip(int64(opts.Offset))
@@ -364,6 +366,12 @@ func (s *Store) ListDrafts(ctx context.Context, ownerID string, opts store.ListO
 		return nil, fmt.Errorf("decode drafts: %w", err)
 	}
 
+	// Detect "has more" via the over-fetched extra row, then trim it off.
+	hasMore := opts.Limit > 0 && len(docs) > opts.Limit
+	if hasMore {
+		docs = docs[:opts.Limit]
+	}
+
 	drafts := make([]store.DraftMessage, len(docs))
 	for i := range docs {
 		drafts[i] = docToMessage(&docs[i])
@@ -372,7 +380,7 @@ func (s *Store) ListDrafts(ctx context.Context, ownerID string, opts store.ListO
 	return &store.DraftList{
 		Drafts:  drafts,
 		Total:   total,
-		HasMore: opts.Limit > 0 && len(drafts) >= opts.Limit,
+		HasMore: hasMore,
 	}, nil
 }
 
@@ -400,6 +408,21 @@ func buildDraftUpdate(msg *message) bson.M {
 		for k, v := range msg.delta.metadata {
 			set["metadata."+k] = v
 		}
+	}
+	if msg.delta.threadID != nil {
+		set["thread_id"] = *msg.delta.threadID
+	}
+	if msg.delta.replyToID != nil {
+		set["reply_to_id"] = *msg.delta.replyToID
+	}
+	if msg.delta.externalID != nil {
+		set["external_id"] = *msg.delta.externalID
+	}
+	if msg.delta.expiresAtSet {
+		set["expires_at"] = msg.delta.expiresAt
+	}
+	if msg.delta.availableAtSet {
+		set["available_at"] = msg.delta.availableAt
 	}
 
 	// Always include full attachments list on update

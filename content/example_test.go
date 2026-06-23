@@ -33,6 +33,27 @@ func ExampleEncode() {
 	// schema: sensor.reading/v1
 }
 
+// ExampleEncodeWithHeaders demonstrates encoding a JSON struct into body + headers.
+func ExampleEncodeWithHeaders() {
+	type SensorReading struct {
+		Temperature int    `json:"temperature"`
+		Unit        string `json:"unit"`
+	}
+
+	reading := SensorReading{Temperature: 72, Unit: "F"}
+	data, _ := json.Marshal(reading)
+
+	body, headers, _ := content.EncodeWithHeaders(content.JSON, data, content.WithSchema("sensor.reading/v1"))
+
+	fmt.Println("body:", body)
+	fmt.Println("Content-Type:", headers[store.HeaderContentType])
+	fmt.Println("Schema:", headers[store.HeaderSchema])
+	// Output:
+	// body: {"temperature":72,"unit":"F"}
+	// Content-Type: application/json
+	// Schema: sensor.reading/v1
+}
+
 // This example demonstrates two services communicating through mailbox
 // using structured JSON messages.
 //

@@ -58,7 +58,7 @@ func (m *userMailbox) GetDraft(ctx context.Context, id string) (Draft, error) {
 	if d.GetOwnerID() != m.userID {
 		return nil, ErrNotFound
 	}
-	return &draft{mailbox: m, message: d, saved: true}, nil
+	return newSavedDraft(m, d), nil
 }
 
 // Drafts returns draft messages for the current user.
@@ -74,11 +74,7 @@ func (m *userMailbox) Drafts(ctx context.Context, opts store.ListOptions) (Draft
 
 	drafts := make([]Draft, len(storeDrafts.Drafts))
 	for i, d := range storeDrafts.Drafts {
-		drafts[i] = &draft{
-			mailbox: m,
-			message: d,
-			saved:   true,
-		}
+		drafts[i] = newSavedDraft(m, d)
 	}
 
 	return &draftList{

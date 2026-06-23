@@ -15,7 +15,25 @@ import (
 
 const dekSize = 32 // AES-256
 
+// zeroize overwrites a byte slice with zeros to remove sensitive key material
+// from memory as soon as it is no longer needed. It is best-effort: Go may have
+// already copied the data elsewhere, but wiping shrinks the window in which a
+// live secret sits in the heap.
+func zeroize(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
+
 // generateDEK creates a random 256-bit data encryption key.
+//
+// Single-use invariant: each DEK returned here MUST encrypt exactly one message
+// body and then be discarded. This is load-bearing for security — encryptBody
+// uses AES-256-GCM with a random 96-bit nonce, and random GCM nonces are only
+// safe while the (key, nonce) pair is never reused. A fresh per-message DEK
+// makes accidental nonce reuse across messages harmless, since reuse is only
+// catastrophic when it happens under the same key. Never cache or reuse a DEK
+// across messages.
 func generateDEK() ([]byte, error) {
 	dek := make([]byte, dekSize)
 	if _, err := io.ReadFull(rand.Reader, dek); err != nil {
@@ -100,23 +118,33 @@ func wrapDEKX25519(dek, recipientPub []byte) ([]byte, error) {
 		return nil, fmt.Errorf("%w: x25519 public key must be 32 bytes", ErrUnsupportedKeyType)
 	}
 
-	// Generate ephemeral keypair.
+	// Generate ephemeral keypair. The ephemeral private key is single-use and
+	// must not leak; wipe it once key agreement is done.
 	ephPriv := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, ephPriv); err != nil {
 		return nil, err
 	}
+	defer zeroize(ephPriv)
 	ephPub, err := curve25519.X25519(ephPriv, curve25519.Basepoint)
 	if err != nil {
 		return nil, err
 	}
 
-	// Derive shared secret.
+	// Derive shared secret. Wipe it after deriving the wrapping key.
 	shared, err := curve25519.X25519(ephPriv, recipientPub)
 	if err != nil {
 		return nil, err
 	}
+	defer zeroize(shared)
 	// Hash shared secret to get AES key (avoid reuse of raw DH output).
+	//
+	// NOTE: This derives the wrapping key as sha256(shared). It is intentionally
+	// kept as-is for backward compatibility with already-encrypted messages.
+	// A future versioned scheme could strengthen this to HKDF with transcript
+	// binding (ephemeral + recipient public keys mixed into the info), but that
+	// must be gated behind a new algorithm version, not applied in place.
 	key := sha256.Sum256(shared)
+	defer zeroize(key[:])
 
 	// Encrypt DEK with shared secret.
 	block, err := aes.NewCipher(key[:])
@@ -153,12 +181,15 @@ func unwrapDEKX25519(wrapped, privateKey []byte) ([]byte, error) {
 	nonce := wrapped[32:44]
 	encrypted := wrapped[44:]
 
-	// Derive shared secret.
+	// Derive shared secret. Wipe both the shared secret and the derived key
+	// after use so they do not linger in memory.
 	shared, err := curve25519.X25519(privateKey, ephPub)
 	if err != nil {
 		return nil, fmt.Errorf("%w: x25519: %v", ErrDecryptionFailed, err)
 	}
+	defer zeroize(shared)
 	key := sha256.Sum256(shared)
+	defer zeroize(key[:])
 
 	// Decrypt DEK.
 	block, err := aes.NewCipher(key[:])
