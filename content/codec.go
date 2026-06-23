@@ -2,23 +2,28 @@
 //
 // Mailbox stores message bodies as plain text strings. This package provides
 // a convention for encoding structured or binary content into text-safe bodies
-// and decoding them back, using metadata to carry content type and schema
-// information.
+// and decoding them back, using message headers to carry content type and
+// schema information.
 //
 // The content package does NOT modify any mailbox interfaces. It operates
-// entirely through the existing public API (SetBody, SetMetadata, GetBody,
-// GetMetadata). Mailbox remains text-first; this package is an opt-in layer
-// on top.
+// entirely through the existing public API (SetBody, SetHeader, GetBody,
+// GetHeaders, and — for the legacy convention — SetMetadata/GetMetadata).
+// Mailbox remains text-first; this package is an opt-in layer on top.
 //
-// # Metadata Convention
+// # Header Convention
 //
-// Structured messages use these reserved metadata keys:
+// Structured messages carry content type and schema as first-class headers:
 //
-//   - content_type: MIME type (e.g., "application/json", "application/protobuf")
-//   - schema: optional schema identifier (e.g., "sensor.reading/v1")
+//   - [store.HeaderContentType]: MIME type (e.g., "application/json", "application/protobuf")
+//   - [store.HeaderSchema]: optional schema identifier (e.g., "sensor.reading/v1")
 //
-// Messages without content_type metadata are plain text. No codec is needed
+// Messages without a Content-Type header are plain text. No codec is needed
 // to read or write them.
+//
+// For backward compatibility, the older metadata convention (the content_type
+// and schema metadata keys set by [Encode]) is still honored: [Decode],
+// [ContentType], and [Schema] read the headers first and fall back to metadata.
+// New code should prefer [EncodeWithHeaders]; [Encode] is deprecated.
 //
 // # Codec Interface
 //
@@ -35,11 +40,11 @@
 // Sending a structured message:
 //
 //	data, _ := json.Marshal(sensorReading)
-//	body, meta, _ := content.Encode(content.JSON, data, content.WithSchema("sensor.reading/v1"))
+//	body, headers, _ := content.EncodeWithHeaders(content.JSON, data, content.WithSchema("sensor.reading/v1"))
 //	draft, _ := mb.Compose()
 //	draft.SetSubject("Reading").SetRecipients("consumer-svc").SetBody(body)
-//	for k, v := range meta {
-//	    draft.SetMetadata(k, v)
+//	for k, v := range headers {
+//	    draft.SetHeader(k, v)
 //	}
 //	draft.Send(ctx)
 //
@@ -52,10 +57,10 @@
 //
 // # Plugin Integration
 //
-// Mailbox [SendHook] plugins can inspect the metadata convention to validate,
+// Mailbox [SendHook] plugins can inspect the header convention to validate,
 // route, or forward structured messages to external systems. The content
-// package provides [ContentType] and [Schema] helpers for reading metadata
-// without hardcoding key names.
+// package provides [ContentType] and [Schema] helpers for reading the content
+// type and schema without hardcoding key names.
 package content
 
 import (

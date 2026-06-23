@@ -131,6 +131,16 @@ func (m *message) SetExternalID(id string) store.DraftMessage {
 	return m
 }
 
+func (m *message) SetThreadID(id string) store.DraftMessage {
+	m.threadID = id
+	return m
+}
+
+func (m *message) SetReplyToID(id string) store.DraftMessage {
+	m.replyToID = id
+	return m
+}
+
 // =============================================================================
 // Attachment type
 // =============================================================================

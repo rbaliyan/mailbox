@@ -279,6 +279,34 @@ func TestSaveDraft(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("linkage fields survive save reload", func(t *testing.T) {
+		schedule := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second)
+
+		d := mustCompose(user)
+		d.SetSubject("Linked").
+			SetBody("Body").
+			SetExternalID("ext-123").
+			SetScheduleAt(schedule)
+
+		saved, err := d.Save(ctx)
+		if err != nil {
+			t.Fatalf("save failed: %v", err)
+		}
+
+		reloaded, err := user.GetDraft(ctx, saved.ID())
+		if err != nil {
+			t.Fatalf("get draft failed: %v", err)
+		}
+
+		if got := reloaded.ExternalID(); got != "ext-123" {
+			t.Errorf("external ID lost: got %q, want %q", got, "ext-123")
+		}
+		got := reloaded.(*draft).scheduleAt
+		if got == nil || !got.Equal(schedule) {
+			t.Errorf("scheduleAt lost: got %v, want %v", got, schedule)
+		}
+	})
 }
 
 func TestMessageOperations(t *testing.T) {

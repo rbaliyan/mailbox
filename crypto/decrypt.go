@@ -67,11 +67,12 @@ func Decrypt(ctx context.Context, msg MessageReader, userID string, keys Private
 		return nil, err
 	}
 
-	// Unwrap DEK.
+	// Unwrap DEK. It is single-use; wipe it once the body has been decrypted.
 	dek, err := unwrapDEK(wrappedDEK, privKey, keyType)
 	if err != nil {
 		return nil, err
 	}
+	defer zeroize(dek)
 
 	// Decode body from base64.
 	ciphertext, err := base64.StdEncoding.DecodeString(msg.GetBody())

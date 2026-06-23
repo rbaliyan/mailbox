@@ -194,13 +194,21 @@ func deduplicateRecipients(recipientIDs []string) []string {
 // senderMsgID is used as the idempotency base to prevent duplicates on retry.
 // deliveryTargets is the subset of recipients to deliver to on this instance;
 // when nil/empty, the full RecipientIDs list from the draft is used.
-// Returns lists of successful and failed recipients.
-func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.DraftMessage, threadID, replyToID, externalID, senderMsgID string, expiresAt, availableAt *time.Time, deliveryTargets []string) ([]string, map[string]error) {
+//
+// Returns three values:
+//   - deliveredTo: all recipients with a successful inbox copy (newly created
+//     OR already present from a prior idempotent attempt).
+//   - newlyDelivered: the subset of deliveredTo whose copy was created by THIS
+//     call. Side effects that must fire exactly once per delivery (the
+//     MessageReceived event and, via the MessageSent path, stats increments)
+//     are scoped to this subset so an idempotent re-send does not double-count
+//     stats or re-fire notifications.
+//   - failedRecipients: recipients whose delivery failed, keyed by recipient ID.
+func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.DraftMessage, threadID, replyToID, externalID, senderMsgID string, expiresAt, availableAt *time.Time, deliveryTargets []string) (deliveredTo, newlyDelivered []string, failedRecipients map[string]error) {
 	// Recipients are already deduplicated in sendDraft before validation.
 	idempotencyBase := senderMsgID
 
-	var deliveredTo []string
-	failedRecipients := make(map[string]error)
+	failedRecipients = make(map[string]error)
 
 	// The full recipient list stored in every message copy.
 	recipientIDs := draft.GetRecipientIDs()
@@ -229,7 +237,7 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 	}
 
 	if len(eligible) == 0 {
-		return deliveredTo, failedRecipients
+		return deliveredTo, newlyDelivered, failedRecipients
 	}
 
 	// Phase 2: Batch create messages for all eligible recipients.
@@ -263,7 +271,7 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 		for _, recipientID := range eligible {
 			failedRecipients[recipientID] = fmt.Errorf("create message: %w", err)
 		}
-		return deliveredTo, failedRecipients
+		return deliveredTo, newlyDelivered, failedRecipients
 	}
 
 	// Phase 3: Process results — attachment refs and events.
@@ -274,22 +282,29 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 			continue
 		}
 
-		if result.Created {
-			if refErr := m.addAttachmentRefs(ctx, result.Message); refErr != nil {
-				if releaseErr := m.releaseAttachmentRefs(ctx, result.Message); releaseErr != nil {
-					m.service.logger.Error("failed to release partial attachment refs during rollback",
-						"error", releaseErr, "message_id", result.Message.GetID(), "recipient", recipientID)
-				}
-				if deleteErr := m.service.store.HardDelete(ctx, result.Message.GetID()); deleteErr != nil {
-					m.service.logger.Error("failed to rollback recipient message after attachment ref failure",
-						"error", deleteErr, "message_id", result.Message.GetID(), "recipient", recipientID)
-				}
-				failedRecipients[recipientID] = fmt.Errorf("add attachment refs: %w", refErr)
-				continue
+		// An already-existing copy (result.Created == false) is a successful
+		// idempotent delivery, but all single-fire side effects below must be
+		// skipped so a retry does not double-count stats or re-notify.
+		if !result.Created {
+			deliveredTo = append(deliveredTo, recipientID)
+			continue
+		}
+
+		if refErr := m.addAttachmentRefs(ctx, result.Message); refErr != nil {
+			if releaseErr := m.releaseAttachmentRefs(ctx, result.Message); releaseErr != nil {
+				m.service.logger.Error("failed to release partial attachment refs during rollback",
+					"error", releaseErr, "message_id", result.Message.GetID(), "recipient", recipientID)
 			}
+			if deleteErr := m.service.store.HardDelete(ctx, result.Message.GetID()); deleteErr != nil {
+				m.service.logger.Error("failed to rollback recipient message after attachment ref failure",
+					"error", deleteErr, "message_id", result.Message.GetID(), "recipient", recipientID)
+			}
+			failedRecipients[recipientID] = fmt.Errorf("add attachment refs: %w", refErr)
+			continue
 		}
 
 		deliveredTo = append(deliveredTo, recipientID)
+		newlyDelivered = append(newlyDelivered, recipientID)
 
 		// Publish per-recipient received event.
 		// publishOnly already handles non-fatal errors internally (via safeEventPublishFailure)
@@ -306,7 +321,7 @@ func (m *userMailbox) deliverToRecipients(ctx context.Context, draft store.Draft
 		)
 	}
 
-	return deliveredTo, failedRecipients
+	return deliveredTo, newlyDelivered, failedRecipients
 }
 
 // rollbackSenderMessage cleans up the sender's message copy on total delivery failure.
@@ -472,7 +487,7 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 	}
 
 	// Step 7: Deliver to recipients (use sender message ID for idempotency)
-	deliveredTo, failedRecipients := m.deliverToRecipients(ctx, draft, threadID, replyToID, externalID, senderCopy.GetID(), expiresAt, availableAt, deliverTo)
+	deliveredTo, newlyDelivered, failedRecipients := m.deliverToRecipients(ctx, draft, threadID, replyToID, externalID, senderCopy.GetID(), expiresAt, availableAt, deliverTo)
 
 	// Step 8: Handle total delivery failure
 	if len(deliveredTo) == 0 {
@@ -484,29 +499,42 @@ func (m *userMailbox) sendDraft(ctx context.Context, draft store.DraftMessage, t
 		return nil, sendErr
 	}
 
-	// Step 9: Finalize successful delivery
+	// Step 9: Finalize successful delivery.
+	// The MessageSent event drives recipient stats increments, so it must carry
+	// only the newly-delivered recipients — an idempotent re-send must not
+	// re-increment stats for recipients that already had the message.
 	now := time.Now().UTC()
-	updatedSenderCopy, eventErr := m.finalizeDelivery(ctx, senderCopy, deliveredTo, draft, now)
+	updatedSenderCopy, eventErr := m.finalizeDelivery(ctx, senderCopy, newlyDelivered, draft, now)
+
+	// Build the partial-delivery error up front (if any recipient failed) so it
+	// survives even when a post-send hook also errors. Callers can then still
+	// recover the delivered/failed breakdown via IsPartialDelivery.
+	var partialErr error
+	if len(failedRecipients) > 0 {
+		partialErr = &PartialDeliveryError{
+			MessageID:        updatedSenderCopy.GetID(),
+			DeliveredTo:      deliveredTo,
+			FailedRecipients: failedRecipients,
+		}
+	}
+
 	if eventErr != nil {
-		sendErr = eventErr
-		// Return the updated sender copy (moved to Sent folder) even on event
-		// publish failure since the message was already created and delivered.
+		// Message was created and delivered, but a post-send event failed.
+		// Join with the partial-delivery error so that information is not lost.
+		sendErr = errors.Join(eventErr, partialErr)
 		return updatedSenderCopy, sendErr
 	}
 
 	// Step 10: Plugin AfterSend hook (runs even on partial delivery since message was sent)
 	if err := m.service.plugins.afterSend(ctx, m.userID, updatedSenderCopy); err != nil {
-		sendErr = err
+		// Join with the partial-delivery error so partial-delivery info survives.
+		sendErr = errors.Join(err, partialErr)
 		return updatedSenderCopy, sendErr
 	}
 
 	// Step 11: Handle partial delivery
-	if len(failedRecipients) > 0 {
-		sendErr = &PartialDeliveryError{
-			MessageID:        updatedSenderCopy.GetID(),
-			DeliveredTo:      deliveredTo,
-			FailedRecipients: failedRecipients,
-		}
+	if partialErr != nil {
+		sendErr = partialErr
 		return updatedSenderCopy, sendErr
 	}
 

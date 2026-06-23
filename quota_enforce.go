@@ -124,45 +124,92 @@ func (s *service) enforceUserQuota(ctx context.Context, userID string) (int, err
 		createdBeforeFilter,
 	}
 
-	// Fetch candidates sorted by creation time ascending (oldest first).
-	// Limit to the excess count to avoid fetching more than needed.
-	limit := int(excess)
-	list, err := s.store.Find(ctx, filters, store.ListOptions{
-		Limit:     limit,
-		SortBy:    "created_at",
-		SortOrder: store.SortAsc,
-	})
-	if err != nil {
-		return 0, fmt.Errorf("find old messages: %w", err)
-	}
+	// quotaDeleteBatchSize caps how many candidates are fetched per page so a
+	// large excess does not load an unbounded result set into memory.
+	const quotaDeleteBatchSize = 500
 
 	deleted := 0
-	for _, msg := range list.Messages {
+	// Loop with pagination until the user is back within quota or no more
+	// eligible (old enough) messages remain. A single Find pass can under-delete
+	// when the page is smaller than the excess, so we keep deleting in batches.
+	for {
 		if ctx.Err() != nil {
 			return deleted, ctx.Err()
 		}
 
-		// Release attachment references before deleting.
-		if s.attachments != nil {
-			for _, att := range msg.GetAttachments() {
-				if err := s.attachments.RemoveRef(ctx, att.GetID()); err != nil {
-					s.logger.Warn("failed to release attachment ref during quota enforcement",
-						"error", err, "attachment_id", att.GetID(), "message_id", msg.GetID())
-				}
-			}
+		// remaining is how many more messages must be deleted to reach quota,
+		// accounting for what this pass has already removed.
+		remaining := excess - int64(deleted)
+		if remaining <= 0 {
+			break
 		}
 
-		if err := s.store.HardDelete(ctx, msg.GetID()); err != nil {
-			s.logger.Warn("failed to delete message during quota enforcement",
-				"error", err, "message_id", msg.GetID(), "user_id", userID)
-			continue
+		// Bound the page size and guard against int overflow on 32-bit platforms
+		// when excess exceeds the int range.
+		limit := quotaDeleteBatchSize
+		if remaining < int64(limit) {
+			limit = int(remaining)
 		}
-		deleted++
+
+		// Always fetch oldest-first; deleted messages drop out of the result set
+		// so the next page surfaces the next-oldest eligible candidates.
+		list, err := s.store.Find(ctx, filters, store.ListOptions{
+			Limit:     limit,
+			SortBy:    "created_at",
+			SortOrder: store.SortAsc,
+		})
+		if err != nil {
+			return deleted, fmt.Errorf("find old messages: %w", err)
+		}
+		if len(list.Messages) == 0 {
+			// No more eligible messages to delete.
+			break
+		}
+
+		progress := 0
+		for _, msg := range list.Messages {
+			if ctx.Err() != nil {
+				return deleted, ctx.Err()
+			}
+
+			// Release attachment references before deleting.
+			if s.attachments != nil {
+				for _, att := range msg.GetAttachments() {
+					if err := s.attachments.RemoveRef(ctx, att.GetID()); err != nil {
+						s.logger.Warn("failed to release attachment ref during quota enforcement",
+							"error", err, "attachment_id", att.GetID(), "message_id", msg.GetID())
+					}
+				}
+			}
+
+			if err := s.store.HardDelete(ctx, msg.GetID()); err != nil {
+				s.logger.Warn("failed to delete message during quota enforcement",
+					"error", err, "message_id", msg.GetID(), "user_id", userID)
+				continue
+			}
+			deleted++
+			progress++
+		}
+
+		// If a full page yielded no successful deletes (e.g. repeated delete
+		// failures), stop to avoid an infinite loop.
+		if progress == 0 {
+			break
+		}
 	}
 
 	if deleted > 0 {
 		s.logger.Debug("enforced quota for user",
 			"user_id", userID, "deleted", deleted, "excess", excess)
+	}
+
+	// If we could not delete enough eligible (old enough) messages, the user
+	// remains over quota. Surface this so operators can adjust DeleteOlderThan
+	// or investigate, rather than failing silently.
+	if int64(deleted) < excess {
+		s.logger.Warn("user still over quota after enforcement: insufficient eligible messages",
+			"user_id", userID, "deleted", deleted, "excess", excess,
+			"max_messages", policy.MaxMessages, "delete_older_than", policy.DeleteOlderThan)
 	}
 
 	return deleted, nil

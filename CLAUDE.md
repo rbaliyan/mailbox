@@ -387,6 +387,7 @@ Notifier options (`notify.NewNotifier(...)`):
 |--------|---------|-------------|
 | `WithRedisClient(redis.UniversalClient)` | nil | Redis Streams event transport |
 | `WithEventTransport(transport.Transport)` | nil | Custom event transport |
+| `WithEventBus(*event.Bus)` | nil | Pre-created, caller-owned event bus (not closed by the service); takes priority over WithEventTransport/WithRedisClient and skips outbox wiring |
 | `WithEventErrorsFatal(bool)` | false | Fail operations on event publish error |
 | `WithEventPublishFailureHandler(fn)` | logger.Error | Callback for event publish failures |
 

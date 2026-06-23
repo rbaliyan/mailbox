@@ -264,7 +264,9 @@ replies, _ := mb.GetReplies(ctx, msg.GetID(), store.ListOptions{})
 
 ## Bulk Operations
 
-Perform operations on multiple messages at once:
+Perform operations on multiple messages at once. Each `result, _ := ...` line
+below is an independent example — pick one operation per call site rather than
+pasting the whole block verbatim (they reuse the same variable name):
 
 ```go
 // Get inbox messages
@@ -273,7 +275,7 @@ inbox, _ := mb.Folder(ctx, store.FolderInbox, store.ListOptions{Limit: 50})
 // Mark all as read
 result, _ := inbox.MarkRead(ctx)
 if result.HasFailures() {
-    log.Printf("Failed to mark %d messages", len(result.FailedIDs))
+    log.Printf("Failed to mark %d messages", len(result.FailedIDs()))
 }
 
 // Move all to a folder
@@ -443,6 +445,7 @@ ok := webhook.VerifySignature(
     r.Header.Get("X-Mailbox-Timestamp"),
     body,
     r.Header.Get("X-Mailbox-Signature"),
+    5*time.Minute, // timestamp tolerance (0 skips the freshness check)
 )
 ```
 
@@ -470,13 +473,15 @@ ok := webhook.VerifySignature(
 
 | Method | Description |
 |--------|-------------|
-| `msg.Update(ctx, ...flags)` | Update message flags |
+| `msg.Update(ctx, flags)` | Update message flags |
 | `msg.Move(ctx, folderID)` | Move to folder |
 | `msg.Delete(ctx)` | Move to trash |
 | `msg.Restore(ctx)` | Restore from trash |
 | `msg.PermanentlyDelete(ctx)` | Permanently delete |
 | `msg.AddTag(ctx, tagID)` | Add tag |
 | `msg.RemoveTag(ctx, tagID)` | Remove tag |
+
+Read-only accessors carried from the storage layer include `msg.GetExternalID()` (the caller-defined correlation ID set via `SetExternalID`), `msg.GetThreadID()`, and `msg.GetReplyToID()`.
 
 ### Draft Builder
 
@@ -487,6 +492,8 @@ draft, _ := mb.Compose()
 draft.SetSubject("Meeting Tomorrow").
     SetBody("Let's discuss the project.").
     SetRecipients("user456", "user789").
+    SetExternalID("order-1234").               // caller-defined ID for correlation
+    SetDeliverTo("user456").                    // optional: only deliver locally to a subset of recipients
     SetHeader(store.HeaderPriority, "high").
     SetMetadata("category", "meetings").
     SetTTL(7 * 24 * time.Hour)                  // expires in 7 days
@@ -502,6 +509,35 @@ msg, err := draft.Send(ctx)
 // Or save as draft
 saved, err := draft.Save(ctx)
 ```
+
+## Validation
+
+The package exports its message-validation toolkit so applications can run the
+same checks the library applies internally on send. Limits are described by the
+`MessageLimits` struct; `DefaultLimits()` returns the built-in defaults, and the
+`Config` `Max*` fields (e.g. `MaxBodySize`, `MaxRecipientCount`) feed the same
+struct the service uses.
+
+```go
+limits := mailbox.DefaultLimits()
+
+if err := mailbox.ValidateSubjectWithLimits(subject, limits); err != nil { /* ... */ }
+if err := mailbox.ValidateBodyWithLimits(body, limits); err != nil { /* ... */ }
+if err := mailbox.ValidateRecipients(recipientIDs, limits); err != nil { /* ... */ }
+if err := mailbox.ValidateHeaders(headers, limits); err != nil { /* ... */ }
+if err := mailbox.ValidateMetadata(metadata); err != nil { /* ... */ }
+```
+
+Field validators come in a default-limits form (`ValidateSubject`, `ValidateBody`,
+`ValidateMessageContent`, `ValidateMetadata`) and a configurable `*WithLimits`
+form. Whole-object validators (`ValidateMessage`, `ValidateDraft`) check
+recipients, content, headers, metadata, and attachments together.
+
+Attachment MIME types are validated via `ValidateMIMEType` and
+`ValidateAttachmentsWithMIME`, which accept allow/block lists (wildcards like
+`image/*` are supported). `DefaultBlockedMIMETypes()` returns commonly blocked
+executable types and `SafeAttachmentMIMETypes()` returns a safe allow-list
+starting point.
 
 ## Further Reading
 

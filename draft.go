@@ -153,6 +153,26 @@ func newDraft(m *userMailbox) *draft {
 	}
 }
 
+// newSavedDraft wraps a draft loaded from the store, restoring the
+// mailbox-layer fields (thread/reply/external IDs and schedule) that were
+// persisted at Save time. DeliverTo is intentionally not restored: it is a
+// send-time-only delivery hint and is never persisted.
+func newSavedDraft(m *userMailbox, msg store.DraftMessage) *draft {
+	d := &draft{
+		mailbox:    m,
+		message:    msg,
+		saved:      true,
+		threadID:   msg.GetThreadID(),
+		replyToID:  msg.GetReplyToID(),
+		externalID: msg.GetExternalID(),
+	}
+	if at := msg.GetAvailableAt(); at != nil {
+		ut := at.UTC()
+		d.scheduleAt = &ut
+	}
+	return d
+}
+
 // ID returns the draft ID if saved, empty string otherwise.
 func (d *draft) ID() string {
 	return d.message.GetID()
@@ -386,7 +406,22 @@ func (d *draft) Send(ctx context.Context) (Message, error) {
 
 // Save saves the draft without sending.
 // The draft can be retrieved later and sent.
+//
+// Thread linkage (ThreadID, ReplyToID), the external ID, TTL, and schedule
+// time set on the draft are persisted alongside the content so a saved draft
+// reloaded via GetDraft/Drafts retains them.
+//
+// Note: DeliverTo is a mailbox-layer-only, send-time delivery hint and is not
+// persisted. A reloaded draft has an empty DeliverTo; set it again before Send
+// if selective delivery is required.
 func (d *draft) Save(ctx context.Context) (Draft, error) {
+	// Mirror the mailbox-layer fields onto the store draft so they survive a
+	// save/reload round-trip. TTL and schedule are already mirrored by their
+	// setters; thread/reply/external are mirrored here.
+	d.message.SetThreadID(d.threadID)
+	d.message.SetReplyToID(d.replyToID)
+	d.message.SetExternalID(d.externalID)
+
 	savedMsg, err := d.mailbox.saveDraft(ctx, d.message)
 	if err != nil {
 		return nil, err

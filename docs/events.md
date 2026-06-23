@@ -1,6 +1,6 @@
 # Real-Time Events
 
-Mailbox publishes message lifecycle events to Redis Streams, NATS, Kafka, or any transport supported by the [event](https://github.com/rbaliyan/event) library.
+Mailbox publishes message lifecycle events to Redis Streams, NATS, Kafka, or any transport supported by the [event/v3](https://github.com/rbaliyan/event) library (module `github.com/rbaliyan/event/v3`).
 
 Events are optional — they use a no-op transport by default when no Redis client or event transport is provided. This allows the library to work without any event infrastructure.
 

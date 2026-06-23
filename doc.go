@@ -43,7 +43,8 @@
 //
 //   - Compose: Create and send messages
 //   - Get: Retrieve a message by ID
-//   - Inbox/Sent/Archived/Trash: List messages
+//   - Folder: List messages in any folder, using the store.FolderInbox,
+//     store.FolderSent, store.FolderArchived, and store.FolderTrash constants
 //   - Search: Full-text search
 //   - Stream: Iterator-based streaming with filters
 //
@@ -51,7 +52,7 @@
 //
 // The store package provides implementations for:
 //   - MongoDB (store/mongo) - accepts *mongo.Client
-//   - PostgreSQL (store/postgres) - accepts *sql.DB
+//   - PostgreSQL (store/postgres) - accepts *sqlx.DB (or *sql.DB via NewFromDB)
 //   - In-memory (store/memory) - for testing
 //
 // # Events

@@ -53,11 +53,13 @@ func (p *EncryptionPlugin) BeforeSend(ctx context.Context, userID string, draft 
 		return nil
 	}
 
-	// Generate random DEK.
+	// Generate random DEK. It is single-use (one body) and is wiped from memory
+	// once the body is encrypted and the DEK has been wrapped for each recipient.
 	dek, err := generateDEK()
 	if err != nil {
 		return err
 	}
+	defer zeroize(dek)
 
 	// Encrypt body with DEK.
 	ciphertext, err := encryptBody([]byte(body), dek)

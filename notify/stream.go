@@ -26,6 +26,14 @@ type stream struct {
 
 	mu     sync.Mutex // Protects lastID
 	lastID string
+
+	// pollCursor is the exclusive-start cursor for store polling. It is the
+	// single source of truth for the store poller's position and is advanced
+	// ONLY by the poller (in event order). Live deliveries via Next must not
+	// touch it: a higher-ID live event could otherwise advance the cursor past
+	// an older, not-yet-polled store event, skipping it forever.
+	pollMu     sync.Mutex
+	pollCursor string
 }
 
 var _ Stream = (*stream)(nil)
@@ -66,16 +74,22 @@ func (s *stream) Dropped() int64 {
 
 var _ DroppedCounter = (*stream)(nil)
 
-func (s *stream) getLastID() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.lastID
-}
-
 func (s *stream) setLastID(id string) {
 	s.mu.Lock()
 	s.lastID = id
 	s.mu.Unlock()
+}
+
+func (s *stream) getPollCursor() string {
+	s.pollMu.Lock()
+	defer s.pollMu.Unlock()
+	return s.pollCursor
+}
+
+func (s *stream) setPollCursor(id string) {
+	s.pollMu.Lock()
+	s.pollCursor = id
+	s.pollMu.Unlock()
 }
 
 // pollLoop periodically checks the store for events written by other instances.
@@ -101,7 +115,7 @@ func (s *stream) pollStore() {
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 
-	events, err := s.store.List(ctx, s.userID, s.getLastID(), 100)
+	events, err := s.store.List(ctx, s.userID, s.getPollCursor(), 100)
 	if err != nil {
 		return // Transient error — will retry on next tick.
 	}
@@ -109,11 +123,15 @@ func (s *stream) pollStore() {
 	for _, evt := range events {
 		select {
 		case s.ch <- evt:
+			// Advance the poll cursor in event order. Also update lastID so
+			// getLastID reflects the most recently delivered event.
+			s.setPollCursor(evt.ID)
 			s.setLastID(evt.ID)
 		case <-s.ctx.Done():
 			return
 		default:
-			// Buffer full — try again next tick.
+			// Buffer full — try again next tick. Do not advance the cursor so
+			// this event is re-fetched next time.
 			return
 		}
 	}

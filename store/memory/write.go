@@ -318,25 +318,53 @@ func (s *Store) Restore(ctx context.Context, id string) error {
 
 var _ store.BulkUpdater = (*Store)(nil)
 
+// Optional-capability interface assertions: these methods exist on *Store and
+// the service layer uses them as fast paths, so assert them at compile time.
+var (
+	_ store.ThreadParticipantLister = (*Store)(nil)
+	_ store.BulkReadMarker          = (*Store)(nil)
+	_ store.FolderCounter           = (*Store)(nil)
+	_ store.FindWithCounter         = (*Store)(nil)
+	_ store.FolderLister            = (*Store)(nil)
+)
+
 func (s *Store) iterateFiltered(ownerID string, filters []store.Filter, fn func(m *message)) int64 {
 	var count int64
 	now := time.Now().UTC()
 	s.messages.Range(func(key, value any) bool {
+		// Cheap pre-filter outside the lock to skip obviously-irrelevant
+		// messages. The authoritative check is re-done under the lock below.
 		m := value.(*message)
 		if m.isDraft || m.ownerID != ownerID {
 			return true
 		}
-		if m.availableAt != nil && m.availableAt.After(now) {
-			return true
-		}
-		if !matchesFilters(m, filters) {
-			return true
-		}
+
 		lock := s.getMsgLock(key.(string))
 		lock.Lock()
-		fn(m)
-		m.updatedAt = now
-		lock.Unlock()
+		defer lock.Unlock()
+
+		// Re-load and re-validate under the lock so we never read filter fields
+		// from or mutate a message that a concurrent operation may be cloning.
+		v, ok := s.messages.Load(key)
+		if !ok {
+			return true
+		}
+		orig := v.(*message)
+		if orig.isDraft || orig.ownerID != ownerID {
+			return true
+		}
+		if orig.availableAt != nil && orig.availableAt.After(now) {
+			return true
+		}
+		if !matchesFilters(orig, filters) {
+			return true
+		}
+
+		// Copy-on-write: clone, modify, store (atomic within lock).
+		clone := orig.clone()
+		fn(clone)
+		clone.updatedAt = now
+		s.messages.Store(key, clone)
 		count++
 		return true
 	})
