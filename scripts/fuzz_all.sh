@@ -18,7 +18,8 @@ while IFS= read -r file; do
   while IFS= read -r fn; do
     [ -z "$fn" ] && continue
     echo "== fuzzing ${fn} (${pkg}) for ${budget} =="
-    if ! go test -run='^$' -fuzz="^${fn}\$" -fuzztime="$budget" "$pkg"; then
+    # -race surfaces data races in the fuzzed code path (lower exec/s, worth it).
+    if ! go test -run='^$' -race -fuzz="^${fn}\$" -fuzztime="$budget" "$pkg"; then
       echo "FUZZ FAILED: ${fn} (${pkg})"
       status=1
     fi

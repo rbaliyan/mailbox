@@ -62,14 +62,15 @@ test-pg:
 bench *ARGS:
     go test -run='^$' -bench='{{ARGS:-\.}}' -benchmem -benchtime=3s ./...
 
-# Regenerate the committed benchmark baseline (bench-baseline.txt)
+# Regenerate the committed benchmark baseline (bench-baseline.txt).
+# Time-based -benchtime keeps per-op variance tight enough for benchstat.
 bench-baseline:
-    go test -run='^$' -bench=. -benchmem -benchtime=20x -count=6 ./... \
+    go test -run='^$' -bench=. -benchmem -benchtime=100ms -count=6 ./... \
         | grep -E '^(goos:|goarch:|pkg:|cpu:|Benchmark)' > bench-baseline.txt
 
 # Compare current benchmarks against the committed baseline via benchstat
 bench-compare:
-    go test -run='^$' -bench=. -benchmem -benchtime=20x -count=6 ./... \
+    go test -run='^$' -bench=. -benchmem -benchtime=100ms -count=6 ./... \
         | grep -E '^(goos:|goarch:|pkg:|cpu:|Benchmark)' > /tmp/bench-new.txt
     go run golang.org/x/perf/cmd/benchstat@latest bench-baseline.txt /tmp/bench-new.txt
 
