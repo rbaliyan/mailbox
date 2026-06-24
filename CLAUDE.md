@@ -29,13 +29,45 @@ All functionality is exposed via interfaces with pluggable backends:
 
 ```bash
 go build ./...                          # Build
-go test ./...                           # Run all tests
+go test ./...                           # Run all tests (unit + seed-corpus replay)
 go test -run TestName ./path/to/pkg     # Run single test
 go test -v ./...                        # Verbose tests
 go fmt ./...                            # Format code
 go vet ./...                            # Vet code
 golangci-lint run                       # Lint
 ```
+
+### Test tiers (via `just`)
+
+```bash
+just smoke              # Fast, dependency-free smoke suite + runnable examples
+just cover-check        # Per-package unit-coverage floors (scripts/coverage_gate.sh)
+just bench              # Run benchmarks
+just bench-baseline     # Regenerate bench-baseline.txt (time-based -benchtime)
+just bench-compare      # benchstat current run vs the committed baseline
+just fuzz-all           # Discover and run every fuzz target (FUZZTIME overrides)
+```
+
+### Integration tests (real MongoDB + PostgreSQL)
+
+Backend tests live behind the `integration` build tag and are env-gated on
+`MONGO_URI` / `POSTGRES_DSN` (they `t.Skip` when unset). The recipes auto-detect
+the container engine (`docker` if installed, otherwise `podman`):
+
+```bash
+just test-integration   # Boot docker-compose.test.yml services, run all suites, tear down
+just test-mongo         # MongoDB suites only (expects services already up)
+just test-pg            # PostgreSQL suites only
+
+# Manual run against running services:
+MONGO_URI=mongodb://localhost:27019/?directConnection=true \
+POSTGRES_DSN=postgres://mailbox_test:mailbox_test@localhost:5433/mailbox_test?sslmode=disable \
+    go test -tags integration -race ./store/...
+```
+
+The backend-agnostic conformance/concurrency/failure/relay suites in
+`store/storetest` run against memory by default and against mongo/postgres under
+the `integration` tag. See `fuzzing.md` for running and replaying fuzz targets.
 
 ## Package Structure
 
