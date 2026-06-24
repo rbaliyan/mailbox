@@ -1,6 +1,8 @@
 package mailbox
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -52,14 +54,78 @@ func FuzzValidateMIMEType(f *testing.F) {
 	})
 }
 
-// FuzzValidateHeaders checks that header validation never panics.
+// FuzzValidateHeaders checks that header validation never panics. The fuzzed
+// blob is split into N key/value pairs so the resulting map reaches the
+// MaxHeaderCount and MaxHeadersTotalSize branches of ValidateHeaders, not just
+// the single-key path.
 func FuzzValidateHeaders(f *testing.F) {
-	f.Add("X-Custom", "value")
-	f.Add("", "empty key")
-	f.Add("key", "")
+	f.Add("X-Custom:value")
+	f.Add(":empty key")
+	f.Add("key:")
+	f.Add("")
+	// Many small headers — drives the MaxHeaderCount branch.
+	f.Add(strings.Repeat("k:v\n", DefaultMaxHeaderCount+5))
+	// A few large values — drives the MaxHeadersTotalSize branch.
+	f.Add("big:" + strings.Repeat("x", DefaultMaxHeadersTotalSize+1))
 
-	f.Fuzz(func(t *testing.T, key, value string) {
-		headers := map[string]string{key: value}
+	f.Fuzz(func(t *testing.T, blob string) {
+		// Build a multi-key header map from the fuzzed blob. Each newline-
+		// separated record becomes "key:value"; later duplicate keys overwrite
+		// earlier ones, which is fine — the goal is varied map shapes.
+		headers := make(map[string]string)
+		for i, record := range strings.Split(blob, "\n") {
+			k, v, found := strings.Cut(record, ":")
+			if !found {
+				// No separator: synthesize a unique key so distinct records
+				// produce distinct entries and push toward MaxHeaderCount.
+				k = fmt.Sprintf("k%d", i)
+				v = record
+			}
+			headers[k] = v
+		}
 		_ = ValidateHeaders(headers, DefaultLimits())
+	})
+}
+
+// FuzzValidateMetadata checks that metadata validation never panics. The blob
+// is split into N keys (with string values) so the map reaches the
+// MaxMetadataKeys and MaxMetadataSize (JSON-serialized) branches.
+func FuzzValidateMetadata(f *testing.F) {
+	f.Add("source:api")
+	f.Add(":empty")
+	f.Add(strings.Repeat("k:v\n", DefaultMaxMetadataKeys+5))
+	f.Add("big:" + strings.Repeat("x", DefaultMaxMetadataSize+1))
+	f.Add(strings.Repeat("x", MaxMetadataKeyLength+10) + ":overlongkey")
+
+	f.Fuzz(func(t *testing.T, blob string) {
+		metadata := make(map[string]any)
+		for i, record := range strings.Split(blob, "\n") {
+			k, v, found := strings.Cut(record, ":")
+			if !found {
+				k = fmt.Sprintf("k%d", i)
+				v = record
+			}
+			metadata[k] = v
+		}
+		_ = ValidateMetadata(metadata)
+	})
+}
+
+// FuzzValidateRecipients checks that recipient validation never panics. The
+// blob is split into N recipient IDs so the list reaches the empty-list,
+// MaxRecipientCount, and empty-ID branches.
+func FuzzValidateRecipients(f *testing.F) {
+	f.Add("bob")
+	f.Add("")
+	f.Add("alice,bob,carol")
+	f.Add(strings.Repeat("u,", DefaultMaxRecipientCount+5))
+	f.Add("alice,,carol") // empty ID in the middle
+
+	f.Fuzz(func(t *testing.T, blob string) {
+		var recipients []string
+		if blob != "" {
+			recipients = strings.Split(blob, ",")
+		}
+		_ = ValidateRecipients(recipients, DefaultLimits())
 	})
 }

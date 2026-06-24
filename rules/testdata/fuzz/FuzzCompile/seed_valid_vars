@@ -1,0 +1,2 @@
+go test fuzz v1
+string("sender == \"alice\" && has_attachments && attachment_count > 2")

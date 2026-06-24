@@ -1,0 +1,2 @@
+go test fuzz v1
+string("matches_regex(subject, \"^Re:\") && has_header(headers, \"X-Priority\")")

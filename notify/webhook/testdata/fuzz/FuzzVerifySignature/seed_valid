@@ -1,0 +1,5 @@
+go test fuzz v1
+[]byte("topsecret")
+string("1700000000")
+[]byte("{\"event\":\"ping\"}")
+string("49dbf5542544194f41a09374d23028d79a5a64b07761bf746c46154c7c5f264a")

@@ -72,6 +72,25 @@ jobs:
         if: always()
         run: docker compose -f docker-compose.test.yml down -v
 
+  benchmarks:
+    name: Benchmarks
+    runs-on: ubuntu-latest
+    needs: smoke
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+
+      # Exercise every benchmark briefly so a broken or panicking benchmark is
+      # caught in CI. Absolute timings are not gated (runner variance); use
+      # `just bench-compare` locally for benchstat regression analysis.
+      - name: Run benchmarks
+        run: go test -run='^$' -bench=. -benchmem -benchtime=10x ./...
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
