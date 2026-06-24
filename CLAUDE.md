@@ -490,7 +490,7 @@ generated stubs in `proto/mailbox/v1`. `server.New(svc, opts...)` returns a
 
 | Option | Description |
 |--------|-------------|
-| `WithSecurityGuard(SecurityGuard)` | Per-RPC authorization (default allows all) |
+| `WithSecurityGuard(SecurityGuard)` | Per-RPC authorization (default: `DenyAll` — rejects every call until a guard is set; use `AllowAll()` to opt out) |
 | `WithLogger(*slog.Logger)` | Structured logger |
 | `WithMaxBulkSize(int)` | Cap on bulk-operation request sizes |
 | `WithStreamMaxDuration(time.Duration)` | Max lifetime for `StreamNotifications` |
