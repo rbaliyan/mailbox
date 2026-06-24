@@ -91,8 +91,9 @@ mailbox/
 ├── otel.go             # OpenTelemetry integration
 ├── events.go           # Event types and bus setup (Redis Streams)
 ├── validation.go       # Input validation
+├── router.go           # Router (userID→Mailbox) and Registrar interfaces
 ├── router/
-│   └── router.go       # Router (userID→mailboxID) and Registrar interfaces
+│   └── router.go       # Migration stub (interfaces moved to the root package)
 ├── presence/
 │   ├── presence.go     # Tracker interface, Registration, RoutingInfo
 │   ├── memory/         # In-memory presence tracker (single-process / testing)
@@ -142,7 +143,10 @@ mailbox/
 ├── content/
 │   └── codec.go        # Content encoding/decoding with schema support
 ├── mailboxtest/
-│   └── mailboxtest.go  # Test helpers (NewService wraps mailbox.New, SendMessage, X25519Keypair)
+│   └── mailboxtest.go  # Test helpers (NewService wraps mailbox.New, SendMessage, X25519Keypair, Eventually)
+├── server/             # gRPC server wrapping a mailbox.Service (server.New, options, SecurityGuard)
+├── proto/
+│   └── mailbox/v1/     # Generated protobuf/gRPC stubs
 └── resolver/
     └── static.go       # Static recipient/user resolver
 ```
@@ -220,7 +224,7 @@ Backends: `store/attachment/s3`, `store/attachment/gcs`, `store/attachment/azblo
 - `ResolveBatch(ctx, userIDs)`
 
 **UserResolver** (sender identity enrichment, optional):
-- `ResolveUser(ctx, userID)` returns `User` (FirstName, LastName, Email)
+- `ResolveUser(ctx, userID)` returns `User` (ID, FirstName, LastName, Email)
 - When configured via `WithUserResolver`, populates message metadata during send
 - Failure aborts the send with `ErrUserResolveFailed`
 
@@ -431,7 +435,7 @@ Notifier options (`notify.NewNotifier(...)`):
 | `WithPlugins(...Plugin)` | - | Register multiple plugins |
 | `WithAttachmentManager(store.AttachmentManager)` | nil | Reference-counted attachments |
 | `WithUserResolver(UserResolver)` | nil | Sender identity enrichment (sets sender.firstname, sender.lastname, sender.email metadata) |
-| `WithRegistrar(router.Registrar)` | nil | Registers this mailbox instance during Connect; assigned ID available via `Service.MailboxID()` |
+| `WithRegistrar(Registrar)` | nil | Registers this mailbox instance during Connect; assigned ID available via `Service.MailboxID()` |
 
 ### Transactional Outbox
 
@@ -453,13 +457,16 @@ relay (`outbox.Relay`) publishes pending events to the transport — no custom s
 Store interfaces: `store.OutboxPersister` (`OutboxEnabled`, `WithOutboxCtx`) and
 `store.EventOutboxProvider` (exposes `event.OutboxStore` for bus-level integration).
 
-### Multi-Instance Routing (router package)
+### Multi-Instance Routing (root package)
 
-The `router` package defines two interfaces for multi-mailbox deployments:
+The root `mailbox` package defines two interfaces for multi-mailbox deployments
+(they live in `router.go`; the old `router/` subpackage is now a migration-notice
+stub, since `Router.Route` returns a `mailbox.Mailbox` and lived in `router/`
+would cause an import cycle):
 
-- **`router.Router`** — `Route(ctx, userID) (mailboxID, error)`. Consulted by
-  an orchestrator to resolve which mailbox instance owns a user's messages.
-- **`router.Registrar`** — `Register(ctx) (mailboxID, error)`. Called by the
+- **`mailbox.Router`** — `Route(ctx, userID) (Mailbox, error)`. Consulted by
+  an orchestrator to resolve the mailbox that owns a user's messages.
+- **`mailbox.Registrar`** — `Register(ctx) (mailboxID, error)`. Called by the
   mailbox itself during `Connect`. The registrar returns the mailbox ID
   assigned to this instance; a registration failure aborts `Connect`.
 
@@ -473,6 +480,27 @@ if err := svc.Connect(ctx); err != nil {
     log.Fatal(err)
 }
 id := svc.MailboxID() // assigned by the registrar
+```
+
+### gRPC Server (server package)
+
+The `server` package wraps a `mailbox.Service` as a gRPC server using the
+generated stubs in `proto/mailbox/v1`. `server.New(svc, opts...)` returns a
+`*Server`; options:
+
+| Option | Description |
+|--------|-------------|
+| `WithSecurityGuard(SecurityGuard)` | Per-RPC authorization (default: `DenyAll` — rejects every call until a guard is set; use `AllowAll()` to opt out) |
+| `WithLogger(*slog.Logger)` | Structured logger |
+| `WithMaxBulkSize(int)` | Cap on bulk-operation request sizes |
+| `WithStreamMaxDuration(time.Duration)` | Max lifetime for `StreamNotifications` |
+
+`SecurityGuard` authorizes each call; implement it to enforce per-user access.
+
+```go
+svc, _ := mailbox.New(cfg, mailbox.WithStore(store))
+srv, _ := server.New(svc, server.WithSecurityGuard(myGuard))
+// register srv with a *grpc.Server, then Serve
 ```
 
 ### Selective Delivery (DeliverTo)

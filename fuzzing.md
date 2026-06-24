@@ -17,6 +17,8 @@ finds correctness bugs, not just crashes.
 | `.` (root) | `FuzzValidateRecipients` | no panic; lists reach the empty / `MaxRecipientCount` / empty-ID branches |
 | `content` | `FuzzBinaryCodecRoundTrip` | **round-trip:** `Decode(Encode(b)) == b` for the base64 binary codec |
 | `content` | `FuzzDecode` | no panic for arbitrary body + content-type through `content.Decode` |
+| `compress` | `FuzzGzipRoundTrip` | **round-trip:** `Decompress(Compress(b)) == b` for the gzip compressor |
+| `compress` | `FuzzDecompress` | malformed gzip returns an error, never panics |
 | `crypto` | `FuzzDecryptMalformed` | `Decrypt` of random bytes returns an error, never panics, never silently returns a plaintext |
 | `crypto` | `FuzzSealOpenRoundTrip` | **round-trip:** `open(seal(pt)) == pt` for the X25519 envelope |
 | `notify/webhook` | `FuzzVerifySignature` | `VerifySignature` is true IFF the digest equals the recomputed HMAC (within the documented `sha256=` prefix contract) |
