@@ -23,14 +23,28 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Fuzz ValidateSubject
-        run: go test -run='^$' -fuzz=FuzzValidateSubject -fuzztime=90s .
+      # Persist the generated fuzz corpus between runs so the weekly campaign
+      # accumulates coverage instead of restarting cold.
+      - name: Cache fuzz corpus
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: ~/.cache/go-build/fuzz
+          key: fuzz-corpus-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ runner.os }}-
 
-      - name: Fuzz ValidateBody
-        run: go test -run='^$' -fuzz=FuzzValidateBody -fuzztime=90s .
+      - name: Fuzz all targets
+        env:
+          # Longer budget on the weekly cron; short smoke budget on push/PR.
+          FUZZTIME: ${{ github.event_name == 'schedule' && '300s' || '40s' }}
+        run: ./scripts/fuzz_all.sh
 
-      - name: Fuzz ValidateMIMEType
-        run: go test -run='^$' -fuzz=FuzzValidateMIMEType -fuzztime=90s .
-
-      - name: Fuzz ValidateHeaders
-        run: go test -run='^$' -fuzz=FuzzValidateHeaders -fuzztime=90s .
+      # On a crash, Go writes a minimized reproducer under testdata/fuzz; upload
+      # it so the failing input can be replayed (go test -run=FuzzX/<hash>).
+      - name: Upload crash reproducers
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-crashers
+          path: "**/testdata/fuzz/**"
+          if-no-files-found: ignore

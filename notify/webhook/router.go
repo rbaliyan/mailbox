@@ -201,6 +201,12 @@ func VerifySignature(secret []byte, timestamp string, body []byte, sigHeader str
 	if len(sigHeader) <= len(prefix) {
 		return false
 	}
+	// Reject any header that does not carry the documented "sha256=" prefix.
+	// The prefix is not secret, so a non-constant-time comparison is fine here;
+	// the digest itself is still compared with hmac.Equal below.
+	if sigHeader[:len(prefix)] != prefix {
+		return false
+	}
 	// Reject empty signing keys — an empty key produces a deterministic HMAC
 	// that an attacker can forge without knowing the real secret.
 	if len(secret) == 0 {

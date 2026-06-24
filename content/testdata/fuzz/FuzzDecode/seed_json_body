@@ -1,0 +1,3 @@
+go test fuzz v1
+string("application/json")
+string("{\"sensor\":\"temp\",\"value\":21.5}")

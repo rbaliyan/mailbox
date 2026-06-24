@@ -5,12 +5,44 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/rbaliyan/mailbox/store"
 	"github.com/rbaliyan/mailbox/store/memory"
 )
+
+// benchSink defends benchmark results (Stats, Search, Get, …) from dead-code
+// elimination. The compiler cannot prove the assigned value is unused, so the
+// measured work is never optimized away.
+var benchSink any
+
+// noBulkBenchStore embeds store.Store (which does NOT include store.BulkUpdater),
+// so a service built on it cannot take the native bulk fast path and is forced
+// onto the paginated fallback in the filter-based bulk operations. This mirrors
+// the noBulkStore wrapper used in the package's external tests, duplicated here
+// because bench_test.go is in package mailbox (internal).
+type noBulkBenchStore struct {
+	store.Store
+}
+
+// newNoBulkBenchService builds a connected service whose store hides
+// BulkUpdater, forcing the paginated fallback path.
+func newNoBulkBenchService(b *testing.B) *service {
+	b.Helper()
+	inner := memory.New()
+	silent := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc, err := New(Config{}, WithStore(&noBulkBenchStore{Store: inner}), WithLogger(silent))
+	if err != nil {
+		b.Fatalf("new service: %v", err)
+	}
+	if err := svc.Connect(context.Background()); err != nil {
+		b.Fatalf("connect: %v", err)
+	}
+	b.Cleanup(func() { _ = svc.Close(context.Background()) })
+	return svc.(*service)
+}
 
 // newBenchService creates a minimal connected service backed by an in-memory store.
 // Logging is discarded to keep benchmark output clean.
@@ -96,9 +128,11 @@ func BenchmarkGet(b *testing.B) {
 	b.ReportAllocs()
 	i := 0
 	for b.Loop() {
-		if _, err := mb.Get(context.Background(), ids[i%len(ids)]); err != nil {
+		msg, err := mb.Get(context.Background(), ids[i%len(ids)])
+		if err != nil {
 			b.Fatal(err)
 		}
+		benchSink = msg
 		i++
 	}
 }
@@ -136,9 +170,11 @@ func BenchmarkSearch(b *testing.B) {
 			q := SearchQuery{OwnerID: "dave", Query: "content"}
 			b.ReportAllocs()
 			for b.Loop() {
-				if _, err := mb.Search(context.Background(), q); err != nil {
+				res, err := mb.Search(context.Background(), q)
+				if err != nil {
 					b.Fatal(err)
 				}
+				benchSink = res
 			}
 		})
 	}
@@ -190,9 +226,11 @@ func BenchmarkStats(b *testing.B) {
 			mb := svc.Client("grace")
 			b.ReportAllocs()
 			for b.Loop() {
-				if _, err := mb.Stats(context.Background()); err != nil {
+				stats, err := mb.Stats(context.Background())
+				if err != nil {
 					b.Fatal(err)
 				}
+				benchSink = stats
 			}
 		})
 	}
@@ -262,6 +300,98 @@ func BenchmarkMoveByFilter(b *testing.B) {
 					b.Fatal(err)
 				}
 				i++
+			}
+		})
+	}
+}
+
+// BenchmarkUpdateByFilter measures bulk mark-read by filter, contrasting the
+// native BulkUpdater fast path (memory store implements MarkReadByFilter) with
+// the paginated fallback (store wrapper that hides BulkUpdater). The two
+// branches have very different cost: one UPDATE-like call vs N per-message
+// MarkRead calls over a paginated Find.
+func BenchmarkUpdateByFilter(b *testing.B) {
+	const n = 100
+	run := func(b *testing.B, svc *service) {
+		seedMessages(b, svc, "owner", n)
+		mb := svc.Client("owner")
+		filters := []store.Filter{store.InFolder(store.FolderInbox)}
+		b.ReportAllocs()
+		i := 0
+		for b.Loop() {
+			// Toggle read state so every iteration does real update work.
+			flags := MarkRead()
+			if i%2 == 0 {
+				flags = MarkUnread()
+			}
+			if _, err := mb.UpdateByFilter(context.Background(), filters, flags); err != nil {
+				b.Fatal(err)
+			}
+			i++
+		}
+	}
+	b.Run("fast-path", func(b *testing.B) { run(b, newBenchService(b)) })
+	b.Run("fallback", func(b *testing.B) { run(b, newNoBulkBenchService(b)) })
+}
+
+// BenchmarkDeleteByFilter measures bulk soft-delete by filter, contrasting the
+// native BulkUpdater fast path with the paginated fallback. Each iteration
+// pairs a delete (inbox -> trash) with a restore (trash -> inbox) so the
+// working set stays full; both halves go through the same store, so the
+// fast-path vs fallback comparison is apples-to-apples.
+func BenchmarkDeleteByFilter(b *testing.B) {
+	const n = 100
+	run := func(b *testing.B, svc *service) {
+		seedMessages(b, svc, "owner", n)
+		mb := svc.Client("owner")
+		inbox := []store.Filter{store.InFolder(store.FolderInbox)}
+		trash := []store.Filter{store.InFolder(store.FolderTrash)}
+		b.ReportAllocs()
+		i := 0
+		for b.Loop() {
+			if i%2 == 0 {
+				if _, err := mb.DeleteByFilter(context.Background(), inbox); err != nil {
+					b.Fatal(err)
+				}
+			} else {
+				// Restore the just-trashed messages back to the inbox.
+				if _, err := mb.MoveByFilter(context.Background(), trash, store.FolderInbox); err != nil {
+					b.Fatal(err)
+				}
+			}
+			i++
+		}
+	}
+	b.Run("fast-path", func(b *testing.B) { run(b, newBenchService(b)) })
+	b.Run("fallback", func(b *testing.B) { run(b, newNoBulkBenchService(b)) })
+}
+
+// BenchmarkSendMessage_BodySize measures single-message delivery as the body
+// grows, isolating the cost the message body contributes to the send path
+// (validation, copy, store write) from the fixed per-send overhead.
+func BenchmarkSendMessage_BodySize(b *testing.B) {
+	for _, bs := range []struct {
+		name string
+		size int
+	}{
+		{"1KB", 1024},
+		{"100KB", 100 * 1024},
+	} {
+		b.Run(bs.name, func(b *testing.B) {
+			svc := newBenchService(b)
+			mb := svc.Client("alice")
+			body := strings.Repeat("x", bs.size)
+			b.ReportAllocs()
+			for b.Loop() {
+				msg, err := mb.SendMessage(context.Background(), SendRequest{
+					RecipientIDs: []string{"alice"},
+					Subject:      "Sized",
+					Body:         body,
+				})
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchSink = msg
 			}
 		})
 	}
