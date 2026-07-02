@@ -10,6 +10,14 @@ on:
 
 permissions: read-all
 
+# Cancel a superseded run for the same ref -- e.g. when a PR's merge commit is
+# recomputed after the base branch advances, GitHub starts a fresh run and the
+# stale one would otherwise linger and surface a spurious "cancelled" status.
+# Only PR runs are cancelled; push-to-main and the weekly cron run to completion.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   fuzz:
     name: Fuzz
