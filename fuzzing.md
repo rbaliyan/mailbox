@@ -45,6 +45,21 @@ go test -run '^$' -fuzz='^FuzzValidateHeaders$'     -fuzztime=15s .
 `-run '^$'` skips the normal unit tests so only the fuzz engine runs.
 Only one `-fuzz` target can run per `go test` invocation.
 
+To sweep every target in one pass, use `scripts/fuzz_all.sh` (also driven by
+`just fuzz-all`). It runs each discovered target for `FUZZTIME` (default `30s`):
+
+```bash
+FUZZTIME=15s ./scripts/fuzz_all.sh          # short smoke sweep
+FUZZTIME=15s FUZZ_RACE=0 ./scripts/fuzz_all.sh   # skip -race for faster execs
+```
+
+`FUZZ_RACE` (default on) adds `-race`, which surfaces data races but roughly
+halves exec throughput. The runner treats a bare `context deadline exceeded`
+(the fuzzing coordinator failing to drain workers within the budget on a loaded
+machine) as a non-fatal flake and only fails on a genuine finding — one that
+writes a reproducer under `testdata/fuzz/`. The CI Fuzz job accordingly drops
+`-race` on the short PR/push budget and keeps it for the weekly campaign.
+
 ## Where seeds live
 
 Seed corpus files live under `testdata/fuzz/<Target>/` next to each package, in

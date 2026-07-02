@@ -88,7 +88,12 @@ jobs:
       # Exercise every benchmark briefly so a broken or panicking benchmark is
       # caught in CI. Absolute timings are not gated (runner variance); use
       # `just bench-compare` locally for benchstat regression analysis.
+      #
+      # Dependabot PRs only touch dependency manifests and never the benchmarked
+      # code, so skip the work for them. The step (not the job) is gated so the
+      # job still reports success -- a skipped required check would block merge.
       - name: Run benchmarks
+        if: github.actor != 'dependabot[bot]'
         run: go test -run='^$' -bench=. -benchmem -benchtime=10x ./...
 
   lint:
