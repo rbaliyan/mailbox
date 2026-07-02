@@ -45,20 +45,35 @@ go test -run '^$' -fuzz='^FuzzValidateHeaders$'     -fuzztime=15s .
 `-run '^$'` skips the normal unit tests so only the fuzz engine runs.
 Only one `-fuzz` target can run per `go test` invocation.
 
-To sweep every target in one pass, use `scripts/fuzz_all.sh` (also driven by
-`just fuzz-all`). It runs each discovered target for `FUZZTIME` (default `30s`):
+Three small scripts drive the sweep (all discover targets automatically, so a
+new `Fuzz*` function needs no wiring anywhere):
+
+| Script | Role |
+|--------|------|
+| `scripts/fuzz_targets.sh` | List targets — `"<pkg> <FuzzName>"` lines, or a JSON matrix with `--json`. |
+| `scripts/fuzz_one.sh` | Run one target (`<pkg> <FuzzName>`) with the outcome classification below. |
+| `scripts/fuzz_all.sh` | Loop every target through `fuzz_one.sh` (driven by `just fuzz-all`). |
 
 ```bash
-FUZZTIME=15s ./scripts/fuzz_all.sh          # short smoke sweep
-FUZZTIME=15s FUZZ_RACE=0 ./scripts/fuzz_all.sh   # skip -race for faster execs
+FUZZTIME=15s ./scripts/fuzz_all.sh                 # short smoke sweep
+FUZZTIME=15s FUZZ_RACE=0 ./scripts/fuzz_all.sh      # skip -race for faster execs
+FUZZTIME=15s ./scripts/fuzz_one.sh ./content FuzzDecode   # one target
 ```
 
 `FUZZ_RACE` (default on) adds `-race`, which surfaces data races but roughly
 halves exec throughput. The runner treats a bare `context deadline exceeded`
 (the fuzzing coordinator failing to drain workers within the budget on a loaded
 machine) as a non-fatal flake and only fails on a genuine finding — one that
-writes a reproducer under `testdata/fuzz/`. The CI Fuzz job accordingly drops
-`-race` on the short PR/push budget and keeps it for the weekly campaign.
+writes a reproducer under `testdata/fuzz/`. CI drops `-race` on the short
+PR/push budget and keeps it for the weekly campaign.
+
+### CI topology
+
+The **Fuzz** workflow runs one job per target (a `discover` job emits the matrix
+via `fuzz_targets.sh --json`), so `Re-run failed jobs` re-runs only the target
+that failed. An aggregate job named **Fuzz** gates on all target jobs and is the
+single required status check. Dependabot PRs get an empty matrix — the target
+jobs are skipped and the aggregate check still passes.
 
 ## Where seeds live
 
