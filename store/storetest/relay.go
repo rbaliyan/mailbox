@@ -25,9 +25,9 @@ type relayTestEvent struct {
 }
 
 // RelayRunner drives a single outbox relay pass. Backends supply a concrete
-// relay (event/v3/outbox.Relay for PostgreSQL, event-mongodb/outbox.MongoRelay
-// for MongoDB) whose PublishOnce method satisfies this interface, letting the
-// shared suite trigger one drain of the outbox without time.Sleep.
+// relay (the generic event/v3/outbox.Relay over each backend's outbox.Store)
+// whose PublishOnce method satisfies this interface, letting the shared suite
+// trigger one drain of the outbox without time.Sleep.
 type RelayRunner interface {
 	// PublishOnce processes one batch of pending outbox rows, publishing each to
 	// the transport and marking it published. It returns after a single pass.

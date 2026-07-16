@@ -116,8 +116,8 @@ github.com/envoyproxy/protoc-gen-validate v1.3.3 h1:MVQghNeW+LZcmXe7SY1V36Z+WFMD
 github.com/envoyproxy/protoc-gen-validate v1.3.3/go.mod h1:TsndJ/ngyIdQRhMcVVGDDHINPLWB7C82oDArY51KfB0=
 github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2Wg=
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
-github.com/go-faker/faker/v4 v4.8.0 h1:QAKmb4TyAMxIgf3a8fXubQXwFFJviBGL2/IDa34N6JQ=
-github.com/go-faker/faker/v4 v4.8.0/go.mod h1:u1dIRP5neLB6kTzgyVjdBOV5R1uP7BdxkcWk7tiKQXk=
+github.com/go-faker/faker/v4 v4.9.0 h1:a4HXLwueuTCtgF93VpUsl8Zd2nG1VH2SgNWDPVEBg5U=
+github.com/go-faker/faker/v4 v4.9.0/go.mod h1:u1dIRP5neLB6kTzgyVjdBOV5R1uP7BdxkcWk7tiKQXk=
 github.com/go-jose/go-jose/v4 v4.1.4 h1:moDMcTHmvE6Groj34emNPLs/qtYXRVcd6S7NHbHz3kA=
 github.com/go-jose/go-jose/v4 v4.1.4/go.mod h1:x4oUasVrzR7071A4TnHLGSPpNOm2a21K9Kf04k1rs08=
 github.com/go-logr/logr v1.2.2/go.mod h1:jdQByPbusPIv2/zmleS9BjJVeZ6kBagPoEUsqbVz/1A=
@@ -170,10 +170,10 @@ github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 h1:GFCKgm
 github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10/go.mod h1:t/avpk3KcrXxUnYOhZhMXJlSEyie6gQbtLq5NM3loB8=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/rbaliyan/event-mongodb v0.7.2 h1:MRIvRf71sxQP8Y9cRMHhQHH7Qg/SFOAj0Tv3VuvAMxM=
-github.com/rbaliyan/event-mongodb v0.7.2/go.mod h1:Y+qo7ODniXVN+Bf7wapm4kDzlgTGpUkg3n93zbmxCRk=
-github.com/rbaliyan/event/v3 v3.17.5 h1:veffU3fW90n0/Zl7nQlIEOPDJZTQzaD7eqwMSw///zw=
-github.com/rbaliyan/event/v3 v3.17.5/go.mod h1:F2R9qjzXOgnxEN2Q+FqmmgjAO7Hl3V8MGwh+/Th76X4=
+github.com/rbaliyan/event-mongodb v0.8.0 h1:CbAkjUQKkSR7b41br2yt8f3bGB91gjUyMBWX7xe4qhU=
+github.com/rbaliyan/event-mongodb v0.8.0/go.mod h1:QmBJzLsi9UgYISN3YHk3oJryf+TI1r4M9y0ocrci9Vs=
+github.com/rbaliyan/event/v3 v3.18.0 h1:kSdig2XxjHZ/M/Kyls0JiOecHJLP1apGTnV4cBWIadA=
+github.com/rbaliyan/event/v3 v3.18.0/go.mod h1:ZQejIA25CYezMaNM8xkeJEAq2ovk5UvURf1s+n0GZ9U=
 github.com/redis/go-redis/v9 v9.21.0 h1:FPBE4hhbAke+TLmcY3WkpbDffJEomdqPn3HYiqAtL9E=
 github.com/redis/go-redis/v9 v9.21.0/go.mod h1:v/M13XI1PVCDcm01VtPFOADfZtHf8YW3baQf57KlIkA=
 github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0tI/otEQ=
