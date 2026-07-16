@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/rbaliyan/event-mongodb/outbox"
+	evtoutbox "github.com/rbaliyan/event/v3/outbox"
 	"github.com/rbaliyan/event/v3/transport"
 	"github.com/rbaliyan/mailbox/store"
 	"github.com/rbaliyan/mailbox/store/storetest"
@@ -120,9 +121,10 @@ func TestMongoFailure(t *testing.T) {
 	storetest.RunFailureSuite(t, sharedStoreFactory(t, client))
 }
 
-// mongoRelayFactory builds a real event-mongodb MongoRelay that reads the same
-// outbox collection the store writes to and publishes to the supplied transport.
-// Poll mode works against the single-node replica set in docker-compose.test.yml.
+// mongoRelayFactory builds the generic outbox relay over the MongoStore, which
+// reads the same outbox collection the store writes to and publishes to the
+// supplied transport. The MongoStore satisfies the backend-neutral
+// event/v3/outbox.Store contract, so the shared generic relay drives it.
 func mongoRelayFactory(t *testing.T, s store.Store, tr transport.Transport) storetest.RelayRunner {
 	t.Helper()
 	ms, ok := s.(*Store)
@@ -133,7 +135,7 @@ func mongoRelayFactory(t *testing.T, s store.Store, tr transport.Transport) stor
 	if err != nil {
 		t.Fatalf("create mongo outbox store: %v", err)
 	}
-	return outbox.NewMongoRelay(outboxStore, tr).WithMode(outbox.RelayModePoll)
+	return evtoutbox.NewRelay(outboxStore, tr)
 }
 
 // TestMongoRelay runs the end-to-end outbox relay suite against live MongoDB.
