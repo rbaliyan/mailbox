@@ -1,6 +1,6 @@
 module github.com/rbaliyan/mailbox
 
-go 1.26.5
+go 1.26.7
 
 require (
 	cloud.google.com/go/auth v0.22.0
