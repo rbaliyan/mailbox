@@ -60,7 +60,7 @@ test-pg:
 
 # Run benchmarks (pass extra flags via ARGS, e.g. just bench BenchmarkSendMessage)
 bench *ARGS:
-    go test -run='^$' -bench='{{ARGS:-\.}}' -benchmem -benchtime=3s ./...
+    go test -run='^$' -bench='{{ if ARGS == "" { "." } else { ARGS } }}' -benchmem -benchtime=3s ./...
 
 # Regenerate the committed benchmark baseline (bench-baseline.txt).
 # Time-based -benchtime keeps per-op variance tight enough for benchstat.
